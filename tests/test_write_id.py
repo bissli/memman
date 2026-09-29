@@ -8,12 +8,14 @@ import json
 import sqlite3
 
 import pytest
+from memman.queue import queue_db
 from memman.store.db import store_dir
 from tests.conftest import force_drain, invoke
 
 
 def _row(data_dir, id):
-    """Read `(content, category, replaced_by)` for one id by raw SQL."""
+    """Read `(content, category, replaced_by)` for one id by raw SQL.
+    """
     path = f"{store_dir(data_dir, 'default')}/memman.db"
     with sqlite3.connect(path) as conn:
         return conn.execute(
@@ -188,7 +190,6 @@ def _share_prefix_with_a_stored_row(mm_runner):
 
     Returns the four-character prefix the two ids share.
     """
-    from memman.queue import queue_db
     _, data_dir = mm_runner
     stored = json.loads(invoke(
         mm_runner, ['remember', 'sqlite pages are 4096 bytes']).output)

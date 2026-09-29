@@ -11,6 +11,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from memman.embed import get_client
+from memman.embed import registry as _ec_registry
 from memman.exceptions import EmbedFingerprintError
 
 if TYPE_CHECKING:
@@ -71,17 +73,13 @@ class Fingerprint:
 
 
 def seed_default_fingerprint() -> Fingerprint:
-    """Return the env-active client's fingerprint for fresh-store seeding.
+    """Env-active client's fingerprint, for seeding a fresh store.
 
-    The narrow legitimate role: the default `Fingerprint` to write into
-    a brand-new store's `meta.embed_fingerprint` (via `seed_if_fresh`)
-    or to bake into a fresh Postgres `vector(N)` column. Once a store
-    has a stored fingerprint, callers should resolve via
-    `stored_fingerprint`/`bound_embedder` -- the env-active value is
-    not the right answer for an existing store under per-store
-    embedder sovereignty.
+    Seeds a brand-new store's `meta.embed_fingerprint` (via
+    `seed_if_fresh`) or a fresh Postgres `vector(N)` column. For an
+    existing store, resolve via `stored_fingerprint` / `bound_embedder`
+    instead: each store keeps its own embedder.
     """
-    from memman.embed import get_client
     return Fingerprint.from_client(get_client())
 
 
@@ -107,7 +105,24 @@ def seed_if_fresh(
 
     Writes `ec`'s fingerprint when both: (a) no fingerprint is
     stored, and (b) the `insights` table is empty. Idempotent.
-    Returns True if a seed was written.
+
+    Parameters
+    ----------
+    backend : Backend
+        The store to seed.
+    ec : EmbeddingProvider
+        The embedder whose fingerprint is written.
+
+    Returns
+    -------
+    bool
+        True if a seed was written.
+
+    Raises
+    ------
+    EmbedFingerprintError
+        When the store is fresh but `ec` is unavailable or reports a
+        non-positive dimension.
     """
     if stored_fingerprint(backend) is not None:
         return False
@@ -133,10 +148,9 @@ def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
     callers that may face a fresh store must run `seed_if_fresh`
     first.
     """
-    from memman.embed import registry as _ec_registry
     fp = stored_fingerprint(backend)
     if fp is None:
         raise EmbedFingerprintError(
-            "store has no embed fingerprint;"
+            'store has no embed fingerprint;'
             " run 'memman embed reembed' to initialize.")
     return _ec_registry.get_for(fp.provider, fp.model)

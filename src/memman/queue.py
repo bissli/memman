@@ -34,9 +34,6 @@ STATUS_STALE = 'stale'
 @dataclass(slots=True)
 class QueueRow:
     """A single queued blob claimed by a worker.
-
-    `queue_uuid` sits last, then `author`; keep that column order in
-    every column list so a positional index stays valid.
     """
 
     id: int
@@ -50,7 +47,8 @@ class QueueRow:
 
 
 def queue_db_path(base_dir: str) -> str:
-    """Return <base_dir>/queue.db."""
+    """Return <base_dir>/queue.db.
+    """
     return os.path.join(base_dir, QUEUE_FILENAME)
 
 
@@ -74,13 +72,9 @@ def open_queue_db(base_dir: str) -> sqlite3.Connection:
     BackendError
         When `base_dir` cannot be created, or when
         `<base_dir>/queue.db` cannot be opened or read as a database.
-        Never a bare `OSError` or `sqlite3.Error`.
-
-    Notes
-    -----
-    - `memman remember` opens the queue before it opens any store, so
-      nothing else on the write path catches a raw driver error; the
-      CLI root group catches `BackendError` alone.
+        Never a bare `OSError` or `sqlite3.Error`: the CLI root group
+        catches `BackendError` alone, and `memman remember` opens the
+        queue before any store.
     """
     try:
         Path(base_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
@@ -210,7 +204,10 @@ def enqueue(
     Returns
     -------
     tuple[int, str]
-        `(row_id, queue_uuid)`.
+        `(row_id, queue_uuid)`. `row_id` addresses the queue row, which
+        `purge_done` drops a minute after the drain. `queue_uuid`
+        becomes the id of the insight the drain stores, so a caller
+        holds the insight's id before the insight exists.
 
     Notes
     -----
@@ -219,11 +216,6 @@ def enqueue(
       AUTOINCREMENT counter, where a fresh enqueue would otherwise
       draw a row id an existing insight already claims and be
       silently dropped.
-    - Both halves are returned because they answer different
-      questions: `row_id` addresses the queue row, which
-      `purge_done` drops a minute after the drain, while
-      `queue_uuid` becomes the id of the insight the drain stores,
-      so a caller holds the row's id before the row exists.
     """
     now = int(time.time())
     queue_uuid = str(uuid.uuid4())
@@ -249,6 +241,9 @@ def find_pending(
         ) -> tuple[str, str | None] | None:
     """Resolve an id or unambiguous prefix to a write still in the queue.
 
+    A write the drain is storing right now still matches, since it
+    stays pending while a worker holds its claim.
+
     Parameters
     ----------
     conn : sqlite3.Connection
@@ -269,11 +264,6 @@ def find_pending(
     ------
     ValueError
         When the prefix matches more than one pending write.
-
-    Notes
-    -----
-    - A pending write stays pending while a worker holds its claim, so
-      a write the drain is storing right now still matches.
     """
     sql = """
 select queue_uuid, category from queue
@@ -341,19 +331,17 @@ def claim(
     -------
     QueueRow or None
         The claimed row with `attempts` already bumped; None when no
-        row is available.
+        row is available. The caller retires it with `mark_done` or
+        `mark_failed`.
 
     Notes
     -----
-    - Rows claim in `queued_at` order.
     - A replace waits while an earlier pending write in its store is
       its target or is itself a replace, so replaces land in the order
       they were queued, whatever retries they take. A write that
       fails or goes stale stops holding the rows behind it.
-    - A claimed row is reclaimable once its claim is older than
-      `STALE_CLAIM_SECONDS`, so a worker that dies mid-row strands
-      nothing.
-    - The caller retires the row with `mark_done` or `mark_failed`.
+    - A claim older than `STALE_CLAIM_SECONDS` is reclaimable, so a
+      worker that dies mid-row strands nothing.
     """
     now = int(time.time())
     store_filter = ''
@@ -399,7 +387,8 @@ returning id, store, content, category, replaced_id,
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
-    """Mark a claimed row as successfully processed."""
+    """Mark a claimed row as successfully processed.
+    """
     now = int(time.time())
     sql = """
 update queue
@@ -435,17 +424,12 @@ def mark_failed(
     Notes
     -----
     - At `attempts >= MAX_ATTEMPTS` the row moves to status `failed`
-      and drops its claim.
-    - Otherwise `claimed_at` is rewritten to a past timestamp, so the
-      stale-claim reclaim predicate
-      (`claimed_at <= now - STALE_CLAIM_SECONDS`) unlocks the row
-      exactly `backoff_seconds` from now.
-    - Backoff is `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)`:
-      60, 120, 240, 480, capped at `STALE_CLAIM_SECONDS=600`. It reuses
-      the claim arithmetic, so backoff needs no column of its own.
-    - Permanent-failure rows (bad creds, 429 storms) thus get a gentle
-      retry curve instead of hammering upstream every drain tick.
-    - A missing row logs a warning and changes nothing.
+      and drops its claim. A missing row logs a warning and changes
+      nothing.
+    - Below that, the row is released for retry after
+      `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)` seconds, so a
+      permanent failure (bad credentials, rate limits) does not hit
+      upstream on every drain tick.
     """
     row = conn.execute(
         'select attempts from queue where id = ?',
@@ -519,7 +503,23 @@ def list_rows(
         status: str | None = None,
         limit: int = 50,
         ) -> list[dict]:
-    """Return queue rows as dicts, newest first."""
+    """Return queue rows as dicts, newest first.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Queue database connection.
+    status : str or None, default None
+        Keep only rows with this status; None or empty keeps all.
+    limit : int, default 50
+        Maximum rows returned.
+
+    Returns
+    -------
+    list[dict]
+        One dict per row. `content_preview` is the first 80 characters
+        of the content.
+    """
     sql = """
 select id, store, queued_at, claimed_at,
        attempts, status, processed_at, substr(content, 1, 80),
@@ -551,7 +551,8 @@ def get_row(
         conn: sqlite3.Connection,
         row_id: int,
         ) -> dict | None:
-    """Return full row (including content) as a dict."""
+    """Return full row (including content) as a dict.
+    """
     sql = """
 select id, store, content, category, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
@@ -574,7 +575,8 @@ where id = ?
 
 
 def retry_row(conn: sqlite3.Connection, row_id: int) -> bool:
-    """Re-queue a failed row. Returns True if a row was updated."""
+    """Re-queue a failed row. Returns True if a row was updated.
+    """
     sql = """
 update queue
 set status = 'pending',
@@ -606,13 +608,10 @@ def purge_done(conn: sqlite3.Connection) -> int:
 
 
 def purge_store(conn: sqlite3.Connection, store: str) -> int:
-    """Delete a store's queue rows.
+    """Delete a store's queue rows and return how many.
 
-    Returns the number of queue rows deleted.
-
-    Called from `memman store remove` so that removing a store also
-    drops its in-flight queue rows; otherwise stale rows survive the
-    rmtree and the worker re-attempts them against a missing data dir.
+    `memman store remove` calls this so the worker does not re-attempt
+    the store's in-flight rows against a missing data dir.
     """
     cur = conn.execute(
         'delete from queue where store = ?', (store,))
@@ -622,10 +621,10 @@ def purge_store(conn: sqlite3.Connection, store: str) -> int:
 def purge_worker_runs(conn: sqlite3.Connection) -> int:
     """Drop worker_runs rows older than 7 days.
 
-    Returns the deleted row count. The serve loop writes a heartbeat
-    row every iteration (including empty drains), so without pruning
-    the table grows without bound. The maintenance phase calls this
-    once per drain.
+    Returns the deleted row count. Every drain writes a heartbeat row
+    (an empty drain at most once per `HEARTBEAT_MIN_INTERVAL_SECONDS`),
+    so without pruning the table grows without bound. The maintenance
+    phase calls this once per drain.
     """
     cutoff = int(time.time()) - 7 * 86400
     cur = conn.execute(
@@ -653,7 +652,8 @@ where status = 'pending'
 
 
 def retry_stale(conn: sqlite3.Connection) -> int:
-    """Re-queue all stale rows. Returns number of rows updated."""
+    """Re-queue all stale rows. Returns number of rows updated.
+    """
     sql = """
 update queue
 set status = 'pending',
@@ -669,7 +669,8 @@ where status = ?
 
 
 def purge_stale(conn: sqlite3.Connection) -> int:
-    """Delete all stale rows. Returns deleted count."""
+    """Delete all stale rows. Returns deleted count.
+    """
     cur = conn.execute("delete from queue where status = 'stale'")
     return cur.rowcount
 
@@ -694,6 +695,22 @@ def finish_worker_run(
         rows_failed: int,
         error: str | None = None) -> None:
     """Stamp finish time, row counts, and duration onto a worker_runs row.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Queue database connection.
+    run_id : int
+        `worker_runs.id` from `start_worker_run`. `duration_ms` is
+        NULL when it matches no row.
+    rows_claimed : int
+        Rows the drain claimed.
+    rows_done : int
+        Rows that finished successfully.
+    rows_failed : int
+        Rows that failed.
+    error : str or None, default None
+        Fatal error text for the run.
     """
     cur = conn.execute(
         'select started_at from worker_runs where id = ?',
@@ -726,9 +743,6 @@ def last_worker_run(conn: sqlite3.Connection) -> dict | None:
     so callers can distinguish healthy in-progress runs from hung or
     orphaned ones without log parsing.
     """
-    import os as _os
-    import time as _time
-
     sql = """
 select id, started_at, finished_at, worker_pid, rows_claimed,
        rows_done, rows_failed, duration_ms, error
@@ -747,15 +761,15 @@ limit 1
 
     elapsed = None
     if started_at:
-        ref = finished_at if finished_at is not None else int(_time.time())
+        ref = finished_at if finished_at is not None else int(time.time())
         elapsed = max(0, ref - started_at)
 
     alive: bool | None = None
     if in_progress and worker_pid:
         try:
-            _os.kill(worker_pid, 0)
+            os.kill(worker_pid, 0)
             alive = True
-        except (OSError, ProcessLookupError):
+        except OSError:
             alive = False
 
     return {

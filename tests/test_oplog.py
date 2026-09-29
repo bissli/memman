@@ -1,4 +1,5 @@
-"""Tests for memman.store.oplog -- operation logging, stats, and trim."""
+"""Tests for memman.store.oplog -- operation logging, stats, and trim.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -6,21 +7,31 @@ from memman.store.db import open_db
 from memman.store.model import format_timestamp
 from memman.store.node import insert_insight, soft_delete_insight
 from memman.store.oplog import MAX_OPLOG_ENTRIES, OPLOG_RETENTION_DAYS
-from memman.store.oplog import get_oplog_stats, log_op, trim_oplog_by_age
+from memman.store.oplog import get_oplog_stats, trim_oplog_by_age
 from tests.conftest import make_insight
 
 
 class TestOplogStats:
-    """get_oplog_stats queries against real schema."""
+    """get_oplog_stats queries against real schema.
+    """
 
     def test_stats_no_crash(self, tmp_db):
-        """Returns valid dict on empty DB."""
+        """Verify get_oplog_stats returns a valid dict on an empty DB.
+
+        Mutation: get_oplog_stats raising, or omitting operation_counts, when
+            no rows exist.
+        Oracle: total_active of 0 and a dict-typed operation_counts.
+        """
         stats = get_oplog_stats(tmp_db)
         assert stats['total_active'] == 0
         assert isinstance(stats['operation_counts'], dict)
 
     def test_stats_counts_active(self, tmp_db):
-        """Counts exclude soft-deleted insights."""
+        """Verify total_active excludes soft-deleted insights.
+
+        Mutation: counting soft-deleted rows in total_active.
+        Oracle: two inserts and one soft delete, expecting 1.
+        """
         insert_insight(tmp_db, make_insight(id='a'))
         insert_insight(tmp_db, make_insight(id='b'))
         soft_delete_insight(tmp_db, 'b')
@@ -29,19 +40,27 @@ class TestOplogStats:
 
 
 def _insert_at(db, created_at_dt):
-    """Insert a raw oplog row at an explicit created_at for test setup."""
+    """Insert a raw oplog row at an explicit created_at.
+    """
     db._exec(
-        'INSERT INTO oplog (operation, insight_id, detail, created_at)'
-        ' VALUES (?, ?, ?, ?)',
+        'insert into oplog (operation, insight_id, detail, created_at)'
+        ' values (?, ?, ?, ?)',
         ('test_op', 'some-id', 'some-detail',
          format_timestamp(created_at_dt)))
 
 
 class TestOplogTrim:
-    """trim_oplog_by_age: age-based retention (B13)."""
+    """trim_oplog_by_age: age-based retention.
+    """
 
     def test_trim_deletes_rows_older_than_retention(self, tmp_path):
-        """Rows older than `OPLOG_RETENTION_DAYS` are removed."""
+        """Verify rows older than OPLOG_RETENTION_DAYS are removed.
+
+        Mutation: comparing created_at with the wrong cutoff, or trimming
+            nothing.
+        Oracle: rows placed 1 and 90 days past retention and 10 days old; 2
+            deleted, 1 remains.
+        """
         db = open_db(str(tmp_path))
         try:
             now = datetime.now(timezone.utc)
@@ -51,13 +70,18 @@ class TestOplogTrim:
             deleted = trim_oplog_by_age(db)
             assert deleted == 2
             (remaining,) = db._query(
-                'SELECT COUNT(*) FROM oplog').fetchone()
+                'select count(*) from oplog').fetchone()
             assert remaining == 1
         finally:
             db.close()
 
     def test_trim_preserves_recent_rows(self, tmp_path):
-        """Rows inside retention window are untouched."""
+        """Verify rows inside the retention window are untouched.
+
+        Mutation: a cutoff too short (such as 30 days), which deletes recent
+            rows.
+        Oracle: five rows aged 0 to 179 days against a 180-day retention.
+        """
         db = open_db(str(tmp_path))
         try:
             now = datetime.now(timezone.utc)
@@ -66,47 +90,49 @@ class TestOplogTrim:
             deleted = trim_oplog_by_age(db)
             assert deleted == 0
             (remaining,) = db._query(
-                'SELECT COUNT(*) FROM oplog').fetchone()
+                'select count(*) from oplog').fetchone()
             assert remaining == 5
         finally:
             db.close()
 
     def test_trim_noop_on_empty_table(self, tmp_path):
-        """trim_oplog_by_age returns 0 when there is nothing to delete."""
+        """Verify trim_oplog_by_age returns 0 on an empty table.
+
+        Mutation: returning a nonzero count or raising with no rows.
+        Oracle: the returned count of 0.
+        """
         db = open_db(str(tmp_path))
         try:
             assert trim_oplog_by_age(db) == 0
         finally:
             db.close()
 
-    def test_log_op_still_honors_max_entries_cap(self, tmp_path):
-        """log_op's id-based cap remains -- age-trim is additive, not a replacement.
-        """
-        db = open_db(str(tmp_path))
-        try:
-            for i in range(5):
-                log_op(db, f'op-{i}', f'id-{i}', 'detail')
-            (count,) = db._query(
-                'SELECT COUNT(*) FROM oplog').fetchone()
-            assert count == 5
-        finally:
-            db.close()
-
 
 class TestOplogTrimInMaintenance:
-    """oplog.log is INSERT-only; trim moves to maintenance_step."""
+    """oplog.log is insert-only; trim runs in maintenance_step.
+    """
 
     def test_log_does_not_trim(self, tmp_db, tmp_backend):
-        """Stuffing the oplog past the cap does NOT trim during log()."""
+        """Verify log() leaves an oplog past the cap untrimmed.
+
+        Mutation: putting the cap delete back on the write path, which makes
+            every write a delete and breaks the single-statement Postgres log.
+        Oracle: a row count equal to the number of log calls.
+        """
         over_cap = MAX_OPLOG_ENTRIES + 50
         for i in range(over_cap):
             tmp_backend.oplog.log(
                 operation='probe', insight_id=str(i), detail='')
-        row = tmp_db._query('SELECT COUNT(*) FROM oplog').fetchone()
+        row = tmp_db._query('select count(*) from oplog').fetchone()
         assert row[0] == over_cap
 
     def test_maintenance_step_trims(self, tmp_db, tmp_backend):
-        """maintenance_step() caps the oplog at MAX_OPLOG_ENTRIES."""
+        """Verify maintenance_step caps the oplog at MAX_OPLOG_ENTRIES.
+
+        Mutation: maintenance_step skipping the cap delete or using an
+            off-by-one bound.
+        Oracle: MAX_OPLOG_ENTRIES + 50 rows in, exactly MAX_OPLOG_ENTRIES left.
+        """
         over_cap = MAX_OPLOG_ENTRIES + 50
         for i in range(over_cap):
             tmp_backend.oplog.log(
@@ -114,5 +140,5 @@ class TestOplogTrimInMaintenance:
 
         tmp_backend.oplog.maintenance_step()
 
-        row = tmp_db._query('SELECT COUNT(*) FROM oplog').fetchone()
+        row = tmp_db._query('select count(*) from oplog').fetchone()
         assert row[0] == MAX_OPLOG_ENTRIES

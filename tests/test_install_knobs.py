@@ -1,4 +1,5 @@
-"""Tests for `memman.config.collect_install_knobs`."""
+"""Tests for `memman.config.collect_install_knobs`.
+"""
 
 import httpx
 import pytest
@@ -17,7 +18,13 @@ class TestCollectInstallKnobs:
 
     def test_file_value_wins_over_shell_env(
             self, tmp_path, monkeypatch):
-        """File values are sticky; shell env never overrides them on reinstall."""
+        """Verify an env-file value beats a conflicting shell export.
+
+        Mutation: reading os.environ before the env file, so a later shell
+            export overrides a pinned value on reinstall.
+        Oracle: the file values 'file/sonnet-pin' and 'file-or-key' against
+            different shell values.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -35,7 +42,12 @@ class TestCollectInstallKnobs:
 
     def test_shell_env_seeds_file_when_key_missing(
             self, tmp_path, monkeypatch):
-        """Shell env values fill blanks in the file at install time."""
+        """Verify a shell export fills a key the env file lacks.
+
+        Mutation: ignoring os.environ for keys absent from the file, so install
+            fails or writes the default.
+        Oracle: the three shell values read back from the knobs.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or-key')
@@ -74,7 +86,13 @@ class TestCollectInstallKnobs:
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
 
     def test_missing_mandatory_secret_raises(self, tmp_path, monkeypatch):
-        """ConfigError when the embed provider's mandatory secret is missing."""
+        """Verify install raises ConfigError for a missing embed-provider secret.
+
+        Mutation: dropping the required_install_keys check, so install writes a
+            file with no embed key.
+        Oracle: ConfigError naming MEMMAN_VOYAGE_API_KEY, with the key absent
+            from file and shell.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
@@ -85,7 +103,12 @@ class TestCollectInstallKnobs:
 
     def test_backend_default_is_sqlite(
             self, tmp_path, monkeypatch):
-        """`MEMMAN_DEFAULT_BACKEND` resolves to 'sqlite' from INSTALL_DEFAULTS."""
+        """Verify DEFAULT_BACKEND resolves to 'sqlite' from INSTALL_DEFAULTS.
+
+        Mutation: INSTALL_DEFAULTS omitting DEFAULT_BACKEND or naming another
+            backend.
+        Oracle: the literal 'sqlite'.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -98,7 +121,12 @@ class TestCollectInstallKnobs:
 
     def test_backup_keep_default_present_cron_target_absent(
             self, tmp_path, monkeypatch):
-        """BACKUP_KEEP defaults to '7'; BACKUP_CRON/TARGET stay unset, no error."""
+        """Verify BACKUP_KEEP defaults to '7' and BACKUP_CRON/TARGET stay unset.
+
+        Mutation: seeding a default for BACKUP_CRON or BACKUP_TARGET, raising
+            for them, or dropping the BACKUP_KEEP default.
+        Oracle: the literal '7' and the absence of both keys.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -113,7 +141,12 @@ class TestCollectInstallKnobs:
 
     def test_native_voyage_key_seeds_memman_voyage_key(
             self, tmp_path, monkeypatch):
-        """Native `VOYAGE_API_KEY` (no MEMMAN- prefix) seeds the memman key."""
+        """Verify the vendor-native VOYAGE_API_KEY seeds the memman key.
+
+        Mutation: dropping the native-name fallback, so install fails for a
+            user who exported only the vendor variable.
+        Oracle: the native value read back under MEMMAN_VOYAGE_API_KEY.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv('VOYAGE_API_KEY', 'native-vy-key')
@@ -124,7 +157,12 @@ class TestCollectInstallKnobs:
 
     def test_native_openrouter_key_cascades_into_llm_api_key(
             self, tmp_path, monkeypatch):
-        """Native `OPENROUTER_API_KEY` seeds OR key AND cascades to LLM key."""
+        """Verify the native OPENROUTER_API_KEY seeds the OR key and the LLM key.
+
+        Mutation: seeding the OpenRouter key without copying it to
+            MEMMAN_LLM_API_KEY, so the LLM client has no key.
+        Oracle: both knobs read back as 'native-or-key'.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv('OPENROUTER_API_KEY', 'native-or-key')
@@ -136,7 +174,11 @@ class TestCollectInstallKnobs:
 
     def test_native_openai_key_seeds_memman_openai_embed_key(
             self, tmp_path, monkeypatch):
-        """Native `OPENAI_API_KEY` seeds MEMMAN_OPENAI_EMBED_API_KEY."""
+        """Verify the native OPENAI_API_KEY seeds MEMMAN_OPENAI_EMBED_API_KEY.
+
+        Mutation: omitting OPENAI_API_KEY from the native fallback table.
+        Oracle: the native value read back under MEMMAN_OPENAI_EMBED_API_KEY.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv('OPENAI_API_KEY', 'native-oai-key')
@@ -148,7 +190,11 @@ class TestCollectInstallKnobs:
 
     def test_memman_prefixed_wins_over_native(
             self, tmp_path, monkeypatch):
-        """When both MEMMAN- and native are exported, MEMMAN- wins."""
+        """Verify the MEMMAN- name beats the vendor-native name.
+
+        Mutation: checking the native name first.
+        Oracle: 'memman-vy-key' read back with both names exported.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv(config.VOYAGE_API_KEY, 'memman-vy-key')
@@ -160,7 +206,11 @@ class TestCollectInstallKnobs:
 
     def test_file_wins_over_native_shell(
             self, tmp_path, monkeypatch):
-        """File value still wins over native shell fallback (sticky seed)."""
+        """Verify an env-file value beats a vendor-native shell export.
+
+        Mutation: letting the native-name fallback override a file value.
+        Oracle: the file values read back with different native exports set.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -177,7 +227,12 @@ class TestCollectInstallKnobs:
 
     def test_voyage_embed_model_default_is_written(
             self, tmp_path, monkeypatch):
-        """`MEMMAN_VOYAGE_EMBED_MODEL=voyage-3-lite` lands from INSTALL_DEFAULTS."""
+        """Verify the Voyage embed model defaults from INSTALL_DEFAULTS.
+
+        Mutation: dropping VOYAGE_EMBED_MODEL from INSTALL_DEFAULTS, or
+            changing its value.
+        Oracle: the literal 'voyage-3-lite'.
+        """
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'or-key')
@@ -188,7 +243,11 @@ class TestCollectInstallKnobs:
 
     def test_backend_value_round_trips_from_file(
             self, tmp_path, monkeypatch):
-        """Existing `MEMMAN_DEFAULT_BACKEND=postgres` in the file is preserved."""
+        """Verify a DEFAULT_BACKEND already in the env file survives install.
+
+        Mutation: overwriting the file value with the 'sqlite' default.
+        Oracle: the literal 'postgres' read back.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(

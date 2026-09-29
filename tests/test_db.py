@@ -1,15 +1,22 @@
-"""Tests for the DB class context-manager protocol."""
+"""Tests for the DB class context-manager protocol.
+"""
 
 import sqlite3
 from pathlib import Path
 
 import pytest
+from memman.store import db as db_mod
 from memman.store.db import open_db, open_read_only
 from memman.store.errors import BackendError
 
 
 def test_db_context_manager_closes_on_exit(tmp_path):
-    """Using `with open_db()` closes the underlying connection on exit."""
+    """Verify leaving a `with open_db()` block closes the connection.
+
+    Mutation: __exit__ not calling close(), leaking the connection.
+    Oracle: sqlite3.ProgrammingError from executing on the connection after the
+        block.
+    """
     with open_db(str(tmp_path)) as db:
         underlying = db.conn
         assert underlying.execute('select 1').fetchone() == (1,)
@@ -18,7 +25,12 @@ def test_db_context_manager_closes_on_exit(tmp_path):
 
 
 def test_db_context_manager_closes_on_exception(tmp_path):
-    """Exception inside the with-block still closes the connection."""
+    """Verify an exception inside the with-block still closes the connection.
+
+    Mutation: __exit__ closing only when no exception occurred.
+    Oracle: sqlite3.ProgrammingError from executing on the connection after the
+        raise.
+    """
     with pytest.raises(RuntimeError), open_db(str(tmp_path)) as db:
         underlying = db.conn
         raise RuntimeError('boom')
@@ -30,11 +42,10 @@ def test_open_db_wraps_unreadable_file_as_backend_error(tmp_path):
     """A non-database file fails as `BackendError`, never raw sqlite3.
 
     Mutation: dropping the `sqlite3.Error` translation in `open_db`, so
-        a raw `sqlite3.DatabaseError` leaves this function. The CLI no
-        longer prints a traceback for that -- the root group catches
-        `sqlite3.Error` too -- but it would report the generic `sqlite
-        query failed` in place of the store path, and every non-CLI
-        caller would see the driver type.
+        a raw `sqlite3.DatabaseError` leaves this function. The CLI root
+        group also catches `sqlite3.Error`, but it would report the
+        generic `sqlite query failed` in place of the store path, and
+        every non-CLI caller would see the driver type.
     Oracle: `BackendError` sits outside the `sqlite3.Error` hierarchy,
         so the raised type discriminates translated from untranslated.
     """
@@ -86,10 +97,8 @@ def test_open_db_closes_the_connection_when_open_fails(tmp_path, monkeypatch):
     Oracle: the captured connection is independently probed after the
         raise. `ProgrammingError` means closed; a leaked handle raises
         `DatabaseError` on these bytes instead, so the probe
-        discriminates on the type, not on the query succeeding.
+        discriminates on the exception type.
     """
-    from memman.store import db as db_mod
-
     captured = []
     real_connect = db_mod.sqlite3.connect
 
@@ -161,10 +170,8 @@ def test_open_read_only_closes_the_connection_when_open_fails(
     Oracle: the captured connection is independently probed after the
         raise. `ProgrammingError` means closed; a leaked handle raises
         `DatabaseError` on these bytes instead, so the probe
-        discriminates on the type, not on the query succeeding.
+        discriminates on the exception type.
     """
-    from memman.store import db as db_mod
-
     captured = []
     real_connect = db_mod.sqlite3.connect
 

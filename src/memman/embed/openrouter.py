@@ -21,7 +21,8 @@ logger = logging.getLogger('memman')
 
 
 class Client:
-    """HTTP client for OpenRouter's `/embeddings` endpoint."""
+    """HTTP client for OpenRouter's `/embeddings` endpoint.
+    """
 
     name = 'openrouter'
 
@@ -49,7 +50,8 @@ class Client:
                 f' {type(exc).__name__}: {exc}')
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers with auth."""
+        """Build request headers with auth.
+        """
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
@@ -58,7 +60,8 @@ class Client:
             }
 
     def available(self) -> bool:
-        """Probe the endpoint with a 1-token embed and cache the dim."""
+        """Probe the endpoint with a 1-token embed and cache the dim.
+        """
         if self._availability_cache is not None:
             return self._availability_cache
         try:
@@ -74,11 +77,13 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via OpenRouter."""
+        """Generate embedding for text via OpenRouter.
+        """
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed many texts in one HTTP round-trip."""
+        """Embed many texts in one HTTP round-trip.
+        """
         if not texts:
             return []
         url = f'{self.endpoint.rstrip("/")}/embeddings'
@@ -140,7 +145,8 @@ class Client:
         return vectors
 
     def unavailable_message(self) -> str:
-        """Return error message when OpenRouter embed is not available."""
+        """Return error message when OpenRouter embed is not available.
+        """
         return (
             f'OpenRouter embed not available at {self.endpoint}'
             f' (model={self.model}); verify {config.OPENROUTER_API_KEY}'

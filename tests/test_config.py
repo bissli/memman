@@ -1,5 +1,7 @@
-"""Tests for memman.config -- variables, set command, and env-var resolver."""
+"""Tests for memman.config -- variables, set command, and env-var resolver.
+"""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -48,8 +50,11 @@ ALL_EXPECTED_NAMES = {
 
 
 def test_required_install_keys_returns_subset_of_installable():
-    """required_install_keys output stays within INSTALLABLE_KEYS for every
-    embed provider.
+    """Verify required_install_keys stays inside INSTALLABLE_KEYS.
+
+    Mutation: A provider mapped to a key install cannot write, so the install
+        check demands a variable it never persists.
+    Oracle: Subset test against INSTALLABLE_KEYS for each curated provider.
     """
     for embed in ('voyage', 'openai', 'openrouter'):
         keys = config.required_install_keys(embed)
@@ -57,7 +62,12 @@ def test_required_install_keys_returns_subset_of_installable():
 
 
 def test_required_install_keys_picks_curated_secrets():
-    """Each curated embed provider maps to the API key install must verify."""
+    """Verify each curated embed provider maps to its own API key.
+
+    Mutation: Two providers swapped in PROVIDER_REQUIRED_KEYS, so install
+        verifies the wrong secret.
+    Oracle: Hand-written provider to key pairs.
+    """
     assert config.required_install_keys('voyage') == {config.VOYAGE_API_KEY}
     assert config.required_install_keys('openai') == {
         config.OPENAI_EMBED_API_KEY}
@@ -66,34 +76,73 @@ def test_required_install_keys_picks_curated_secrets():
 
 
 def test_required_install_keys_experimental_returns_empty():
-    """Experimental embed providers return an empty set."""
+    """Verify an unregistered embed provider needs no key.
+
+    Mutation: required_install_keys indexing the map directly and raising
+        KeyError for an unknown provider.
+    Oracle: The empty set for `cohere`.
+    """
     assert config.required_install_keys('cohere') == set()
 
 
 class TestIsOpenrouterEndpoint:
-    """`config.is_openrouter_endpoint` matches OR hosts robustly."""
+    """`config.is_openrouter_endpoint` matches OR hosts robustly.
+    """
 
     def test_canonical_url(self):
+        """Verify the canonical OpenRouter URL matches.
+
+        Mutation: The host test rejecting the bare `openrouter.ai` host.
+        Oracle: The documented API URL.
+        """
         assert config.is_openrouter_endpoint(
             'https://openrouter.ai/api/v1') is True
 
     def test_trailing_slash(self):
+        """Verify a trailing slash does not change the match.
+
+        Mutation: Matching the whole URL string instead of the parsed host.
+        Oracle: The canonical URL with a trailing slash.
+        """
         assert config.is_openrouter_endpoint(
             'https://openrouter.ai/api/v1/') is True
 
     def test_http_scheme(self):
+        """Verify the http scheme still matches.
+
+        Mutation: A `startswith("https://")` test in place of host parsing.
+        Oracle: The canonical URL over http.
+        """
         assert config.is_openrouter_endpoint(
             'http://openrouter.ai/api/v1') is True
 
     def test_regional_subdomain(self):
+        """Verify a regional subdomain matches.
+
+        Mutation: Dropping the `.openrouter.ai` suffix arm, leaving exact host
+            equality.
+        Oracle: The `eu.openrouter.ai` host.
+        """
         assert config.is_openrouter_endpoint(
             'https://eu.openrouter.ai/api/v1') is True
 
     def test_www_prefix(self):
+        """Verify a `www.` host matches.
+
+        Mutation: Dropping the suffix arm, leaving exact host equality that
+            rejects www.
+        Oracle: The `www.openrouter.ai` host.
+        """
         assert config.is_openrouter_endpoint(
             'https://www.openrouter.ai/api/v1') is True
 
     def test_other_endpoints_are_not_or(self):
+        """Verify other hosts do not match.
+
+        Mutation: A loose match, such as any host containing `open`, or an
+            unconditional True.
+        Oracle: OpenAI, Anthropic, and a localhost URL.
+        """
         assert config.is_openrouter_endpoint(
             'https://api.openai.com/v1') is False
         assert config.is_openrouter_endpoint(
@@ -103,23 +152,51 @@ class TestIsOpenrouterEndpoint:
 
 
 class TestIsLoopbackEndpoint:
-    """`config.is_loopback_endpoint` matches the standard loopback hosts."""
+    """`config.is_loopback_endpoint` matches the standard loopback hosts.
+    """
 
     def test_localhost(self):
+        """Verify `localhost` is loopback.
+
+        Mutation: Dropping `localhost` from the loopback host set.
+        Oracle: The Ollama default URL.
+        """
         assert config.is_loopback_endpoint(
             'http://localhost:11434/v1') is True
 
     def test_loopback_ipv4(self):
+        """Verify 127.0.0.1 is loopback.
+
+        Mutation: Dropping `127.0.0.1` from the loopback host set.
+        Oracle: The literal address with a port.
+        """
         assert config.is_loopback_endpoint('http://127.0.0.1:1234') is True
 
     def test_loopback_ipv6(self):
+        """Verify the IPv6 loopback `[::1]` is loopback.
+
+        Mutation: Dropping `::1` from the set, or comparing the bracketed
+            netloc instead of the parsed hostname.
+        Oracle: The bracketed IPv6 literal with a port.
+        """
         assert config.is_loopback_endpoint('http://[::1]:11434/v1') is True
 
     def test_dotted_localhost_subdomain(self):
+        """Verify a `*.localhost` host is loopback.
+
+        Mutation: Dropping the `.localhost` suffix arm.
+        Oracle: The `api.localhost` host.
+        """
         assert config.is_loopback_endpoint(
             'http://api.localhost:1234') is True
 
     def test_remote_endpoint_is_not_loopback(self):
+        """Verify remote hosts are not loopback.
+
+        Mutation: An unconditional True, which skips the API-key requirement
+            for a remote endpoint.
+        Oracle: The OpenAI and OpenRouter URLs.
+        """
         assert config.is_loopback_endpoint(
             'https://api.openai.com/v1') is False
         assert config.is_loopback_endpoint(
@@ -127,17 +204,31 @@ class TestIsLoopbackEndpoint:
 
 
 def test_secret_vars_subset_of_installable():
-    """Every secret must be in INSTALLABLE_KEYS so install can write it."""
+    """Verify every secret is an installable key.
+
+    Mutation: A new secret missing from INSTALLABLE_KEYS, which install cannot
+        then write.
+    Oracle: Subset test of SECRET_VARS against INSTALLABLE_KEYS.
+    """
     assert config.SECRET_VARS <= set(config.INSTALLABLE_KEYS)
 
 
 def test_install_defaults_keys_subset_of_installable():
-    """INSTALL_DEFAULTS must not contain ghost keys outside INSTALLABLE_KEYS."""
+    """Verify every install default is an installable key.
+
+    Mutation: A default seeded for a key outside INSTALLABLE_KEYS.
+    Oracle: Subset test of INSTALL_DEFAULTS keys against INSTALLABLE_KEYS.
+    """
     assert set(config.INSTALL_DEFAULTS) <= set(config.INSTALLABLE_KEYS)
 
 
 def test_all_vars_covers_installable_plus_direct_env_vars():
-    """_ALL_VARS = INSTALLABLE_KEYS + process-control vars + tuning vars."""
+    """Verify _ALL_VARS is installable keys plus direct env vars.
+
+    Mutation: A process-control or tuning var missing from _ALL_VARS, so
+        enumerate_effective_config omits it.
+    Oracle: A hand-listed union of INSTALLABLE_KEYS and the direct vars.
+    """
     expected = set(config.INSTALLABLE_KEYS) | {
         config.DATA_DIR, config.STORE, config.WORKER, config.DEBUG,
         config.SCHEDULER_KIND, config.AUTHOR,
@@ -149,11 +240,13 @@ def test_all_vars_covers_installable_plus_direct_env_vars():
 
 
 def test_log_level_bootstrap_literal_matches_install_default():
-    """The cli.py bootstrap fall-through literal must equal INSTALL_DEFAULTS.
+    """Verify the LOG_LEVEL install default matches the CLI literal.
 
-    `cli._configure_logging` uses `or 'WARNING'` as a pre-install
-    bootstrap default. If `INSTALL_DEFAULTS[LOG_LEVEL]` ever changes,
-    the literal must be updated alongside; this test wires them together.
+    `cli._configure_logging` falls back to the literal `WARNING` before
+    install. A change to the default must change the literal too.
+
+    Mutation: INSTALL_DEFAULTS[LOG_LEVEL] changing while the CLI literal stays.
+    Oracle: The literal `WARNING`.
     """
     assert config.INSTALL_DEFAULTS[config.LOG_LEVEL] == 'WARNING'
 
@@ -205,7 +298,10 @@ def test_constants_match_expected_names():
 
 
 def test_get_bool_truthy_values(env_file):
-    """get_bool() treats '1', 'true', 'yes', 'on' (any case) as True.
+    """Verify get_bool accepts 1, true, yes, on in any case.
+
+    Mutation: A case-sensitive compare, or a member dropped from TRUTHY.
+    Oracle: Hand-listed truthy spellings in mixed case.
     """
     for val in ['1', 'true', 'TRUE', 'yes', 'ON', 'On']:
         env_file(config.LOG_LEVEL, val)
@@ -213,7 +309,10 @@ def test_get_bool_truthy_values(env_file):
 
 
 def test_get_bool_falsy_values(env_file):
-    """get_bool() returns False for '0', 'false', '', and unset vars.
+    """Verify get_bool is False for unset, empty, and other text.
+
+    Mutation: Treating any non-empty text as truthy.
+    Oracle: Unset plus `0`, `false`, `no`, `off`, empty, and `garbage`.
     """
     env_file(config.LOG_LEVEL, None)
     assert config.get_bool(config.LOG_LEVEL) is False
@@ -223,7 +322,11 @@ def test_get_bool_falsy_values(env_file):
 
 
 def test_is_worker_detects_worker_env(monkeypatch):
-    """is_worker() returns True only when MEMMAN_WORKER=1 exactly.
+    """Verify is_worker is True only for MEMMAN_WORKER=1.
+
+    Mutation: A truthy-string test that accepts `true`, or a default of True
+        when unset.
+    Oracle: Unset, `1`, `0`, and `true`.
     """
     monkeypatch.delenv(config.WORKER, raising=False)
     assert config.is_worker() is False
@@ -237,11 +340,14 @@ def test_is_worker_detects_worker_env(monkeypatch):
 
 @pytest.mark.no_default_env
 def test_enumerate_returns_all_known_vars(monkeypatch):
-    """enumerate_effective_config() includes every known env var name.
+    """Verify enumerate_effective_config lists every var, unset as None.
 
-    Marked `no_default_env` so the conftest fixture skips seeding the
-    INSTALL_DEFAULTS file; with both env and file empty, every var
+    The `no_default_env` mark skips the INSTALL_DEFAULTS seed, so every var
     resolves to None.
+
+    Mutation: A var missing from the result, or a default invented for an unset
+        var.
+    Oracle: `ALL_EXPECTED_NAMES`, kept apart from config.py.
     """
     for name in ALL_EXPECTED_NAMES:
         if name == config.DATA_DIR:
@@ -257,7 +363,10 @@ def test_enumerate_returns_all_known_vars(monkeypatch):
 
 
 def test_enumerate_reflects_current_env(env_file):
-    """enumerate_effective_config() returns live values for set vars.
+    """Verify enumerate_effective_config returns live values.
+
+    Mutation: Serving a stale value, or None for a set var.
+    Oracle: Two values written to the env file.
     """
     env_file(config.LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(config.LLM_MODEL, 'anthropic/claude-sonnet-4.6')
@@ -267,7 +376,10 @@ def test_enumerate_reflects_current_env(env_file):
 
 
 def test_enumerate_redacts_secrets_by_default(env_file):
-    """API keys are replaced with ***REDACTED*** in the default output.
+    """Verify secrets are redacted by default.
+
+    Mutation: Dropping the redact branch, so an API key prints in plain text.
+    Oracle: The `***REDACTED***` marker for two secret keys.
     """
     env_file(config.OPENROUTER_API_KEY, 'sk-or-secret-value')
     env_file(config.VOYAGE_API_KEY, 'pa-secret')
@@ -277,7 +389,10 @@ def test_enumerate_redacts_secrets_by_default(env_file):
 
 
 def test_enumerate_redact_false_exposes_secrets(env_file):
-    """redact=False returns the raw secret values (diagnostic override).
+    """Verify redact=False returns the raw secret.
+
+    Mutation: Redacting regardless of the flag.
+    Oracle: The plain value written to the env file.
     """
     env_file(config.OPENROUTER_API_KEY, 'sk-or-plaintext')
     out = config.enumerate_effective_config(redact=False)
@@ -286,7 +401,10 @@ def test_enumerate_redact_false_exposes_secrets(env_file):
 
 @pytest.mark.no_default_env
 def test_enumerate_empty_string_is_unset(env_file):
-    """Empty-string env vars map to None (not the empty string).
+    """Verify an empty value maps to None.
+
+    Mutation: Returning the empty string for an empty setting.
+    Oracle: An empty LLM model setting reads None.
     """
     env_file(config.LLM_MODEL, '')
     out = config.enumerate_effective_config()
@@ -294,10 +412,16 @@ def test_enumerate_empty_string_is_unset(env_file):
 
 
 class TestConfigSet:
-    """`memman config set` writes and validates env-file entries."""
+    """`memman config set` writes and validates env-file entries.
+    """
 
     def test_writes_env_file(self, tmp_path):
-        """`config set` writes the key into the env file at mode 0600."""
+        """Verify `config set` writes the key into the env file.
+
+        Mutation: config_set exiting 0 without persisting, or writing to a
+            different path.
+        Oracle: The env file parsed back from disk.
+        """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
@@ -308,8 +432,11 @@ class TestConfigSet:
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
 
     def test_rejects_unknown_key(self, tmp_path):
-        """`config set` exits non-zero with the new shape-list hint
-        when KEY is not in INSTALLABLE_KEYS or a per-store form.
+        """Verify `config set` rejects a key outside the accepted shapes.
+
+        Mutation: Dropping the accepted-key check, so any name lands in the env
+            file.
+        Oracle: Non-zero exit and the `not a recognized config key` text.
         """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
@@ -320,7 +447,11 @@ class TestConfigSet:
         assert 'not a recognized config key' in result.output
 
     def test_overrides_existing_value(self, tmp_path):
-        """`config set` overrides an existing env-file value."""
+        """Verify `config set` overrides an existing value.
+
+        Mutation: Sticky-seed behavior, which keeps the old value.
+        Oracle: sqlite on disk replaced by postgres.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -334,7 +465,11 @@ class TestConfigSet:
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
 
     def test_preserves_other_rows(self, tmp_path):
-        """`config set` merges -- other env-file rows are preserved verbatim."""
+        """Verify `config set` keeps the other rows of the env file.
+
+        Mutation: Rewriting the file from the one key, which drops the rest.
+        Oracle: Three seeded rows; the two untouched rows read back unchanged.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -353,10 +488,15 @@ class TestConfigSet:
 
 
 class TestConfigGet:
-    """`memman config get KEY` prints env-file values, exits 1 on unset."""
+    """`memman config get KEY` prints env-file values, exits 1 on unset.
+    """
 
     def test_get_returns_value(self, tmp_path):
-        """`config get` echoes the stored value for a set key."""
+        """Verify `config get` prints the stored value.
+
+        Mutation: config_get printing nothing, or a different key.
+        Oracle: The seeded `sqlite` in the output.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -369,7 +509,11 @@ class TestConfigGet:
         assert 'sqlite' in result.output
 
     def test_get_exits_nonzero_for_unset_key(self, tmp_path):
-        """`config get` exits 1 with a message when the key is unset."""
+        """Verify `config get` fails with a message for an unset key.
+
+        Mutation: Exiting 0 with empty output for an unset key.
+        Oracle: Non-zero exit and `is not set` in the output.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text('')
@@ -381,7 +525,11 @@ class TestConfigGet:
         assert 'is not set' in result.output
 
     def test_get_redacts_api_key(self, tmp_path):
-        """API key values do not echo plaintext via `config get`."""
+        """Verify `config get` does not print an API key.
+
+        Mutation: Dropping the `API_KEY` redaction branch.
+        Oracle: The seeded token is absent from the output.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -395,11 +543,10 @@ class TestConfigGet:
 
 
 def test_config_models_command_removed():
-    """`memman config models` no longer exists.
+    """Verify `memman config models` is not a command.
 
-    Mutation: the candidate lister left registered after the model
-        check replaced it.
-    Oracle: click's usage error, exit 2 with `No such command`.
+    Mutation: The candidate lister left registered.
+    Oracle: Click's usage error: exit 2 with `No such command`.
     """
     result = CliRunner().invoke(cli, ['config', 'models', '--help'])
     assert result.exit_code == 2
@@ -407,10 +554,16 @@ def test_config_models_command_removed():
 
 
 class TestConfigSetPgDsn:
-    """`memman config set-pg-dsn` assembles a libpq URI from prompts."""
+    """`memman config set-pg-dsn` assembles a libpq URI from prompts.
+    """
 
     def test_default_writes_assembled_uri(self, tmp_path):
-        """`--default` writes MEMMAN_DEFAULT_POSTGRES_DSN built from five prompts."""
+        """Verify `--default` writes the URI assembled from five prompts.
+
+        Mutation: Leaving the password unencoded, or echoing it in plain text.
+        Oracle: Hand-encoded URI (`!` as %21, `@` as %40), and `:***@` in the
+            output.
+        """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
@@ -426,7 +579,12 @@ class TestConfigSetPgDsn:
         assert ':***@' in result.output
 
     def test_store_writes_per_store_key(self, tmp_path):
-        """`--store NAME` writes MEMMAN_POSTGRES_DSN_<NAME>."""
+        """Verify `--store NAME` writes the per-store key.
+
+        Mutation: Writing the default key, or keeping a `:` for an empty
+            password.
+        Oracle: The URI with no password, and no default key in the file.
+        """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
@@ -435,12 +593,16 @@ class TestConfigSetPgDsn:
             input='localhost\n5432\nmemman\n\nmemman\n')
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(data_dir))
-        assert parsed[config.env_key_for('postgres', 'DSN', 'work')] == (
+        assert parsed[config.POSTGRES_DSN_FOR('work')] == (
             'postgresql://memman@localhost:5432/memman')
         assert config.DEFAULT_PG_DSN not in parsed
 
     def test_requires_default_or_store(self, tmp_path):
-        """No flags = error; both flags = error."""
+        """Verify set-pg-dsn needs exactly one of --default and --store.
+
+        Mutation: Accepting no flag, or both, and writing a key.
+        Oracle: Non-zero exit and the `exactly one of` text for each case.
+        """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         no_flags = runner.invoke(
@@ -456,47 +618,73 @@ class TestConfigSetPgDsn:
 
 
 def _write_env(path: Path, contents: str) -> None:
-    """Write contents to an env file and reset the config cache."""
+    """Write contents to an env file and reset the config cache.
+    """
     path.write_text(contents)
     config.reset_file_cache()
 
 
 class TestConfigResolver:
-    """Env-var resolver: file-canonical keys, parser edge cases, cache."""
+    """Env-var resolver: file-canonical keys, parser edge cases, cache.
+    """
 
     @pytest.fixture
-    def env_path(self, tmp_path, monkeypatch):
-        """Pin MEMMAN_DATA_DIR to tmp and return the env-file path."""
+    def env_path(
+            self, tmp_path: Path,
+            monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+        """Pin MEMMAN_DATA_DIR to tmp and return the env-file path.
+        """
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path))
         config.reset_file_cache()
         yield tmp_path / config.ENV_FILENAME
         config.reset_file_cache()
 
     def test_get_ignores_shell_env_for_installable_keys(self, env_path, monkeypatch):
-        """Installable keys are file-canonical; shell env never overrides."""
+        """Verify the shell environment never overrides the env file.
+
+        Mutation: get() consulting os.environ before the file.
+        Oracle: A file value that beats a conflicting shell value.
+        """
         monkeypatch.setenv(config.LLM_MODEL, 'env-model')
         _write_env(env_path, f'{config.LLM_MODEL}=file-model\n')
         assert config.get(config.LLM_MODEL) == 'file-model'
 
     def test_get_returns_file_value(self, env_path, monkeypatch):
-        """get() returns the value from the env file."""
+        """Verify get() returns the env file value.
+
+        Mutation: get() returning None for a key the file holds.
+        Oracle: The value written to the file.
+        """
         monkeypatch.delenv(config.LLM_MODEL, raising=False)
         _write_env(env_path, f'{config.LLM_MODEL}=file-model\n')
         assert config.get(config.LLM_MODEL) == 'file-model'
 
     def test_get_returns_none_when_file_missing_key(self, env_path, monkeypatch):
-        """get() returns None when the key is absent from the file."""
+        """Verify get() returns None for a key the file lacks.
+
+        Mutation: get() raising KeyError or returning an empty string.
+        Oracle: None for an unset key.
+        """
         monkeypatch.delenv(config.LLM_MODEL, raising=False)
         assert config.get(config.LLM_MODEL) is None
 
     def test_get_returns_none_when_shell_env_set_but_file_missing(
             self, env_path, monkeypatch):
-        """Shell-only value is invisible -- file is the only source."""
+        """Verify a shell-only value is invisible to get().
+
+        Mutation: get() falling back to os.environ.
+        Oracle: None despite a set shell variable.
+        """
         monkeypatch.setenv(config.LLM_MODEL, 'env-only')
         assert config.get(config.LLM_MODEL) is None
 
     def test_parser_skips_blank_lines_and_comments(self, env_path):
-        """Parser ignores blank lines and # comments."""
+        """Verify the parser skips blank lines and comments.
+
+        Mutation: Parsing a comment or blank line as a key, or stopping at the
+            first one.
+        Oracle: Two values that follow blanks and comments.
+        """
         contents = '\n'.join([
             '# This is a comment',
             '',
@@ -510,7 +698,11 @@ class TestConfigResolver:
         assert config.get(config.LLM_ENDPOINT) == 'endpoint-b'
 
     def test_parser_strips_quoted_values(self, env_path):
-        """Parser strips single and double quotes from values."""
+        """Verify the parser strips matching quotes.
+
+        Mutation: Keeping the quote characters in the value.
+        Oracle: A double-quoted and a single-quoted value.
+        """
         contents = '\n'.join([
             f'{config.LLM_MODEL}="quoted-model"',
             f"{config.LLM_ENDPOINT}='quoted-endpoint'",
@@ -520,19 +712,32 @@ class TestConfigResolver:
         assert config.get(config.LLM_ENDPOINT) == 'quoted-endpoint'
 
     def test_parser_does_not_expand_variables(self, env_path):
-        """Parser does not expand shell variable syntax."""
+        """Verify the parser leaves `${VAR}` as written.
+
+        Mutation: Expanding shell variables in a value.
+        Oracle: The literal `${HOME}/models`.
+        """
         contents = f'{config.LLM_MODEL}=${{HOME}}/models\n'
         _write_env(env_path, contents)
         assert config.get(config.LLM_MODEL) == '${HOME}/models'
 
     def test_missing_file_returns_none(self, env_path, monkeypatch):
-        """Missing env file returns None without error."""
+        """Verify a missing env file reads as unset.
+
+        Mutation: The parser raising FileNotFoundError.
+        Oracle: None from get() with no file on disk.
+        """
         monkeypatch.delenv(config.LLM_MODEL, raising=False)
         assert not env_path.exists()
         assert config.get(config.LLM_MODEL) is None
 
     def test_data_dir_change_invalidates_cache(self, tmp_path, monkeypatch):
-        """Changing DATA_DIR causes the file cache to be invalidated."""
+        """Verify a DATA_DIR change reloads the env file.
+
+        Mutation: Caching by first read, so the second dir serves the first dir
+            values.
+        Oracle: Two dirs holding different values for one key.
+        """
         dir_a = tmp_path / 'a'
         dir_b = tmp_path / 'b'
         dir_a.mkdir()
@@ -551,20 +756,33 @@ class TestConfigResolver:
         assert config.get(config.LLM_MODEL) == 'from-b'
 
     def test_get_bool_resolves_through_file(self, env_path, monkeypatch):
-        """get_bool() resolves installable keys through the file."""
+        """Verify get_bool reads the env file.
+
+        Mutation: get_bool ignoring the file.
+        Oracle: The value `on` in the file reads True.
+        """
         monkeypatch.delenv(config.LOG_LEVEL, raising=False)
         _write_env(env_path, f'{config.LOG_LEVEL}=on\n')
         assert config.get_bool(config.LOG_LEVEL) is True
 
     def test_get_bool_ignores_shell_env_for_installable_key(
             self, env_path, monkeypatch):
-        """get_bool() reads file only for installable keys."""
+        """Verify get_bool ignores the shell for installable keys.
+
+        Mutation: get_bool reading os.environ before the file.
+        Oracle: A file value `off` beats a shell value `on`.
+        """
         monkeypatch.setenv(config.LOG_LEVEL, 'on')
         _write_env(env_path, f'{config.LOG_LEVEL}=off\n')
         assert config.get_bool(config.LOG_LEVEL) is False
 
     def test_enumerate_effective_config_redacts_secrets(self, env_path, monkeypatch):
-        """enumerate_effective_config redacts and exposes secrets correctly."""
+        """Verify redact=True hides a secret and redact=False shows it.
+
+        Mutation: Redaction skipped for file values, or applied when redact is
+            False.
+        Oracle: The marker for one call and the raw value for the other.
+        """
         _write_env(env_path, f'{config.OPENROUTER_API_KEY}=super-secret\n')
         out = config.enumerate_effective_config(redact=True)
         assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
@@ -573,21 +791,35 @@ class TestConfigResolver:
         assert out_unredacted[config.OPENROUTER_API_KEY] == 'super-secret'
 
     def test_enumerate_resolves_through_file(self, env_path, monkeypatch):
-        """enumerate_effective_config returns file-only values."""
+        """Verify enumerate_effective_config reads file-only values.
+
+        Mutation: Enumerate reading os.environ for installable keys.
+        Oracle: The value that only the file holds.
+        """
         monkeypatch.delenv(config.LLM_MODEL, raising=False)
         _write_env(env_path, f'{config.LLM_MODEL}=file-only\n')
         out = config.enumerate_effective_config(redact=False)
         assert out[config.LLM_MODEL] == 'file-only'
 
     def test_process_control_vars_bypass_file(self, env_path, monkeypatch):
-        """Process-control vars written to file are invisible to enumerate."""
+        """Verify a process-control var in the file is ignored.
+
+        Mutation: Resolving WORKER through the file, so a file line could turn
+            on worker mode.
+        Oracle: None for MEMMAN_WORKER written to the file only.
+        """
         monkeypatch.delenv(config.WORKER, raising=False)
         _write_env(env_path, f'{config.WORKER}=1\n')
         out = config.enumerate_effective_config()
         assert out[config.WORKER] is None
 
     def test_installable_keys_excludes_process_control(self):
-        """Process-control vars are not in INSTALLABLE_KEYS."""
+        """Verify process-control vars are not installable.
+
+        Mutation: A process-control var added to INSTALLABLE_KEYS, which lets
+            `config set` persist it.
+        Oracle: A hand-listed set of process-control names.
+        """
         process_control = {
             config.DATA_DIR,
             config.STORE,
@@ -598,6 +830,10 @@ class TestConfigResolver:
             assert var not in config.INSTALLABLE_KEYS
 
     def test_installable_keys_covers_secrets(self):
-        """Every secret is in INSTALLABLE_KEYS so install can write it."""
+        """Verify each secret is an installable key.
+
+        Mutation: A secret missing from INSTALLABLE_KEYS.
+        Oracle: Membership of each SECRET_VARS entry.
+        """
         for secret in config.SECRET_VARS:
             assert secret in config.INSTALLABLE_KEYS

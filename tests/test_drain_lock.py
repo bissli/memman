@@ -1,4 +1,5 @@
-"""Tests for `memman.drain_lock` and `_drain_queue`'s flock guard."""
+"""Tests for `memman.drain_lock` and `_drain_queue`'s flock guard.
+"""
 
 import json
 import signal
@@ -14,7 +15,11 @@ from memman.cli import cli
 
 
 def test_acquire_succeeds_when_unheld(tmp_path):
-    """First acquirer gets the lock and creates the lock file."""
+    """Verify the first acquirer gets the lock and creates the lock file.
+
+    Mutation: acquire returning without creating drain.lock.
+    Oracle: the file's existence in the data dir.
+    """
     fd = drain_lock.acquire(str(tmp_path))
     try:
         assert (tmp_path / 'drain.lock').exists()
@@ -23,11 +28,10 @@ def test_acquire_succeeds_when_unheld(tmp_path):
 
 
 def test_acquire_raises_when_already_held(tmp_path):
-    """Second acquirer in same process raises DrainLockBusy without blocking.
+    """Verify a second acquire in the same process raises DrainLockBusy.
 
-    fcntl.flock on Linux is per-file-descriptor: two separate open()
-    calls in the same process get distinct fds; the second LOCK_EX|LOCK_NB
-    contends with the first.
+    Mutation: blocking, or succeeding, when the lock is already held.
+    Oracle: pytest.raises(DrainLockBusy) while the first fd is open.
     """
     fd1 = drain_lock.acquire(str(tmp_path))
     try:
@@ -38,7 +42,11 @@ def test_acquire_raises_when_already_held(tmp_path):
 
 
 def test_release_allows_reacquire(tmp_path):
-    """After release, the lock can be acquired again."""
+    """Verify the lock can be acquired again after release.
+
+    Mutation: release leaving the lock held, so the second acquire raises.
+    Oracle: the second acquire completing without an exception.
+    """
     fd1 = drain_lock.acquire(str(tmp_path))
     drain_lock.release(fd1)
     fd2 = drain_lock.acquire(str(tmp_path))
@@ -46,10 +54,11 @@ def test_release_allows_reacquire(tmp_path):
 
 
 def test_lock_releases_on_subprocess_exit(tmp_path):
-    """Subprocess holds lock; lock is released after the process exits.
+    """Verify the kernel frees the lock when the holder process dies.
 
-    Verifies kernel-level auto-release on process death - no manual
-    release call needed.
+    Mutation: a lock kept in a marker file that outlives its holder.
+    Oracle: a SIGKILLed subprocess that held the lock; a later acquire
+        succeeds within two seconds.
     """
     script = (
         'import sys, time;'
@@ -82,12 +91,12 @@ def test_lock_releases_on_subprocess_exit(tmp_path):
 
 
 def test_drain_lock_released_on_setup_failure(tmp_path, monkeypatch):
-    """If setup raises after the lock is acquired, lock_fd is released.
+    """Verify the lock is released when drain setup raises after acquiring.
 
-    Pre-fix: the lock was acquired before the try/finally that releases
-    it, so a failure in `open_queue_db` / `ThreadPoolExecutor` /
-    `start_worker_run` would leak the fd for the process lifetime.
-    Post-fix: a defensive try/except around setup releases on failure.
+    Mutation: acquiring the lock outside the try/finally, so a failing
+        open_queue_db leaks the fd for the process lifetime.
+    Oracle: a fresh acquire on the same data dir succeeds after the failed
+        drain.
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     (tmp_path / 'home').mkdir()
@@ -109,11 +118,11 @@ def test_drain_lock_released_on_setup_failure(tmp_path, monkeypatch):
 
 
 def test_drain_skips_when_locked(tmp_path, monkeypatch):
-    """If the lock is held, `_drain_queue` returns the skip JSON.
+    """Verify `scheduler drain` returns the skip JSON while the lock is held.
 
-    Holds the lock in-process and runs `scheduler drain`
-    via CliRunner. Same-process contention works because fcntl.flock
-    on Linux is per-file-descriptor.
+    Mutation: draining anyway, or exiting nonzero, when another drain holds
+        the lock.
+    Oracle: the JSON skipped reason with processed and failed at 0.
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     (tmp_path / 'home').mkdir()

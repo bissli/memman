@@ -9,13 +9,13 @@ a store by X's per-store keys and the home directory's defaults.
 
 import pytest
 from memman import config
-from memman.store.factory import resolve_store_backend
-from memman.store.factory import resolve_store_pg_dsn
+from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
 
 
 @pytest.fixture
 def split_dirs(tmp_path, monkeypatch):
-    """Point `MEMMAN_DATA_DIR` at a decoy holding opposite defaults."""
+    """Point `MEMMAN_DATA_DIR` at a decoy holding opposite defaults.
+    """
     real = tmp_path / 'real'
     decoy = tmp_path / 'decoy'
     real.mkdir()

@@ -6,10 +6,9 @@ WorkerRun). Includes the timestamp helper used across the
 package.
 
 Protocol commitment: `Insight.created_at` and `Insight.updated_at`
-carry no `default_factory` -- backends stamp
-these server-side at the verb boundary. In-memory construction without
-a value yields `None`; backends fill them in on insert and reads
-return them populated.
+carry no `default_factory`. Backends stamp them server-side at the verb
+boundary. In-memory construction without a value yields `None`;
+backends fill them in on insert and reads return them populated.
 """
 
 import logging
@@ -29,7 +28,8 @@ VALID_CATEGORIES = {
 
 @dataclass
 class Insight:
-    """One stored memory."""
+    """One stored memory.
+    """
 
     id: str = ''
     content: str = ''
@@ -53,10 +53,8 @@ class OpLogEntry:
 
     `before` carries the prior insight content on a replace or forget
     row, and `after` the new content on a remember, replace or
-    target-gone row, so forensic questions can be answered from the
-    oplog alone. A
-    `recall:basic`, `recall-detail`, `rebuild` or `embed_reembed` row
-    carries no deltas, so both stay None.
+    target-gone row. A `recall:basic`, `recall-detail`, `rebuild` or
+    `embed_reembed` row carries no deltas, so both stay None.
     """
 
     id: int
@@ -71,9 +69,16 @@ class OpLogEntry:
 def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the content fields of an insight for oplog deltas.
 
-    Excludes embedding (it is not on the dataclass anyway), the
-    surrogate `id`, and timestamps -- the surrounding oplog row
-    already carries `insight_id` and `created_at`.
+    Parameters
+    ----------
+    ins : Insight
+        The row to snapshot.
+
+    Returns
+    -------
+    dict[str, Any]
+        `content`, `category` and `summary`. The id and timestamps
+        are left out because the oplog row carries them.
     """
     return {
         'content': ins.content,
@@ -99,19 +104,13 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     Returns
     -------
     str
-        `<id8> <score> <created_at> <author> <category> | <text>`, with
-        `-` for an unset author and `_` joining any whitespace inside
-        one, so every field before `|` is one space-free token.
-
-    Notes
-    -----
-    - `text` is the summary when the row has one, else the first
-      `BRIEF_CONTENT_CHARS` characters of `content`, ending in `...`
-      when the cut dropped anything.
-    - Every run of whitespace, line breaks included, folds to one
-      space in both, so a row never spans two lines.
-    - `id8` is the first 8 characters of the id; every id-taking
-      command resolves an unambiguous prefix.
+        `<id8> <score> <created_at> <author> <category> | <text>`.
+        `id8` is the first 8 characters of the id. `-` stands for an
+        unset author, and `_` joins any whitespace inside one, so
+        every field before `|` is one space-free token. `text` is the
+        summary, else the first `BRIEF_CONTENT_CHARS` characters of
+        `content` with `...` when cut. Whitespace runs fold to one
+        space, so a row never spans two lines.
     """
     if ins.summary.strip():
         text = ' '.join(ins.summary.split())
@@ -132,13 +131,10 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the user-visible fields of an insight for JSON output.
 
-    Used by CLI commands that emit Insight objects to stdout.
-    Timestamps are formatted with
-    `format_timestamp`; `updated_at` falls back to `created_at` so
-    consumers always see a populated value. Optional fields
-    (`deleted_at`, `replaced_by`, `summary`, `enrich_attempted_at`,
-    `enriched_at`) are emitted only when populated; the plumbing key
-    `queue_uuid` is deliberately omitted.
+    Timestamps use `format_timestamp`; `updated_at` falls back to
+    `created_at`. Optional fields (`deleted_at`, `replaced_by`,
+    `summary`, `enrich_attempted_at`, `enriched_at`) appear only when
+    populated. `queue_uuid` is omitted.
     """
     out: dict[str, Any] = {
         'id': ins.id,
@@ -165,7 +161,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
 
 @dataclass
 class OpLogStats:
-    """Aggregated oplog statistics."""
+    """Aggregated oplog statistics.
+    """
 
     operation_counts: dict[str, int] = field(default_factory=dict)
     total_active: int = 0
@@ -228,7 +225,8 @@ class EnrichmentCoverage:
 
 @dataclass
 class WorkerRun:
-    """One worker drain run record."""
+    """One worker drain run record.
+    """
 
     id: int
     started_at: datetime
@@ -237,12 +235,14 @@ class WorkerRun:
 
 
 def format_timestamp(dt: datetime) -> str:
-    """Format datetime as RFC3339 with Z suffix (Go-compatible)."""
+    """Format datetime as RFC3339 with Z suffix (Go-compatible).
+    """
     return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def parse_timestamp(s: str) -> datetime:
-    """Parse RFC3339 timestamp, accepting both Z and +00:00 suffixes."""
+    """Parse RFC3339 timestamp, accepting both Z and +00:00 suffixes.
+    """
     if s.endswith('Z'):
         s = s[:-1] + '+00:00'
     return datetime.fromisoformat(s)

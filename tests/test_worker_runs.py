@@ -16,6 +16,11 @@ from memman.queue import start_worker_run
 
 def test_start_finish_round_trip(queue_conn):
     """start/finish writes and updates exactly one row with counts.
+
+    Mutation: `finish_worker_run` mapping counts to the wrong columns,
+    or leaving `finished_at`/`duration_ms` NULL.
+    Oracle: the hand-supplied pid and counts (4242; 5, 3, 2) read back
+    by a select.
     """
     run_id = start_worker_run(queue_conn, worker_pid=4242)
     assert isinstance(run_id, int)
@@ -24,9 +29,9 @@ def test_start_finish_round_trip(queue_conn):
         queue_conn, run_id,
         rows_claimed=5, rows_done=3, rows_failed=2, error=None)
     row = queue_conn.execute(
-        'SELECT worker_pid, rows_claimed, rows_done, rows_failed,'
+        'select worker_pid, rows_claimed, rows_done, rows_failed,'
         ' started_at, finished_at, duration_ms, error'
-        ' FROM worker_runs WHERE id = ?',
+        ' from worker_runs where id = ?',
         (run_id,)).fetchone()
     assert row[0] == 4242
     assert row[1:4] == (5, 3, 2)
@@ -39,6 +44,9 @@ def test_start_finish_round_trip(queue_conn):
 
 def test_finish_records_error(queue_conn):
     """finish_worker_run persists the error string when provided.
+
+    Mutation: `finish_worker_run` dropping `error` from the update.
+    Oracle: the literal error string read back by a select.
     """
     run_id = start_worker_run(queue_conn, worker_pid=1)
     finish_worker_run(
@@ -46,13 +54,18 @@ def test_finish_records_error(queue_conn):
         rows_claimed=0, rows_done=0, rows_failed=0,
         error='RuntimeError: boom')
     row = queue_conn.execute(
-        'SELECT error FROM worker_runs WHERE id = ?',
+        'select error from worker_runs where id = ?',
         (run_id,)).fetchone()
     assert row[0] == 'RuntimeError: boom'
 
 
 def test_last_worker_run_returns_most_recent(queue_conn):
     """last_worker_run returns the highest started_at.
+
+    Mutation: ordering `last_worker_run` ascending, or by id
+    ascending, so the first run reads as the latest.
+    Oracle: two runs started over a second apart; the later id and pid
+    come back, and None for an empty table.
     """
     assert last_worker_run(queue_conn) is None
     first = start_worker_run(queue_conn, worker_pid=1)
@@ -79,6 +92,10 @@ def _invoke(runner_tuple, args):
 
 def test_drain_records_worker_run(runner):
     """`memman scheduler drain` on an empty queue still writes a row.
+
+    Mutation: the drain path skipping `start_worker_run` or
+    `finish_worker_run` when no row is claimed.
+    Oracle: a finished `worker_runs` row with zero counts and no error.
     """
     result = _invoke(runner, ['scheduler', 'drain',
                               '--limit', '5', '--timeout', '5'])
@@ -99,6 +116,9 @@ def test_drain_records_worker_run(runner):
 
 def test_scheduler_status_includes_last_run(runner):
     """`memman scheduler status` surfaces the most recent worker_runs row.
+
+    Mutation: `scheduler status` omitting `last_run` from its payload.
+    Oracle: the JSON payload's `last_run.rows_claimed` after one drain.
     """
     _invoke(runner, ['scheduler', 'drain',
                      '--limit', '1', '--timeout', '5'])
@@ -112,6 +132,10 @@ def test_scheduler_status_includes_last_run(runner):
 
 def test_scheduler_status_last_run_null_before_any_drain(runner):
     """When no drain has fired yet, last_run is null.
+
+    Mutation: `scheduler status` raising or returning a placeholder
+    dict when `worker_runs` is empty.
+    Oracle: `last_run` is None on a fresh data dir.
     """
     result = _invoke(runner, ['scheduler', 'status'])
     assert result.exit_code == 0, result.output

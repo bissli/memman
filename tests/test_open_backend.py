@@ -1,22 +1,27 @@
 """Tests for `open_backend(store, data_dir)` dispatch.
 
-Slice 2.2: per-store backend dispatch reads `MEMMAN_BACKEND_<store>`
+Per-store backend dispatch reads `MEMMAN_BACKEND_<store>`
 and falls back to `MEMMAN_DEFAULT_BACKEND`. Two stores in the same
 process can pick different backends.
 """
 
+import os
+from pathlib import Path
+
 import pytest
+from memman import config
+from memman.store.errors import ConfigError
+from memman.store.factory import list_stores, open_backend
+from memman.store.sqlite import SqliteBackend
 
 
 def test_open_backend_uses_per_store_key_for_sqlite(tmp_path, env_file):
-    """`MEMMAN_BACKEND_<store>=sqlite` opens a SqliteBackend.
+    """Verify `MEMMAN_BACKEND_<store>=sqlite` opens a SqliteBackend.
+
+    Mutation: open_backend ignoring the per-store key and using another
+        backend.
+    Oracle: isinstance check against SqliteBackend.
     """
-    import os
-
-    from memman import config
-    from memman.store.factory import open_backend
-    from memman.store.sqlite import SqliteBackend
-
     env_file('MEMMAN_BACKEND_sqlite_only', 'sqlite')
     backend = open_backend(
         'sqlite_only', os.environ[config.DATA_DIR])
@@ -27,14 +32,12 @@ def test_open_backend_uses_per_store_key_for_sqlite(tmp_path, env_file):
 
 
 def test_open_backend_falls_back_to_default(tmp_path, env_file):
-    """No per-store key: falls back to `MEMMAN_DEFAULT_BACKEND`.
+    """Verify a store with no per-store key uses `MEMMAN_DEFAULT_BACKEND`.
+
+    Mutation: open_backend hard-coding a backend instead of reading the
+        default key.
+    Oracle: isinstance check against SqliteBackend with only the default set.
     """
-    import os
-
-    from memman import config
-    from memman.store.factory import open_backend
-    from memman.store.sqlite import SqliteBackend
-
     env_file('MEMMAN_DEFAULT_BACKEND', 'sqlite')
     backend = open_backend(
         'fresh_store', os.environ[config.DATA_DIR])
@@ -46,14 +49,11 @@ def test_open_backend_falls_back_to_default(tmp_path, env_file):
 
 def test_open_backend_raises_for_unknown_backend_value(
         tmp_path, env_file):
-    """Unknown backend kind -> ConfigError.
+    """Verify an unknown backend kind raises ConfigError.
+
+    Mutation: falling back silently to sqlite for an unrecognized kind.
+    Oracle: pytest.raises(ConfigError, match='unknown') for the value 'mongo'.
     """
-    import os
-
-    from memman import config
-    from memman.store.errors import ConfigError
-    from memman.store.factory import open_backend
-
     env_file('MEMMAN_BACKEND_weird', 'mongo')
     with pytest.raises(ConfigError, match='unknown'):
         open_backend('weird', os.environ[config.DATA_DIR])
@@ -62,14 +62,14 @@ def test_open_backend_raises_for_unknown_backend_value(
 @pytest.mark.postgres
 def test_open_backend_routes_two_stores_to_two_backends(
         tmp_path, env_file, pg_dsn):
-    """One store sqlite, another postgres -- each opens its own backend.
-    """
-    import os
+    """Verify a sqlite store and a postgres store open their own backends.
 
-    from memman import config
-    from memman.store.factory import open_backend
+    Mutation: dispatching every store in a process to the first backend
+        opened, such as a cached backend kind.
+    Oracle: isinstance checks against SqliteBackend and PostgresBackend.
+    """
+    import psycopg
     from memman.store.postgres import PostgresBackend, _store_schema
-    from memman.store.sqlite import SqliteBackend
 
     env_file('MEMMAN_BACKEND_local_one', 'sqlite')
     env_file('MEMMAN_BACKEND_pg_one', 'postgres')
@@ -77,7 +77,6 @@ def test_open_backend_routes_two_stores_to_two_backends(
 
     data_dir = os.environ[config.DATA_DIR]
 
-    import psycopg
     schema = _store_schema('pg_one')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -99,14 +98,11 @@ def test_open_backend_routes_two_stores_to_two_backends(
 
 
 def test_list_stores_returns_local_sqlite_dirs(tmp_path, env_file):
-    """`list_stores(data_dir)` returns local SQLite store names.
+    """Verify list_stores returns the local SQLite store names.
+
+    Mutation: list_stores skipping directories that hold a `memman.db`.
+    Oracle: the two hand-made store directories 'one' and 'two'.
     """
-    import os
-    from pathlib import Path
-
-    from memman import config
-    from memman.store.factory import list_stores
-
     data_dir = Path(os.environ[config.DATA_DIR])
     (data_dir / 'data' / 'one').mkdir(parents=True, exist_ok=True)
     (data_dir / 'data' / 'one' / 'memman.db').write_bytes(b'')

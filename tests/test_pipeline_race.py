@@ -2,10 +2,10 @@
 
 The forget+queued-replace race: a `replace` enqueues with
 replaced_id; a synchronous `forget` runs against the same id
-before the worker drains. Without the fix the worker raises ValueError
-from soft_delete_insight, the row's transaction rolls back, and
-eventually the row lands as `failed` with the user's content lost.
-The fix degrades to a plain add when the target is already gone.
+before the worker drains. The worker degrades the replace to a plain
+add when the target is already gone. Raising from soft_delete_insight
+would roll back the row's transaction and land the row as `failed`
+with the user's content lost.
 """
 
 import json
@@ -17,17 +17,14 @@ from memman.cli import cli
 
 @pytest.fixture
 def runner(tmp_path, monkeypatch):
-    """Fresh CliRunner with an isolated data dir; inline drain disabled.
-
-    The race window only opens when `replace` enqueues without an
-    immediate inline drain. Override the autouse-fixture's
-    `is_inline_trigger=True` to False so the queue actually buffers.
+    """Fresh CliRunner and an isolated data dir.
     """
     return CliRunner(), str(tmp_path / 'memman')
 
 
 def _invoke(r, data_dir, *args):
-    """Run a memman subcommand, asserting clean exit + JSON parse."""
+    """Run a memman subcommand, asserting clean exit and JSON output.
+    """
     result = r.invoke(cli, ['--data-dir', data_dir, *args])
     assert result.exit_code == 0, result.output
     return json.loads(result.output) if result.output.strip() else {}
@@ -35,10 +32,13 @@ def _invoke(r, data_dir, *args):
 
 @pytest.mark.no_auto_drain
 def test_forget_then_replace_race(runner):
-    """Replace queued + forget on target + drain = add (target gone).
+    """Verify a queued replace whose target was forgotten lands as an add.
 
-    The queued replace must not crash the row's transaction. The new
-    insight must commit; queue list --status failed must be empty.
+    Mutation: the worker raising on the missing target, which rolls back
+        the row and leaves it in the failed queue with the new content
+        lost.
+    Oracle: an empty failed queue, and recall showing the replacement
+        text and not the original.
     """
     r, data_dir = runner
 

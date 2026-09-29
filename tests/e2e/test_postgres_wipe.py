@@ -1,6 +1,6 @@
 """Wipe-and-recreate on Postgres (drop schema).
 
-`drop_postgres_store(store, dsn)` runs `DROP SCHEMA ... CASCADE`
+`drop_postgres_store(store, dsn)` runs `drop schema ... cascade`
 for the per-store schema. After a wipe, reopening the same store
 name yields a fresh schema with no residue. The cross-store work
 queue lives in SQLite under the per-store routing model, so its
@@ -22,20 +22,18 @@ pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 
 
 def test_drop_store_removes_schema(pg_dsn, request):
-    """drop_postgres_store removes the per-store schema entirely.
+    """Verify `drop_postgres_store` removes only the named store's schema.
 
-    Open store A, confirm its schema exists in pg_namespace, drop A,
-    confirm the namespace row is gone. A sibling store B is untouched.
+    Mutation: a drop that leaves the schema behind, or one that
+        removes the sibling store's schema too.
+    Oracle: `pg_namespace` counts before and after the drop.
     """
     base = _safe(request.node.name)[:36]
     store_a = f'{base}_a'
     store_b = f'{base}_b'
 
     for s in (store_a, store_b):
-        try:
-            drop_postgres_store(s, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(s, pg_dsn)
 
     a = open_postgres_backend(store_a, pg_dsn)
     b = open_postgres_backend(store_b, pg_dsn)
@@ -45,11 +43,11 @@ def test_drop_store_removes_schema(pg_dsn, request):
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_a),))
             assert cur.fetchone()[0] == 1
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_b),))
             assert cur.fetchone()[0] == 1
 
@@ -58,11 +56,11 @@ def test_drop_store_removes_schema(pg_dsn, request):
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_a),))
             assert cur.fetchone()[0] == 0
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_b),))
             assert cur.fetchone()[0] == 1, (
                 'sibling store schema must not be dropped')
@@ -71,17 +69,15 @@ def test_drop_store_removes_schema(pg_dsn, request):
 
 
 def test_recreate_after_drop_yields_empty_schema(pg_dsn, request):
-    """After drop + open, the schema has zero data rows.
+    """Verify a store reopened after a drop holds no earlier rows.
 
-    Insert an Insight, drop the store, reopen, assert the new
-    `insights` table is empty (a wipe-and-recreate cycle leaves no
-    residual rows even though the schema name is reused).
+    Mutation: the drop leaving the old tables in place, so the
+        reused schema name resurrects earlier rows.
+    Oracle: `get` of the pre-wipe id is None and `insights` counts
+        zero rows.
     """
     store = _safe(request.node.name)
-    try:
-        drop_postgres_store(store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(store, pg_dsn)
 
     first = open_postgres_backend(store, pg_dsn)
     try:
@@ -100,7 +96,7 @@ def test_recreate_after_drop_yields_empty_schema(pg_dsn, request):
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f'SELECT count(*) FROM {_store_schema(store)}.insights')
+                    f'select count(*) from {_store_schema(store)}.insights')
                 assert cur.fetchone()[0] == 0
     finally:
         second.close()

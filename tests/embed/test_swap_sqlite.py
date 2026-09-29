@@ -1,11 +1,8 @@
 """SQLite shadow-column swap workflow.
 
-Verifies that `run_swap` walks all rows, populates `embedding_pending`,
-cuts over to a new (provider, model, dim) fingerprint, and recall keeps
-working throughout. The cutover transaction does not rebuild HNSW or
-recall snapshots -- that's a follow-up concern. Recall correctness
-across the new dim is covered by the broader test suite once a swapped
-store is opened.
+`run_swap` walks all rows, populates `embedding_pending`, and cuts over
+to a new (provider, model, dim) fingerprint. The cutover transaction
+does not rebuild HNSW or recall snapshots.
 """
 
 from datetime import datetime, timezone
@@ -17,6 +14,7 @@ from memman.embed.swap import run_swap
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.store.db import open_db
 from memman.store.sqlite import SqliteBackend
+from tests.conftest import _mock_embed
 
 
 class _StubEmbedder:
@@ -43,7 +41,6 @@ class _StubEmbedder:
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        from tests.conftest import _mock_embed
         return [_mock_embed(self, t) for t in texts]
 
     def unavailable_message(self) -> str:
@@ -51,7 +48,8 @@ class _StubEmbedder:
 
 
 def _seed_insights(backend: SqliteBackend, n: int) -> list[str]:
-    """Insert n rows with stub 512-dim embeddings; return ids."""
+    """Insert n rows with stub 512-dim embeddings; return ids.
+    """
     now = datetime.now(timezone.utc).isoformat()
     ids = []
     with backend.transaction():
@@ -70,7 +68,8 @@ def _seed_insights(backend: SqliteBackend, n: int) -> list[str]:
 
 @pytest.fixture
 def swap_backend(tmp_path):
-    """Open a fresh SQLite backend rooted at tmp_path."""
+    """Open a fresh SQLite backend rooted at tmp_path.
+    """
     db = open_db(str(tmp_path))
     backend = SqliteBackend(db)
     try:
@@ -80,7 +79,13 @@ def swap_backend(tmp_path):
 
 
 def test_swap_completes_full_workflow(swap_backend, monkeypatch):
-    """run_swap fills embedding_pending, cuts over, marks done."""
+    """run_swap fills embedding_pending, cuts over, marks done.
+
+    Mutation: cutover leaving old-dim blobs in `embedding`, leaving
+        `embedding_pending` set, or stamping the old model name.
+    Oracle: every row's model is the target, pending is null, and row 0
+        decodes to 768 floats.
+    """
     _seed_insights(swap_backend, 5)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
@@ -102,7 +107,11 @@ def test_swap_completes_full_workflow(swap_backend, monkeypatch):
 
 
 def test_swap_writes_fingerprint(swap_backend, monkeypatch):
-    """After cutover, meta.embed_fingerprint matches the target."""
+    """After cutover, meta.embed_fingerprint matches the target.
+
+    Mutation: `run_swap` skipping `write_fingerprint`.
+    Oracle: the `Fingerprint` built from the plan's hand-set values.
+    """
     _seed_insights(swap_backend, 3)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
@@ -123,9 +132,10 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
 def test_swap_clears_meta_after_done(swap_backend):
     """All embed_swap_* meta keys are deleted after a successful cutover.
 
-    Absence of the keys is the canonical "no swap in flight" signal;
-    `read_progress` reports `state=''` and the doctor check
-    `check_no_stale_swap_meta` passes.
+    Mutation: `run_swap` deleting only some of the `_META_KEYS`, so
+        `read_progress` or the stale-swap doctor check sees a swap
+        in flight.
+    Oracle: no meta key with the `embed_swap_` prefix remains.
     """
     _seed_insights(swap_backend, 2)
     ec = _StubEmbedder(dim=768)
@@ -145,9 +155,10 @@ def test_swap_clears_meta_after_done(swap_backend):
 def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
     """A second run after a partial backfill resumes from the cursor.
 
-    Simulated by manually filling embedding_pending for half the rows
-    and seeding `meta.embed_swap_*` to mid-flight, then calling
-    `run_swap` and observing that the second half completes.
+    Mutation: `run_swap` ignoring the stored cursor and re-embedding
+        from the first row, overwriting the pre-filled vectors.
+    Oracle: the first three rows keep the hand-written `fake_pending`
+        blob after cutover.
     """
     ids = _seed_insights(swap_backend, 6)
     ec = _StubEmbedder(dim=768)
@@ -181,7 +192,13 @@ def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
 
 
 def test_swap_abort_clears_pending_and_meta(swap_backend):
-    """abort_swap nulls embedding_pending and clears all swap meta."""
+    """abort_swap nulls embedding_pending and clears all swap meta.
+
+    Mutation: `abort_swap` leaving filled `embedding_pending` values
+        or the swap state meta behind.
+    Oracle: `read_progress` state is empty and every pending value is
+        null.
+    """
     ids = _seed_insights(swap_backend, 4)
     swap_backend.swap_prepare(768)
     with swap_backend.transaction():
@@ -205,8 +222,9 @@ def test_swap_abort_clears_pending_and_meta(swap_backend):
 def test_swap_target_mismatch_in_flight_raises(swap_backend):
     """Resuming with a different target than the in-flight one errors.
 
-    Forces operators to abort first instead of silently switching
-    targets across a running backfill.
+    Mutation: `run_swap` dropping the target comparison, silently
+        switching targets across a running backfill.
+    Oracle: `RuntimeError` whose message mentions `in-flight`.
     """
     _seed_insights(swap_backend, 3)
     ec_first = _StubEmbedder(dim=768)

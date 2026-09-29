@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, Literal
 
+from memman.drain_lock import DrainLockBusy, acquire, release
 from memman.embed.fingerprint import Fingerprint
 
 
@@ -113,12 +114,9 @@ class Migrator(abc.ABC):
     Abstract base class for the five migration verbs. Concrete
     implementations live with their backend (`store/sqlite.py`,
     `store/postgres.py`) and inherit from this class. Stateless
-    across calls: each method acquires + releases its own
-    connection. ABC was chosen over Protocol so missing methods
-    fail at instantiation (registry build time) rather than at
-    first call from the CLI runner -- the entire point of the
-    abstraction is making it cheap to add backends, and immediate
-    failure shortens the feedback loop.
+    across calls: each method acquires and releases its own
+    connection. A missing method fails at instantiation, before the
+    CLI runner makes its first call.
     """
 
     backend_name: ClassVar[str]
@@ -127,37 +125,50 @@ class Migrator(abc.ABC):
     def preflight_source(self, store: str) -> None:
         """Verify the store is in a state that can be migrated FROM.
 
-        Raises `MigrateError` on any precondition failure (missing
-        store, schema mismatch, broken connection, or an embed swap
-        in flight).
+        Raises
+        ------
+        MigrateError
+            On any precondition failure (missing store, schema
+            mismatch, broken connection, or an embed swap in flight).
         """
 
     @abc.abstractmethod
     def preflight_target(self, store: str) -> None:
         """Verify the backend can accept a fresh migration INTO `store`.
 
-        Raises `MigrateError` on failure (identifier collision,
-        missing extension / privilege).
+        Raises
+        ------
+        MigrateError
+            On identifier collision or a missing extension or
+            privilege.
         """
 
     @abc.abstractmethod
     def gather(self, store: str) -> MigrationPayload:
-        """Read the full store contents into a portable payload."""
+        """Read the full store contents into a portable payload.
+        """
 
     @abc.abstractmethod
     def apply(self, store: str, payload: MigrationPayload) -> None:
-        """Write `payload` into a fresh `store` on this backend."""
+        """Write `payload` into a fresh `store` on this backend.
+        """
 
     @abc.abstractmethod
     def archive(self, store: str, data_dir: str) -> Artifact:
         """Move or dump the source state into a recoverable archive.
 
-        Returns a `kind='filesystem'` artifact naming the archive: the
-        SQLite store directory, moved under `archive/<store>/`, or the
-        Postgres `pg_dump` file. Returns
-        `Artifact(kind='none', location=None)` when there is no source
-        state to archive. Raises `MigrateError` when the Postgres dump
-        fails.
+        Returns
+        -------
+        Artifact
+            A `kind='filesystem'` artifact naming the archive: the
+            SQLite store directory, moved under `archive/<store>/`, or
+            the Postgres `pg_dump` file. `Artifact(kind='none',
+            location=None)` when there is no source state to archive.
+
+        Raises
+        ------
+        MigrateError
+            When the Postgres dump fails.
         """
 
 
@@ -167,7 +178,21 @@ def sanitize_identifier(name: str) -> str:
     Postgres/MySQL allow 63/64 chars; a name over 63 chars gets a
     deterministic 8-hex-char sha256 suffix replacing the truncated
     tail so two distinct names with the same prefix don't collide.
-    Raises `MigrateError` on illegal characters.
+
+    Parameters
+    ----------
+    name : str
+        Candidate identifier.
+
+    Returns
+    -------
+    str
+        `name`, or its 63-char truncated form with a hash suffix.
+
+    Raises
+    ------
+    MigrateError
+        On characters outside `[A-Za-z0-9_]`.
     """
     allowed_chars = r'[A-Za-z0-9_]'
     max_len = 63
@@ -183,11 +208,13 @@ def sanitize_identifier(name: str) -> str:
 
 
 class MigrateError(Exception):
-    """Migration aborted because a precondition or invariant failed."""
+    """Migration aborted because a precondition or invariant failed.
+    """
 
 
 class SchemaState(enum.Enum):
-    """Target Postgres schema state for a memman store."""
+    """Target Postgres schema state for a memman store.
+    """
 
     ABSENT = 'absent'
     EMPTY = 'empty'
@@ -197,9 +224,21 @@ class SchemaState(enum.Enum):
 def preflight(dsn: str) -> dict[str, bool]:
     """Verify the target Postgres role can run the migration.
 
-    Returns a dict mapping check name to pass/fail. Raises
-    `MigrateError` on the first hard failure (connection refused,
-    pgvector missing).
+    Parameters
+    ----------
+    dsn : str
+        Postgres connection string.
+
+    Returns
+    -------
+    dict[str, bool]
+        Check name to pass/fail.
+
+    Raises
+    ------
+    MigrateError
+        On the first hard failure (connection refused, pgvector
+        missing).
     """
     import psycopg
 
@@ -248,8 +287,25 @@ def inspect_target_schemas(
     `information_schema.tables` filtered to the three memman tables.
     A schema absent from the result is ABSENT; present with no
     memman tables is EMPTY (likely an aborted prior run); present
-    with one or more tables is POPULATED. Raises `MigrateError` on
-    connection or permission failures so preflight stays fail-closed.
+    with one or more tables is POPULATED.
+
+    Parameters
+    ----------
+    dsn : str
+        Postgres connection string.
+    stores : list[str]
+        Store names whose schemas to classify.
+
+    Returns
+    -------
+    dict[str, SchemaState]
+        State per store name.
+
+    Raises
+    ------
+    MigrateError
+        On connection or permission failures, so preflight stays
+        fail-closed.
     """
     from memman.store.postgres import _connection, _store_schema
 
@@ -292,11 +348,25 @@ def _verify_destination_counts(
         expected: dict[str, int]) -> None:
     """Compare destination table counts against captured source counts.
 
-    Idempotent re-runs against an already-populated schema may legitimately
-    end with destination counts equal to source counts; the destination's
-    `ON CONFLICT DO NOTHING` makes the per-call insert count a lower
-    bound but the post-commit absolute count is the authoritative check.
-    Raises `MigrateError` on any mismatch with the per-table delta.
+    Checks the post-commit absolute counts: on a re-run against a
+    populated schema, `ON CONFLICT DO NOTHING` makes the per-call
+    insert count only a lower bound.
+
+    Parameters
+    ----------
+    pg_conn : Any
+        Open Postgres connection.
+    schema : str
+        The store's schema name.
+    store : str
+        Store name, for the error message.
+    expected : dict[str, int]
+        Source counts keyed `insights`, `oplog`, `meta`.
+
+    Raises
+    ------
+    MigrateError
+        On any mismatch, naming the per-table counts.
     """
     sql = (
         f'select '
@@ -323,8 +393,8 @@ def _verify_destination_counts(
 
 @contextmanager
 def held_drain_lock(data_dir: str) -> Iterator[int]:
-    """Acquire the shared drain.lock for the duration of the block."""
-    from memman.drain_lock import DrainLockBusy, acquire, release
+    """Acquire the shared drain.lock for the duration of the block.
+    """
     try:
         fd = acquire(data_dir)
     except DrainLockBusy:

@@ -1,11 +1,10 @@
 """Fixtures for memman end-to-end tests.
 
 The unit suite at `tests/conftest.py` autouses two patches
-(`_scheduler_started`, `_mock_apis`) that are explicitly guarded
-against the `tests/e2e/` subtree - see those fixtures' first-line
-short-circuit. We re-emphasize the contract here:
+(`_scheduler_started`, `_mock_apis`). Each short-circuits on the
+`tests/e2e/` subtree, so the e2e contract is:
 
-- e2e tests must run the *real* `memman` CLI in a subprocess with no
+- e2e tests run the *real* `memman` CLI in a subprocess with no
   in-process monkeypatches affecting it.
 - e2e tests gate on real `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` via
   the `live_keys` fixture rather than on a `--live` flag.
@@ -143,7 +142,6 @@ def _pg_vec(seed: int, dim: int = 512) -> list[float]:
 
     The arithmetic-progression form `(seed + i) * 0.001` produces
     distinct vectors per seed while staying inside pgvector's value
-    range for any practical dim. Three e2e files used to inline a
-    byte-identical copy of this helper.
+    range for any practical dim.
     """
     return [(seed + i) * 0.001 for i in range(dim)]

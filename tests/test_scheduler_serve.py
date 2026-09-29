@@ -12,14 +12,17 @@ import sys
 import time
 from pathlib import Path
 
+import memman.cli as cli_mod
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
+from memman.setup import scheduler as sched_mod
 
 
 @pytest.fixture
 def runner(tmp_path, monkeypatch):
-    """Fresh CliRunner with isolated data + home dirs."""
+    """Fresh CliRunner with isolated data + home dirs.
+    """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     (tmp_path / 'home').mkdir()
     return CliRunner(), str(tmp_path / 'memman')
@@ -32,7 +35,6 @@ def test_serve_once_drains_and_exits(runner, monkeypatch):
         that claims the row but never marks it done.
     Oracle: the queued row's status reads 'done' after the drain.
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
@@ -54,12 +56,14 @@ def test_serve_once_drains_and_exits(runner, monkeypatch):
 
 
 def test_serve_writes_interval_file(runner, monkeypatch):
-    """Serve startup writes ~/.memman/scheduler.serve_interval (mode 600).
+    """Verify serve writes scheduler.serve_interval and removes it on exit.
 
-    The file is removed on clean exit. Doctor reads this for the
-    heartbeat threshold when running under serve mode.
+    Mutation: skipping write_serve_interval at startup, writing a different
+        value, or leaving the file behind, which gives doctor a stale heartbeat
+        threshold.
+    Oracle: the value read through read_serve_interval() from inside the drain,
+        then the file's absence after exit.
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
@@ -70,7 +74,6 @@ def test_serve_writes_interval_file(runner, monkeypatch):
         captured['interval'] = sched_mod.read_serve_interval()
         captured['exists'] = interval_path.exists()
 
-    import memman.cli as cli_mod
     monkeypatch.setattr(cli_mod, '_drain_queue', _capture_then_stop)
 
     r, data_dir = runner
@@ -87,14 +90,12 @@ def test_serve_writes_interval_file(runner, monkeypatch):
 
 
 def test_serve_stops_when_state_file_says_stopped(runner, monkeypatch):
-    """Loop exits when read_state() returns STATE_STOPPED.
+    """Verify the serve loop exits without draining when the state is STOPPED.
 
-    Used for `memman scheduler stop` semantics in serve mode: the stop
-    command flips the state file and the running serve loop notices on
-    its next iteration.
+    Mutation: draining before the read_state() check, so a stopped scheduler
+        still drains.
+    Oracle: a drain counter that stays 0.
     """
-    from memman.setup import scheduler as sched_mod
-
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STOPPED)
 
@@ -103,7 +104,6 @@ def test_serve_stops_when_state_file_says_stopped(runner, monkeypatch):
     def _count_drains(*args, **kwargs):
         drain_calls['count'] += 1
 
-    import memman.cli as cli_mod
     monkeypatch.setattr(cli_mod, '_drain_queue', _count_drains)
 
     r, data_dir = runner
@@ -116,18 +116,15 @@ def test_serve_stops_when_state_file_says_stopped(runner, monkeypatch):
 
 
 def test_serve_interval_zero_loops_until_signaled(runner, monkeypatch):
-    """interval=0 must NOT exit after one drain; must loop until stop.
+    """Verify interval=0 keeps looping until a stop is requested.
 
-    Validates the bug fix at cli.py removing `or interval == 0` from the
-    break condition. Patches `_drain_queue` to count iterations and
-    requests stop on the 5th call - proves the loop is iterating, not
-    exiting after the first drain.
+    Mutation: breaking out of the loop after one drain when interval is 0.
+    Oracle: a stub drain that requests stop on its 5th call, so 5 or more calls
+        prove the loop kept iterating.
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
-    import memman.cli as cli_mod
     drain_calls = {'count': 0}
 
     def _counting_drain(*args, **kwargs):
@@ -149,17 +146,15 @@ def test_serve_interval_zero_loops_until_signaled(runner, monkeypatch):
 
 
 def test_serve_interval_zero_idle_backoff(runner, monkeypatch):
-    """Empty drains at interval=0 are throttled by the 100ms backoff.
+    """Verify empty drains at interval=0 sleep 100ms between iterations.
 
-    With an empty queue (claimed=0), the loop sleeps 100ms between
-    iterations to bound CPU and SQLite WAL fsync rate. Caps the loop
-    at ~10 Hz instead of unbounded spin.
+    Mutation: dropping the 0.1s sleep after an empty drain, so interval=0 spins
+        the CPU and the SQLite WAL.
+    Oracle: wall clock of at least 0.2s across 3 empty drains (two sleeps).
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
-    import memman.cli as cli_mod
     drain_calls = {'count': 0}
 
     def _empty_drain(*args, **kwargs):
@@ -192,11 +187,8 @@ def test_a_drain_after_a_stopped_serve_stores_its_row(runner, monkeypatch):
         later in-process drain exits before its first claim.
     Oracle: the queued row's status reads 'done' after the drain.
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-
-    import memman.cli as cli_mod
 
     def _stopping_drain(*args, **kwargs):
         cli_mod._request_stop()
@@ -219,8 +211,12 @@ def test_a_drain_after_a_stopped_serve_stores_its_row(runner, monkeypatch):
 
 
 def test_serve_default_interval_runs_one_drain(runner, monkeypatch):
-    """interval=60 with --once still works and writes one heartbeat."""
-    from memman.setup import scheduler as sched_mod
+    """Verify interval=60 with --once drains once and exits 0.
+
+    Mutation: the interval > 0 setup (per-drain timeout, interval file) raising
+        under --once, or --once waiting out the interval instead of exiting.
+    Oracle: exit code 0 from a real drain of an empty queue.
+    """
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
@@ -234,10 +230,14 @@ def test_serve_default_interval_runs_one_drain(runner, monkeypatch):
 
 @pytest.mark.no_mock_llm
 def test_serve_handles_sigterm_cleanly(tmp_path):
-    """A real subprocess running serve exits 0 on SIGTERM.
+    """Verify a real serve process exits 0 on SIGTERM.
 
-    Uses subprocess (not CliRunner) because POSIX signals do not
-    propagate to in-process click invocations.
+    A subprocess replaces CliRunner because POSIX signals do not reach in-
+    process click invocations.
+
+    Mutation: installing no SIGTERM handler, so the process dies from the
+        signal (return code -15).
+    Oracle: the subprocess return code 0 within 10 seconds.
     """
     home = tmp_path / 'home'
     home.mkdir()

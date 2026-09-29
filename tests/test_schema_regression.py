@@ -7,9 +7,8 @@ Pins:
 - `MigrateInsight` field set covers the sqlite baseline schema
   columns identically.
 
-These act as canaries against the class of bug v3 was built to
-prevent: a future schema column change that compiles but silently
-drops data through the migrator's apply path.
+These act as canaries against a schema column change that compiles
+but silently drops data through the migrator's apply path.
 """
 from __future__ import annotations
 
@@ -60,10 +59,8 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     payload does carry, so `PostgresMigrator.apply` recomputes it
     through `keyword.insight_tokens` instead of transporting it.
     Carrying it would put a second copy of the tokenizer in the wire
-    format. The recompute is not on trust - the column is `not
-    null`, so an `apply` that omitted it raises `NotNullViolation`
-    and takes three tests in `test_migrate_verify.py` and
-    `test_migrate_dim_resolution.py` with it.
+    format. The column is `not null`, so an `apply` that omitted it
+    raises `NotNullViolation`.
 
     Mutation: adding a column to `PG_BASELINE_SCHEMA` without a
         matching `MigrateInsight` field, which drops it silently on

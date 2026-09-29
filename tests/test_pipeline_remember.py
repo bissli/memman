@@ -6,7 +6,7 @@ pins the write's embed contract: one call, on the raw content.
 """
 
 from memman.embed.fingerprint import bound_embedder
-from memman.pipeline.remember import run_remember
+from memman.pipeline.remember import compute_prompt_version, run_remember
 from tests.conftest import make_insight
 
 
@@ -115,16 +115,13 @@ def test_a_write_whose_enrichment_call_fails_stays_unenriched(
 def test_prompt_version_is_pinned():
     """Verify the enrichment prompt hash is pinned.
 
-    The pin is a tripwire, not a constant: any deliberate change to a
-    hashed input moves it, and re-pinning is the right answer once the
-    author has weighed the cost. That cost is what the tripwire
-    surfaces -- every stored row in every store goes stale at once,
-    and only an `enrich --stale-only` clears it.
+    A move in the hash makes every stored row in every store stale at
+    once, and only `enrich --stale-only` clears it. Re-pin only after a
+    deliberate change to a hashed input.
 
-    Two inputs move this value: the enrichment prompt, and the
-    configured `MEMMAN_LLM_MODEL`, which the key folds in and which
-    the suite seeds from `INSTALL_DEFAULTS` -- changing that default
-    re-pins this test, deliberately.
+    Two inputs move the hash: the enrichment prompt, and the configured
+    `MEMMAN_LLM_MODEL`, which the suite seeds from `INSTALL_DEFAULTS`.
+    Changing that default re-pins this test.
 
     Mutation: an incidental edit to the enrichment prompt, so the hash
         moves and every stored row goes stale for a change nobody
@@ -132,5 +129,4 @@ def test_prompt_version_is_pinned():
     Oracle: the hash of the replayable prompt plus the seeded LLM
         model, pinned.
     """
-    from memman.pipeline.remember import compute_prompt_version
     assert compute_prompt_version() == 'da9c0d1199937f4c'

@@ -1,9 +1,7 @@
 """Voyage AI HTTP client for embedding generation.
 
 Uses the shared `memman._http.get_session` so repeated embed calls in
-one worker drain reuse the TLS connection. Tests that need to
-intercept the HTTP layer monkeypatch the session via
-`memman._http._SESSIONS[__name__]` or by patching `httpx.Client.post`.
+one worker drain reuse the TLS connection.
 """
 
 import logging
@@ -20,7 +18,8 @@ EMBEDDING_DIM = 512
 
 
 class Client:
-    """HTTP client for Voyage AI embedding API."""
+    """HTTP client for Voyage AI embedding API.
+    """
 
     name = 'voyage'
 
@@ -32,14 +31,11 @@ class Client:
         self._availability_cache: bool | None = None
 
     def prepare(self) -> None:
-        """Populate `dim` by probing the API if it's not already known.
+        """Populate `dim` with a test embed when it is not yet known.
 
-        Default voyage-3-lite has its dim baked in at construction, so
-        the common path is a no-op. Non-default models -- either set
-        via `MEMMAN_VOYAGE_EMBED_MODEL` at install or routed via
-        `registry.get_for` -- start with `dim=0` (they have different
-        dimensionalities; voyage-3 / voyage-3-large return 1024); a
-        single test embed populates the actual dim for those callers.
+        The default model has its dim set at construction, so this is a
+        no-op for it. A non-default model starts at `dim=0` because its
+        dimensionality differs.
         """
         if self.dim:
             return
@@ -52,7 +48,8 @@ class Client:
                 f' {type(exc).__name__}: {exc}')
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers with auth."""
+        """Build request headers with auth.
+        """
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
@@ -84,7 +81,8 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via Voyage API."""
+        """Generate embedding for text via Voyage API.
+        """
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -144,7 +142,8 @@ class Client:
         return vectors
 
     def unavailable_message(self) -> str:
-        """Return error message when Voyage is not available."""
+        """Return error message when Voyage is not available.
+        """
         return (
             f'Voyage not available at {self.endpoint}'
             f' -- set {config.VOYAGE_API_KEY} to enable embeddings')

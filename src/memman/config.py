@@ -47,6 +47,9 @@ import getpass
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+from memman.exceptions import ConfigError
 
 DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
@@ -80,50 +83,40 @@ AUTHOR = 'MEMMAN_AUTHOR'
 def resolve_author() -> str:
     """Return the author for the current write.
 
+    Call at `remember` and `replace` time only. At drain time the
+    scheduler subprocess lacks the directory's environment, so read the
+    author from the queue row instead.
+
     Returns
     -------
     str
         `MEMMAN_AUTHOR` from `os.environ` when set and non-empty;
         `getpass.getuser()` otherwise.
-
-    Notes
-    -----
-    - Called at `remember` and `replace` time in the agent's shell,
-      where direnv has exported `MEMMAN_AUTHOR`.
-    - Never called at drain time: the scheduler subprocess runs under
-      systemd without the directory's environment, so the author must
-      be read from the queue row, not resolved again.
     """
     return os.environ.get(AUTHOR) or getpass.getuser()
 
 
 def BACKEND_FOR(store: str) -> str:
-    """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`."""
+    """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`.
+    """
     return f'MEMMAN_BACKEND_{store}'
 
 
 def RERANK_ENABLED_FOR(store: str) -> str:
-    """Per-store rerank-toggle env key: `MEMMAN_RERANK_ENABLED_<store>`."""
+    """Per-store rerank-toggle env key: `MEMMAN_RERANK_ENABLED_<store>`.
+    """
     return f'MEMMAN_RERANK_ENABLED_{store}'
 
 
-def env_key_for(backend: str, key: str, store: str) -> str:
-    """Per-store env-key name for a backend descriptor key.
-
-    Returns `MEMMAN_<BACKEND>_<KEY>_<store>`. Used by the registry-
-    driven dispatch in `store.factory` so backend additions do not
-    require a new module-level helper alongside `BACKEND_FOR`.
+def POSTGRES_DSN_FOR(store: str) -> str:
+    """Per-store Postgres DSN env key: `MEMMAN_POSTGRES_DSN_<store>`.
     """
-    return f'MEMMAN_{backend.upper()}_{key.upper()}_{store}'
-
-
-def _pg_dsn_prefix() -> str:
-    return f'MEMMAN_{"postgres".upper()}_DSN_'
+    return f'MEMMAN_POSTGRES_DSN_{store}'
 
 
 PER_STORE_KEY_SPECS: tuple[tuple[str, bool], ...] = (
     ('MEMMAN_BACKEND_', False),
-    (_pg_dsn_prefix(), True),
+    ('MEMMAN_POSTGRES_DSN_', True),
     ('MEMMAN_RERANK_ENABLED_', False),
     )
 
@@ -199,9 +192,8 @@ def _shell_seed_value(key: str) -> str:
     via `NATIVE_INSTALL_KEY_FALLBACKS`. Returns the stripped string, or
     '' when neither is set.
 
-    Do NOT call from runtime paths -- runtime resolution is file-only
-    via `config.get`. This helper exists for `collect_install_knobs`
-    and the wizard's prompt-skip / pre-fill logic only.
+    Do NOT call from runtime paths: runtime resolution is file-only
+    via `config.get`.
     """
     value = os.environ.get(key, '').strip()
     if value:
@@ -213,7 +205,7 @@ def _shell_seed_value(key: str) -> str:
 
 
 def required_install_keys(embed: str) -> set[str]:
-    """Return the API-key env vars install must populate for the embed provider.
+    """API-key env vars install must populate for an embed provider.
 
     LLM-side authentication is endpoint-driven; the wizard enforces the
     "API key required for non-loopback endpoints" rule directly during
@@ -232,7 +224,6 @@ def is_openrouter_endpoint(url: str) -> bool:
     `*.openrouter.ai` subdomain (regional shards like `eu.openrouter.ai`).
     Resilient to trailing slash and scheme variation.
     """
-    from urllib.parse import urlparse
     host = urlparse(url).hostname or ''
     host = host.lower().removeprefix('www.')
     return host == 'openrouter.ai' or host.endswith('.openrouter.ai')
@@ -245,7 +236,6 @@ def is_loopback_endpoint(url: str) -> bool:
     on install: loopback endpoints (Ollama, local vLLM, LiteLLM proxy)
     typically do not need auth.
     """
-    from urllib.parse import urlparse
     host = (urlparse(url).hostname or '').lower()
     if host in {'localhost', '127.0.0.1', '::1'}:
         return True
@@ -333,7 +323,8 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def _load_file_cache() -> dict[str, str]:
-    """Lazy-load the env-file cache. Reload when the path changes."""
+    """Lazy-load the env-file cache. Reload when the path changes.
+    """
     global _FILE_CACHE, _FILE_CACHE_PATH
     path = env_file_path()
     path_str = str(path)
@@ -381,7 +372,6 @@ def require(name: str) -> str:
     corrupted, or a required-but-optional key is being read on a
     provider that doesn't have it set.
     """
-    from memman.exceptions import ConfigError
     value = get(name)
     if value is None:
         raise ConfigError(
@@ -408,11 +398,10 @@ def get_scoped(name: str, data_dir: str | None = None) -> str | None:
 
     Notes
     -----
-    - Pairs with `get_store_backend` / `get_store_pg_dsn` so a caller
-      holding a `data_dir` resolves the per-store key and its default
-      from ONE file. Mixing `get` with those helpers read per-store
-      keys from an explicit directory and defaults from the ambient
-      one, which routed a store to the wrong backend under
+    - Resolve a per-store key and its default from ONE file: mixing
+      `get` with `get_store_backend` / `get_store_pg_dsn` reads the
+      key from an explicit directory and the default from the ambient
+      one, which routes a store to the wrong backend under
       `memman --data-dir`.
     """
     if data_dir is None:
@@ -425,25 +414,22 @@ def get_store_backend(
         store: str, data_dir: str | None = None) -> str | None:
     """Read `MEMMAN_BACKEND_<store>` from the env file; None if absent.
 
-    Read-only helper -- no fallback to `MEMMAN_DEFAULT_BACKEND`.
+    Read-only helper with no fallback to `MEMMAN_DEFAULT_BACKEND`.
     Callers that want default-fallback behavior compose
     `get_store_backend(store) or get(DEFAULT_BACKEND)` explicitly so
     the data flow stays visible.
     """
-    if data_dir is None:
-        return get(BACKEND_FOR(store))
-    file_values = parse_env_file(env_file_path(data_dir))
-    raw = file_values.get(BACKEND_FOR(store))
-    return raw or None
+    return get_scoped(BACKEND_FOR(store), data_dir)
 
 
 def get_store_rerank_enabled(store: str) -> bool | None:
     """Read `MEMMAN_RERANK_ENABLED_<store>` from the env file; None if absent.
 
-    Read-only helper -- no fallback to the global `MEMMAN_RERANK_ENABLED`.
-    Callers that want default-fallback behavior compose
-    `get_store_rerank_enabled(store) ?? get_bool(RERANK_ENABLED, default=True)`
-    explicitly so the data flow stays visible.
+    Read-only helper with no fallback to the global
+    `MEMMAN_RERANK_ENABLED`. Callers that want default-fallback
+    behavior compose the two explicitly so the data flow stays visible:
+    the store value if not None, else
+    `get_bool(RERANK_ENABLED, default=True)`.
     """
     key = RERANK_ENABLED_FOR(store)
     raw = get(key)
@@ -456,12 +442,7 @@ def get_store_pg_dsn(
         store: str, data_dir: str | None = None) -> str | None:
     """Read `MEMMAN_POSTGRES_DSN_<store>` from the env file; None if absent.
     """
-    key = env_key_for('postgres', 'DSN', store)
-    if data_dir is None:
-        return get(key)
-    file_values = parse_env_file(env_file_path(data_dir))
-    raw = file_values.get(key)
-    return raw or None
+    return get_scoped(POSTGRES_DSN_FOR(store), data_dir)
 
 
 def get_bool(name: str, default: bool = False) -> bool:
@@ -529,7 +510,6 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
     a non-OpenRouter endpoint has no `MEMMAN_LLM_MODEL`: the shipped
     default is an OpenRouter id that endpoint would reject.
     """
-    from memman.exceptions import ConfigError
 
     file_values = parse_env_file(env_file_path(data_dir))
 
@@ -553,10 +533,9 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
             f' {endpoint}; export it or add it to'
             f' {env_file_path(data_dir)} and re-run install')
 
-    for key in list(needs_resolve):
+    for key in needs_resolve:
         if key in INSTALL_DEFAULTS:
             knobs[key] = INSTALL_DEFAULTS[key]
-            needs_resolve.discard(key)
 
     if (not knobs.get(LLM_API_KEY)
             and is_openrouter_endpoint(knobs.get(LLM_ENDPOINT, ''))

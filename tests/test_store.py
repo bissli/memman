@@ -1,5 +1,5 @@
-"""Store layer tests ported from Go store_test.go."""
-
+"""Store layer tests.
+"""
 
 from memman.store.db import DEFAULT_STORE_NAME, list_local_store_dirs, open_db
 from memman.store.db import read_active, store_dir, store_exists
@@ -16,7 +16,8 @@ from tests.conftest import make_insight
 
 
 class TestInsertAndGetInsight:
-    """Insert and verify round-trip."""
+    """Insert and verify round-trip.
+    """
 
     def test_insert_and_get(self, tmp_db):
         """Insert insight, retrieve by id, verify content round-trips.
@@ -34,19 +35,31 @@ class TestInsertAndGetInsight:
 
 
 class TestGetInsightByIDNotFound:
-    """Nonexistent ID returns None."""
+    """Nonexistent ID returns None.
+    """
 
     def test_not_found(self, tmp_db):
-        """get_insight_by_id returns None for missing id."""
+        """get_insight_by_id returns None for a missing id.
+
+        Mutation: returning an empty Insight, or raising, for an unknown id.
+        Oracle: the literal id "nonexistent", never inserted.
+        """
         got = get_insight_by_id(tmp_db, 'nonexistent')
         assert got is None
 
 
 class TestSoftDeleteInsight:
-    """Soft delete hides an insight from the active reads."""
+    """Soft delete hides an insight from the active reads.
+    """
 
     def test_soft_delete(self, tmp_db):
-        """Verify not found via get, found via include_deleted."""
+        """A soft-deleted insight is hidden from get, kept by include_deleted.
+
+        Mutation: soft_delete_insight removing the row, or leaving deleted_at
+            unset.
+        Oracle: get returns None while include_deleted returns a row with
+            deleted_at set.
+        """
         ins = make_insight(id='del-1', content='to be deleted')
         insert_insight(tmp_db, ins)
 
@@ -63,10 +76,16 @@ class TestSoftDeleteInsight:
 
 
 class TestQueryInsightsFilters:
-    """Keyword filter."""
+    """Keyword filter.
+    """
 
     def test_keyword_filter(self, tmp_db):
-        """Keyword filter matches content via LIKE."""
+        """The keyword filter matches insight content.
+
+        Mutation: query_insights ignoring keyword, or matching category instead
+            of content.
+        Oracle: two of three inserted insights contain "Go".
+        """
         insert_insight(tmp_db, make_insight(
             id='q-1', content='Go language features', category='fact'))
         insert_insight(tmp_db, make_insight(
@@ -78,17 +97,19 @@ class TestQueryInsightsFilters:
         assert len(results) == 2
 
 
-# --- Edges ---
-
-
 # --- Oplog ---
 
 
 class TestOplog:
-    """Operation log insert and retrieval."""
+    """Operation log insert and retrieval.
+    """
 
     def test_log_and_get(self, tmp_db):
-        """Log two operations, verify order and fields."""
+        """get_oplog returns both operations, newest first.
+
+        Mutation: get_oplog ordering oldest first, or dropping an entry.
+        Oracle: hand-ordered operations: recall logged last comes first.
+        """
         log_op(tmp_db, 'remember', 'ins-1', 'test detail')
         log_op(tmp_db, 'recall', '', 'query: test')
 
@@ -98,17 +119,19 @@ class TestOplog:
         assert entries[1]['operation'] == 'remember'
 
 
-# --- Embedding ---
-
-
 # --- GetAllActiveInsights ---
 
 
 class TestGetAllActiveInsights:
-    """Active insights excludes soft-deleted."""
+    """Active insights excludes soft-deleted.
+    """
 
     def test_excludes_deleted(self, tmp_db):
-        """Soft-deleted insight is not returned."""
+        """A soft-deleted insight is not returned as active.
+
+        Mutation: get_all_active_insights omitting the deleted_at filter.
+        Oracle: three inserted, one deleted, two expected.
+        """
         insert_insight(tmp_db, make_insight(id='all-1', content='a'))
         insert_insight(tmp_db, make_insight(id='all-2', content='b'))
         insert_insight(tmp_db, make_insight(id='all-3', content='c'))
@@ -122,10 +145,16 @@ class TestGetAllActiveInsights:
 
 
 class TestValidStoreName:
-    """Regex-based store name validation."""
+    """Regex-based store name validation.
+    """
 
     def test_valid_names(self):
-        """Accepted name patterns."""
+        """Names that start alphanumeric and use letters, digits, - and _ pass.
+
+        Mutation: the regex rejecting a hyphen, underscore, capital or single
+            character.
+        Oracle: hand-picked accepted names.
+        """
         assert valid_store_name('default') is True
         assert valid_store_name('my-store') is True
         assert valid_store_name('work_2024') is True
@@ -133,7 +162,12 @@ class TestValidStoreName:
         assert valid_store_name('a1') is True
 
     def test_invalid_names(self):
-        """Rejected name patterns."""
+        """Empty names, bad first characters and other symbols fail.
+
+        Mutation: the regex allowing a leading - or _, a dot, a slash or a
+            space.
+        Oracle: hand-picked rejected names.
+        """
         assert valid_store_name('') is False
         assert valid_store_name('-bad') is False
         assert valid_store_name('_bad') is False
@@ -144,15 +178,26 @@ class TestValidStoreName:
 
 
 class TestReadWriteActive:
-    """Active store name persistence."""
+    """Active store name persistence.
+    """
 
     def test_default_when_missing(self, tmp_path):
-        """No active file returns default store name."""
+        """read_active returns the default store name with no active file.
+
+        Mutation: read_active raising, or returning an empty string, when the
+            file is absent.
+        Oracle: DEFAULT_STORE_NAME in an empty temp dir.
+        """
         got = read_active(str(tmp_path))
         assert got == DEFAULT_STORE_NAME
 
     def test_write_and_read(self, tmp_path):
-        """Written name is read back correctly."""
+        """A name written with write_active is read back unchanged.
+
+        Mutation: write_active writing to the wrong path or with extra
+            characters.
+        Oracle: the literal name "work".
+        """
         base = str(tmp_path)
         write_active(base, 'work')
         got = read_active(base)
@@ -160,15 +205,27 @@ class TestReadWriteActive:
 
 
 class TestListStores:
-    """Enumerate store directories."""
+    """Enumerate store directories.
+    """
 
     def test_empty(self, tmp_path):
-        """No data dir returns empty list."""
+        """An empty data dir lists no stores.
+
+        Mutation: list_local_store_dirs raising, or returning a phantom store,
+            on an empty dir.
+        Oracle: a fresh temp dir with nothing created.
+        """
         names = list_local_store_dirs(str(tmp_path))
         assert len(names) == 0
 
     def test_two_stores(self, tmp_path):
-        """Two created stores returned sorted."""
+        """Two created stores are listed in sorted order.
+
+        Mutation: list_local_store_dirs missing a store or returning unsorted
+            names.
+        Oracle: alpha and beta, created in that order, listed in alphabetical
+            order.
+        """
         base = str(tmp_path)
         db1 = open_db(store_dir(base, 'alpha'))
         db1.close()
@@ -182,14 +239,24 @@ class TestListStores:
 
 
 class TestStoreExists:
-    """Check existence of named store directory."""
+    """Check existence of named store directory.
+    """
 
     def test_does_not_exist(self, tmp_path):
-        """Missing store returns False."""
+        """store_exists is False for a store never created.
+
+        Mutation: store_exists returning True for any name.
+        Oracle: an empty temp dir.
+        """
         assert store_exists(str(tmp_path), 'nope') is False
 
     def test_exists_after_open(self, tmp_path):
-        """Store exists after open_db creates it."""
+        """store_exists is True once open_db creates the store.
+
+        Mutation: store_exists checking the wrong path so a created store reads
+            as missing.
+        Oracle: a store created through open_db.
+        """
         base = str(tmp_path)
         db = open_db(store_dir(base, 'yes'))
         db.close()
@@ -200,10 +267,15 @@ class TestStoreExists:
 
 
 class TestCountActiveInsights:
-    """Count non-deleted insights."""
+    """Count non-deleted insights.
+    """
 
     def test_count(self, tmp_db):
-        """Returns correct count excluding deleted."""
+        """count_active_insights excludes soft-deleted rows.
+
+        Mutation: count_active_insights omitting the deleted_at filter.
+        Oracle: three inserted, one deleted, two expected.
+        """
         insert_insight(tmp_db, make_insight(id='cnt-1', content='a'))
         insert_insight(tmp_db, make_insight(id='cnt-2', content='b'))
         insert_insight(tmp_db, make_insight(id='cnt-3', content='c'))
@@ -212,15 +284,18 @@ class TestCountActiveInsights:
         assert count_active_insights(tmp_db) == 2
 
     def test_empty(self, tmp_db):
-        """Empty DB returns zero."""
+        """An empty db counts zero.
+
+        Mutation: count_active_insights returning None or a nonzero count on an
+            empty table.
+        Oracle: a fresh db.
+        """
         assert count_active_insights(tmp_db) == 0
 
 
-# --- CountInsightsWithEntity ---
-
-
 class TestEnrichmentSchema:
-    """Verify enrichment columns exist in fresh databases."""
+    """Verify enrichment columns exist in fresh databases.
+    """
 
     def test_new_columns_in_schema(self, tmp_db):
         """Fresh DB has summary, and no semantic_facts.
@@ -229,10 +304,10 @@ class TestEnrichmentSchema:
             after the enrichment prompt stops populating it, so a
             fresh store still carries a column no write or read
             touches.
-        Oracle: `PRAGMA table_info`, read straight off a fresh store.
+        Oracle: `pragma table_info`, read straight off a fresh store.
         """
         cols = tmp_db._conn.execute(
-            'PRAGMA table_info(insights)').fetchall()
+            'pragma table_info(insights)').fetchall()
         col_names = {row[1] for row in cols}
         assert 'summary' in col_names
         assert 'semantic_facts' not in col_names
@@ -255,7 +330,6 @@ class TestPendingEnrichIndex:
         Oracle: sqlite's own `explain query plan` naming the partial
             index and reporting no sort step.
         """
-        from memman.store.db import open_db
         db = open_db(str(tmp_path))
         try:
             plan = db._conn.execute(

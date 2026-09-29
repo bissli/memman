@@ -1,15 +1,14 @@
 """The vector anchor channel carries no absolute cosine floor.
 
-`VECTOR_SEARCH_MIN_SIM = 0.10` used to gate this channel. A fixed
-cosine means different things under different embedding models, so a
-store whose cosines center low - a sparse store, or a weaker provider
-- silently lost anchors to it. The floor is gone; only the sign
-boundary remains, which is model-invariant because an orthogonal row
-is orthogonal under every model.
+A fixed cosine means different things under different embedding
+models, so a store whose cosines center low - a sparse store, or a
+weaker provider - would silently lose anchors to a floor. Only the
+sign boundary gates the channel. It is model-invariant because an
+orthogonal row is orthogonal under every model.
 
-Both tests here drive `run_recall` rather than
-`vector_anchors` directly: the deleted constant lived at the recall
-call site, so the verb alone cannot show the behavior either way.
+Both tests here drive `run_recall` and skip `vector_anchors`: a floor
+would live at the recall call site, so the verb alone cannot show the
+behavior either way.
 """
 
 import math
@@ -37,11 +36,10 @@ def _vec_at_cosine(cos: float, *, axis: int = 1) -> list[float]:
 QUERY_VEC = _vec_at_cosine(1.0, axis=1)
 
 # Notes:
-# - 0.05 straddles the deleted 0.10 floor from below while staying
-#   positive, which is the whole point: it is the band the floor used
-#   to swallow.
+# - 0.05 is small and positive: the band a positive cosine floor
+#   such as 0.10 would swallow.
 # - Postgres pins the embedding column at the fingerprint's width, so
-#   these must be EMBEDDING_DIM wide, not a readable 4.
+#   each vector must be EMBEDDING_DIM wide.
 FAINT_VEC = _vec_at_cosine(0.05)
 OPPOSED_VEC = _vec_at_cosine(-0.5)
 CROWD_VEC = _vec_at_cosine(-0.5, axis=2)
@@ -71,7 +69,8 @@ def _seed_crowded_store(backend):
 
 
 def _returned_ids(backend):
-    """Ids `run_recall` returns for `QUERY`, unranked."""
+    """Ids `run_recall` returns for `QUERY`, unranked.
+    """
     resp = run_recall(
         backend, QUERY, QUERY_VEC, ANCHOR_TOP_K + 10)
     return {r['insight'].id for r in resp['results']}
@@ -81,12 +80,12 @@ def test_faint_positive_cosine_still_anchors(backend):
     """Verify a 0.05-cosine row reaches the results with no other route.
 
     Mutation: reinstating any positive cosine floor on the vector
-        anchor channel - the deleted 0.10, or a smaller one - which
+        anchor channel, 0.10 or smaller, which
         drops `faint` from every channel at once and so from the
         response.
     Oracle: a hand-built store where `faint`'s cosine is exactly its
-        vector's first component, 0.05, straddling the old 0.10 floor
-        from below; `crowd-*` occupy all ANCHOR_TOP_K recency slots.
+        vector's first component, 0.05, below a 0.10 floor;
+        `crowd-*` occupy all ANCHOR_TOP_K recency slots.
     """
     _seed_crowded_store(backend)
 
@@ -94,12 +93,11 @@ def test_faint_positive_cosine_still_anchors(backend):
 
 
 def test_negative_cosine_does_not_anchor(backend):
-    """Verify the sign boundary survives the floor's deletion.
+    """Verify the sign boundary holds with no cosine floor.
 
-    Mutation: dropping the positives-only filter along with
-        `min_sim`, which would admit a row pointing away from the
-        query as an anchor whenever fewer than k rows point toward
-        it.
+    Mutation: dropping the positives-only filter, which would admit
+        a row pointing away from the query as an anchor whenever
+        fewer than k rows point toward it.
     Oracle: `opposed` sits at cosine -0.50 and, like `faint`, has no
         keyword, recency or edge route - so its presence would have
         to come from the vector channel.

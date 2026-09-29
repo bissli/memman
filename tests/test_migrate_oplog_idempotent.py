@@ -1,7 +1,7 @@
 """Oplog idempotency tests for migrate.
 
-Slice 1.4: oplog rows from SQLite have a stable `id` that we copy
-into a `legacy_id BIGINT UNIQUE` column on the destination. Re-running
+Each SQLite oplog row has a stable `id`, copied into a
+`legacy_id BIGINT UNIQUE` column on the destination. Re-running
 migrate after a partial failure must not duplicate oplog rows.
 """
 
@@ -16,6 +16,7 @@ import pytest
 psycopg = pytest.importorskip('psycopg')
 
 from memman.store.db import _BASELINE_SCHEMA
+from memman.store.sqlite import SqliteMigrator
 
 pytestmark = pytest.mark.postgres
 
@@ -35,19 +36,19 @@ def _seed_store_with_oplog(
         vec = [0.5] * 512
         ins_id = str(uuid.uuid4())
         conn.execute(
-            'INSERT INTO insights (id, content, category,'
+            'insert into insights (id, content, category,'
             ' embedding, created_at, updated_at)'
-            ' VALUES (?, ?, ?, ?, ?, ?)',
+            ' values (?, ?, ?, ?, ?, ?)',
             (ins_id, 'oplog test', 'fact',
              struct.pack(f'<{len(vec)}d', *vec), now, now))
         for i in range(n_oplog):
             cur = conn.execute(
-                'INSERT INTO oplog (operation, insight_id, detail,'
-                ' created_at) VALUES (?, ?, ?, ?)',
+                'insert into oplog (operation, insight_id, detail,'
+                ' created_at) values (?, ?, ?, ?)',
                 (f'op-{i}', ins_id, f'detail-{i}', now))
             ids.append(cur.lastrowid)
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":512}'))
         conn.commit()
@@ -57,10 +58,12 @@ def _seed_store_with_oplog(
 
 
 def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
-    """After migrate, the destination oplog has a `legacy_id` column.
+    """Verify the destination oplog has a `legacy_id` column.
+
+    Mutation: omitting legacy_id from the destination oplog schema.
+    Oracle: information_schema.columns for the store's schema.
     """
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_oplog_legacy'
     sdir = tmp_path / 'data' / store
@@ -73,7 +76,7 @@ def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -93,10 +96,12 @@ def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
 
 
 def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
-    """Migrated oplog rows have `legacy_id = source.id`.
+    """Verify each migrated oplog row carries its source id as legacy_id.
+
+    Mutation: numbering legacy_id afresh or leaving it NULL.
+    Oracle: the source rowids collected while seeding.
     """
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_oplog_match'
     sdir = tmp_path / 'data' / store
@@ -109,7 +114,7 @@ def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -126,16 +131,13 @@ def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
 
 
 def test_import_oplog_twice_does_not_duplicate_rows(pg_dsn, tmp_path):
-    """Re-running the migrate path against an already-migrated store
-    yields N rows, not 2N.
+    """Verify applying the same payload twice leaves one row per source row.
 
-    Simulates the partial-failure-then-resume case: a first run wrote
-    rows but committed before crashing; a second run re-imports and
-    must not duplicate. The ON CONFLICT (legacy_id) DO NOTHING clause
-    in PostgresMigrator.apply is what makes this idempotent.
+    Mutation: dropping the `on conflict (legacy_id) do nothing` clause
+        in PostgresMigrator.apply, so a resumed run doubles the rows.
+    Oracle: the seeded oplog count of 4.
     """
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_oplog_twice'
     sdir = tmp_path / 'data' / store
@@ -148,7 +150,7 @@ def test_import_oplog_twice_does_not_duplicate_rows(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         tgt_mig.apply(store, payload)

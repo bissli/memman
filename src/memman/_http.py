@@ -24,7 +24,8 @@ MAX_RETRIES = 3
 
 
 def get_session(name: str) -> httpx.Client:
-    """Return the per-subsystem `httpx.Client`, creating it lazily."""
+    """Return the per-subsystem `httpx.Client`, creating it lazily.
+    """
     client = _SESSIONS.get(name)
     if client is None:
         client = httpx.Client()

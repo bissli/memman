@@ -45,9 +45,18 @@ def _next_archive_slot(data_dir: str, store: str) -> Path:
 def archive_store_dir(data_dir: str, store: str) -> Path | None:
     """Move data/<store>/ to archive/<store>/<YYYYMMDD>_<NN>/.
 
-    Returns the archive destination path on success, None when the
-    source dir does not exist (no-op for an already-cleaned store).
-    Falls back to non-atomic copy+delete on cross-filesystem moves.
+    Parameters
+    ----------
+    data_dir : str
+        Root data directory holding `data/` and `archive/`.
+    store : str
+        Store name.
+
+    Returns
+    -------
+    Path | None
+        Archive destination, or None when the source dir does not
+        exist (an already-cleaned store).
     """
     source_dir = Path(data_dir) / 'data' / store
     if not source_dir.exists():
@@ -72,9 +81,24 @@ def archive_postgres_schema(
         data_dir: str, store: str, dsn: str) -> Path:
     """Dump `store_<store>` schema to archive/<store>/<NN>/dump.pgdump.
 
-    Invokes `pg_dump -Fc -d <dsn> -n store_<store>` and writes the
-    binary archive into the next free archive slot. Returns the slot
-    path on success. Raises `RuntimeError` on pg_dump failure.
+    Parameters
+    ----------
+    data_dir : str
+        Root data directory holding `archive/`.
+    store : str
+        Store name; the dumped schema is `store_<store>`.
+    dsn : str
+        Postgres connection string passed to `pg_dump -d`.
+
+    Returns
+    -------
+    Path
+        The archive slot holding `dump.pgdump`.
+
+    Raises
+    ------
+    RuntimeError
+        `pg_dump` exits nonzero.
     """
     archive_dest = _next_archive_slot(data_dir, store)
     archive_dest.mkdir(mode=0o700, parents=False, exist_ok=False)

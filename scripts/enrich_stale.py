@@ -44,10 +44,12 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 from tqdm import tqdm
 
@@ -113,7 +115,7 @@ _LOG_LOCK = Lock()
 
 
 def _rebuild_store(memman: str, store: str, log_path: Path,
-                   on_row) -> tuple[int, int, str]:
+                   on_row: Callable[[], None]) -> tuple[int, int, str]:
     """Run rebuild for one store, streaming progress via stderr.
 
     Each `done` event from the child (emitted because we pass
@@ -279,8 +281,11 @@ def main() -> int:
     return 0
 
 
-def _wrapped_rebuild(memman, store, expected, log_path, bar,
-                     in_flight, in_flight_lock, set_postfix):
+def _wrapped_rebuild(
+        memman: str, store: str, expected: int, log_path: Path,
+        bar: tqdm, in_flight: set[str], in_flight_lock: Any,
+        set_postfix: Callable[[], None],
+        ) -> tuple[float, int, int, str]:
     """Run `_rebuild_store`, ticking `bar` per row and tracking in_flight.
 
     Reconciles the bar at the end so each store contributes exactly

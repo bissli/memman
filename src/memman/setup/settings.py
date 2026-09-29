@@ -1,17 +1,10 @@
-"""JSON configuration management with JSON5 support."""
+"""JSON configuration management with JSON5 support.
+"""
 
 import json
 import os
 from pathlib import Path
-
-
-def _unexpand_home(path: str) -> str:
-    """Replace home directory prefix with ~ for portability.
-    """
-    home = str(Path.home())
-    if path.startswith(home):
-        return '~' + path[len(home):]
-    return path
+from typing import Any
 
 
 def strip_json5(s: str) -> str:
@@ -21,6 +14,16 @@ def strip_json5(s: str) -> str:
     and single-quoted strings (both pass through unchanged, with escape
     handling so `\\'` or `\\"` inside a string does not end it), and
     trailing commas before `]`, `}`, `)`.
+
+    Parameters
+    ----------
+    s : str
+        JSON5 text.
+
+    Returns
+    -------
+    str
+        Plain JSON text.
     """
     result = []
     in_string: str | None = None
@@ -69,10 +72,11 @@ def strip_json5(s: str) -> str:
 
 
 def read_json_file(path: str) -> dict:
-    """Read a JSON file into a dict. Returns empty dict if file doesn't exist."""
+    """Read a JSON file into a dict; a missing file gives an empty dict.
+    """
     try:
         data = Path(path).read_text()
-    except (OSError, FileNotFoundError):
+    except OSError:
         return {}
     if not data:
         return {}
@@ -81,16 +85,18 @@ def read_json_file(path: str) -> dict:
 
 
 def write_json_file(path: str, data: dict) -> None:
-    """Write a dict to a JSON file atomically via .tmp + rename."""
+    """Write a dict to a JSON file atomically via .tmp + rename.
+    """
     content = json.dumps(data, indent=2) + '\n'
-    Path(Path(path).parent).mkdir(mode=0o755, exist_ok=True, parents=True)
+    Path(path).parent.mkdir(mode=0o755, exist_ok=True, parents=True)
     tmp = path + '.tmp'
     Path(tmp).write_text(content)
     Path(tmp).replace(path)
 
 
 def write_or_remove_json_file(path: str, data: dict) -> None:
-    """Write the settings, or remove the file if the dict is empty."""
+    """Write the settings, or remove the file if the dict is empty.
+    """
     if not data:
         try:
             Path(path).unlink()
@@ -100,8 +106,9 @@ def write_or_remove_json_file(path: str, data: dict) -> None:
     write_json_file(path, data)
 
 
-def _contains_memman(v: object) -> bool:
-    """Recursively check if any string value contains memman hook paths."""
+def _contains_memman(v: Any) -> bool:
+    """True when any string inside v mentions memman.
+    """
     if isinstance(v, str):
         return 'memman' in v
     if isinstance(v, dict):
@@ -111,13 +118,9 @@ def _contains_memman(v: object) -> bool:
     return False
 
 
-def _filter_hook_array(arr: list) -> list:
-    """Remove entries that reference memman from a hook event array."""
-    return [entry for entry in arr if not _contains_memman(entry)]
-
-
 def remove_claude_hooks(data: dict) -> None:
-    """Remove all memman-related entries from Claude Code hooks."""
+    """Remove all memman-related entries from Claude Code hooks.
+    """
     hooks = data.get('hooks')
     if not isinstance(hooks, dict):
         return
@@ -126,7 +129,7 @@ def remove_claude_hooks(data: dict) -> None:
         arr = hooks.get(key)
         if not isinstance(arr, list):
             continue
-        filtered = _filter_hook_array(arr)
+        filtered = [entry for entry in arr if not _contains_memman(entry)]
         if not filtered:
             hooks.pop(key, None)
         else:
@@ -141,99 +144,65 @@ def add_claude_hooks_selective(
         compact: bool = False,
         task_recall: bool = False,
         exit_plan: bool = False) -> None:
-    """Idempotently set memman hooks in Claude Code settings."""
+    """Idempotently set memman hooks in Claude Code settings.
+
+    Parameters
+    ----------
+    data : dict
+        Parsed settings, mutated in place. Existing memman hooks are
+        removed first.
+    hooks_dir : str
+        Directory holding the hook scripts.
+    remind, compact, task_recall, exit_plan : bool
+        Also register the user-prompt, pre-compact, task-recall, and
+        exit-plan hooks. The session-start prime hook is always set.
+    """
     remove_claude_hooks(data)
     hooks = data.setdefault('hooks', {})
+    home = str(Path.home())
 
-    prime_entry = {
-        'hooks': [
-            {
-                'type': 'command',
-                'command': _unexpand_home(os.path.join(hooks_dir, 'prime.sh')),
-                },
-            ],
-        }
-    session_arr = hooks.get('SessionStart', [])
-    if not isinstance(session_arr, list):
-        session_arr = []
-    session_arr.append(prime_entry)
-    hooks['SessionStart'] = session_arr
-
-    if remind:
-        remind_entry = {
+    registrations = [
+        (True, 'SessionStart', 'prime.sh', None),
+        (remind, 'UserPromptSubmit', 'user_prompt.sh', None),
+        (compact, 'PreCompact', 'compact.sh', None),
+        (task_recall, 'PreToolUse', 'task_recall.sh', 'Agent|Task'),
+        (exit_plan, 'PreToolUse', 'exit_plan.sh', 'ExitPlanMode'),
+        ]
+    for enabled, event, script, matcher in registrations:
+        if not enabled:
+            continue
+        command = os.path.join(hooks_dir, script)
+        if command.startswith(home):
+            command = '~' + command[len(home):]
+        entry = {
             'hooks': [
                 {
                     'type': 'command',
-                    'command': _unexpand_home(os.path.join(
-                        hooks_dir, 'user_prompt.sh')),
+                    'command': command,
                     },
                 ],
             }
-        arr = hooks.get('UserPromptSubmit', [])
+        if matcher:
+            entry['matcher'] = matcher
+        arr = hooks.get(event, [])
         if not isinstance(arr, list):
             arr = []
-        arr.append(remind_entry)
-        hooks['UserPromptSubmit'] = arr
-
-    if compact:
-        compact_entry = {
-            'hooks': [
-                {
-                    'type': 'command',
-                    'command': _unexpand_home(os.path.join(hooks_dir, 'compact.sh')),
-                    },
-                ],
-            }
-        arr = hooks.get('PreCompact', [])
-        if not isinstance(arr, list):
-            arr = []
-        arr.append(compact_entry)
-        hooks['PreCompact'] = arr
-
-    if task_recall:
-        task_recall_entry = {
-            'hooks': [
-                {
-                    'type': 'command',
-                    'command': _unexpand_home(os.path.join(
-                        hooks_dir, 'task_recall.sh')),
-                    },
-                ],
-            'matcher': 'Agent|Task',
-            }
-        arr = hooks.get('PreToolUse', [])
-        if not isinstance(arr, list):
-            arr = []
-        arr.append(task_recall_entry)
-        hooks['PreToolUse'] = arr
-
-    if exit_plan:
-        exit_plan_entry = {
-            'hooks': [
-                {
-                    'type': 'command',
-                    'command': _unexpand_home(os.path.join(
-                        hooks_dir, 'exit_plan.sh')),
-                    },
-                ],
-            'matcher': 'ExitPlanMode',
-            }
-        arr = hooks.get('PreToolUse', [])
-        if not isinstance(arr, list):
-            arr = []
-        arr.append(exit_plan_entry)
-        hooks['PreToolUse'] = arr
+        arr.append(entry)
+        hooks[event] = arr
 
 
 _PERMISSION_SECTIONS = ('allow', 'deny', 'ask')
 
 
 def add_memman_permission(data: dict, entries: list[str]) -> None:
-    """Append the given entries to permissions.allow. Idempotent.
+    """Append entries to permissions.allow, skipping any already there.
 
-    Callers obtain `entries` from `memman.cli.list_claude_permissions`,
-    which walks the CLI tree and returns one allow string per
-    `@claude_callable` command.
+    Parameters
+    ----------
+    data : dict
+        Parsed settings, mutated in place.
+    entries : list[str]
+        Allow strings, as `memman.cli.list_claude_permissions` returns.
     """
     perms = data.setdefault('permissions', {})
     allow = perms.setdefault('allow', [])
@@ -243,10 +212,13 @@ def add_memman_permission(data: dict, entries: list[str]) -> None:
 
 
 def remove_memman_permission(data: dict) -> None:
-    """Drop every memman-referencing string from permissions allow/deny/ask.
+    """Drop every string mentioning memman from permissions allow/deny/ask.
 
-    Mirrors `remove_claude_hooks`: anything mentioning memman is memman's
-    to remove on uninstall.
+    Parameters
+    ----------
+    data : dict
+        Parsed settings, mutated in place. An emptied list, and an
+        emptied `permissions`, are removed.
     """
     perms = data.get('permissions')
     if not isinstance(perms, dict):
@@ -276,13 +248,19 @@ _REMOVE_IF_EMPTY_LEAVES = frozenset({
 
 
 def remove_if_empty(dir_path: str) -> None:
-    """Remove a directory only if it exists, is empty, AND either is a
-    known agent-config root (`.claude`) or a known leaf inside one
-    (`hooks`, `skills`).
+    """Remove a directory only if it exists and is empty.
 
-    Raises ValueError on a path outside the allowlist; defensive
-    against a future caller passing a surprising path like `/tmp/x`
-    or `/`.
+    Parameters
+    ----------
+    dir_path : str
+        Directory whose basename is an agent-config root (`.claude`)
+        or a known leaf inside one (`hooks`, `skills`).
+
+    Raises
+    ------
+    ValueError
+        The basename is outside the allowlist, which guards against a
+        caller passing a path like `/tmp/x` or `/`.
     """
     p = Path(dir_path)
     basename = p.name

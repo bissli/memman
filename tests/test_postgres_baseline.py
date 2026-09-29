@@ -18,15 +18,22 @@ runs are unaffected.
 
 import random
 import socket
+from typing import Any
 
+import numpy as np
 import pytest
 
 psycopg = pytest.importorskip('psycopg')
 pytest.importorskip('pgvector')
 
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+from memman.search.recall import run_recall
+from memman.store import postgres as pg_mod
+from memman.store.errors import BackendError
+from memman.store.model import Insight
 from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index
-from memman.store.postgres import _store_schema, drop_postgres_store
-from memman.store.postgres import open_postgres_backend
+from memman.store.postgres import _read_stored_dim, _store_schema
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from pgvector.psycopg import register_vector
 from tests.fixtures.postgres import SCHEMA, connection_pair
 from tests.fixtures.postgres import simulate_connection_drop, wait_for
@@ -35,29 +42,44 @@ pytestmark = pytest.mark.postgres
 
 
 def _voyage_shape_vector(seed: int = 0, dim: int = 512) -> list[float]:
-    """Return a deterministic 512-dim float list approximating a Voyage embedding.
+    """A deterministic float list shaped like a Voyage embedding.
 
-    Values land in [-1, 1] but are NOT unit-normalized -- pgvector's
-    cosine distance handles normalization implicitly.
+    Parameters
+    ----------
+    seed : int
+        Seeds the generator; equal seeds give equal vectors.
+    dim : int
+        Vector length.
+
+    Returns
+    -------
+    list[float]
+        Components in [-1, 1], not unit-normalized. pgvector cosine
+        distance normalizes implicitly.
     """
     rng = random.Random(seed)
     return [rng.uniform(-1.0, 1.0) for _ in range(dim)]
 
 
 def test_vector_512_round_trip(pg_conn):
-    """A 512-dim list[float] survives INSERT and SELECT through pgvector."""
+    """Verify a 512-dim list[float] round-trips through pgvector.
+
+    Mutation: A column declared with the wrong dimension or a lossy adapter
+        that truncates or reorders components.
+    Oracle: The original Python list, compared per component within 1e-5.
+    """
     register_vector(pg_conn)
     with pg_conn.cursor() as cur:
-        cur.execute(f'SET search_path = {SCHEMA}, public')
+        cur.execute(f'set search_path = {SCHEMA}, public')
         cur.execute(
-            'CREATE TABLE vec_test ('
-            ' id INTEGER PRIMARY KEY,'
+            'create table vec_test ('
+            ' id integer primary key,'
             ' embedding vector(512))')
         original = _voyage_shape_vector(seed=42)
         cur.execute(
-            'INSERT INTO vec_test (id, embedding) VALUES (%s, %s)',
+            'insert into vec_test (id, embedding) values (%s, %s)',
             (1, original))
-        cur.execute('SELECT embedding FROM vec_test WHERE id = 1')
+        cur.execute('select embedding from vec_test where id = 1')
         roundtripped = list(cur.fetchone()[0])
     assert len(roundtripped) == 512
     for a, b in zip(original, roundtripped):
@@ -66,42 +88,42 @@ def test_vector_512_round_trip(pg_conn):
 
 
 def test_hnsw_top5_correctness(pg_conn):
-    """HNSW returns the same top-5 IDs as a sequential scan on 100 rows.
+    """Verify the HNSW top-5 matches the sequential-scan top-5.
 
-    Forces `enable_seqscan = on` so HNSW approximation noise can't
-    explain a divergence; this validates that `<=>` semantics +
-    cosine direction match the score-direction contract
-    (`1 - distance` -> similarity in [-1, 1], higher better).
+    Mutation: Ordering by a different operator than the index was built for
+        (`<->` or `<#>` against `vector_cosine_ops`), or an index that ranks by
+        descending distance.
+    Oracle: The top-5 ids from the same query with `enable_seqscan = on`, which
+        is exact; at least 4 of 5 ids must agree.
     """
     register_vector(pg_conn)
     with pg_conn.cursor() as cur:
-        cur.execute(f'SET search_path = {SCHEMA}, public')
+        cur.execute(f'set search_path = {SCHEMA}, public')
         cur.execute(
-            'CREATE TABLE corpus ('
-            ' id INTEGER PRIMARY KEY,'
+            'create table corpus ('
+            ' id integer primary key,'
             ' embedding vector(512))')
         rows = [
             (i, _voyage_shape_vector(seed=i))
             for i in range(100)
             ]
         cur.executemany(
-            'INSERT INTO corpus (id, embedding) VALUES (%s, %s)',
+            'insert into corpus (id, embedding) values (%s, %s)',
             rows)
         cur.execute(
-            'CREATE INDEX hnsw_corpus ON corpus'
-            ' USING hnsw (embedding vector_cosine_ops)')
-        import numpy as np
+            'create index hnsw_corpus on corpus'
+            ' using hnsw (embedding vector_cosine_ops)')
         query_vec = np.asarray(_voyage_shape_vector(seed=7))
-        cur.execute('SET enable_seqscan = on')
+        cur.execute('set enable_seqscan = on')
         cur.execute(
-            'SELECT id, 1 - (embedding <=> %s) AS sim FROM corpus'
-            ' ORDER BY embedding <=> %s LIMIT 5',
+            'select id, 1 - (embedding <=> %s) as sim from corpus'
+            ' order by embedding <=> %s limit 5',
             (query_vec, query_vec))
         seqscan_top5 = [r[0] for r in cur.fetchall()]
-        cur.execute('SET enable_seqscan = off')
+        cur.execute('set enable_seqscan = off')
         cur.execute(
-            'SELECT id FROM corpus'
-            ' ORDER BY embedding <=> %s LIMIT 5',
+            'select id from corpus'
+            ' order by embedding <=> %s limit 5',
             (query_vec,))
         index_top5 = [r[0] for r in cur.fetchall()]
     assert len(seqscan_top5) == 5
@@ -113,50 +135,56 @@ def test_hnsw_top5_correctness(pg_conn):
 
 
 def test_pg_try_advisory_lock_contention(pg_dsn):
-    """Holding pg_try_advisory_lock from one conn blocks a second."""
+    """Verify a second connection is denied an advisory lock the first holds.
+
+    Mutation: A blocking or transaction-scoped lock call, or a key that differs
+        per connection, so both connections win.
+    Oracle: The literal booleans pg_try_advisory_lock returns before and after
+        pg_advisory_unlock on the holder.
+    """
     lock_id = 9991
     with connection_pair(pg_dsn) as (conn_a, conn_b):
         with conn_a.cursor() as cur_a:
             cur_a.execute(
-                'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                'select pg_try_advisory_lock(%s)', (lock_id,))
             assert cur_a.fetchone()[0] is True, (
                 'first connection should win the advisory lock')
         with conn_b.cursor() as cur_b:
             cur_b.execute(
-                'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                'select pg_try_advisory_lock(%s)', (lock_id,))
             assert cur_b.fetchone()[0] is False, (
                 'second connection should be denied while first holds')
         with conn_a.cursor() as cur_a:
             cur_a.execute(
-                'SELECT pg_advisory_unlock(%s)', (lock_id,))
+                'select pg_advisory_unlock(%s)', (lock_id,))
             assert cur_a.fetchone()[0] is True
         with conn_b.cursor() as cur_b:
             cur_b.execute(
-                'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                'select pg_try_advisory_lock(%s)', (lock_id,))
             assert cur_b.fetchone()[0] is True, (
                 'second connection should now acquire after release')
             cur_b.execute(
-                'SELECT pg_advisory_unlock(%s)', (lock_id,))
+                'select pg_advisory_unlock(%s)', (lock_id,))
 
 
 def test_search_path_persists_across_cursor_close_in_autocommit(pg_dsn):
-    """`SET search_path` in autocommit mode persists to the next cursor.
+    """`set search_path` in autocommit mode survives cursor close.
 
-    Documents the pool-reuse hazard: a pooled connection that ran
-    `SET search_path = store_a, public` for one logical request will
-    still report `search_path = store_a, public` when the next
-    request acquires it from the pool. Implementations of
-    `RecallSession.__exit__` must explicitly reset `search_path`
-    before returning the connection to a pool.
+    A pooled connection keeps the schema of its last request, so the recall
+    session must reset `search_path` before returning it to the pool.
+
+    Mutation: A driver or session change that resets search_path on cursor
+        close, which would make that reset dead code.
+    Oracle: `show search_path` on a second cursor of the same connection.
     """
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS {SCHEMA}')
-            cur.execute(f'SET search_path = {SCHEMA}, public')
-            cur.execute('SHOW search_path')
+            cur.execute(f'create schema if not exists {SCHEMA}')
+            cur.execute(f'set search_path = {SCHEMA}, public')
+            cur.execute('show search_path')
             assert SCHEMA in cur.fetchone()[0]
         with conn.cursor() as cur2:
-            cur2.execute('SHOW search_path')
+            cur2.execute('show search_path')
             after = cur2.fetchone()[0]
             assert SCHEMA in after, (
                 f'search_path should persist across cursor close in'
@@ -165,24 +193,28 @@ def test_search_path_persists_across_cursor_close_in_autocommit(pg_dsn):
 
 
 def test_advisory_lock_released_on_connection_close(pg_dsn):
-    """Closing a connection releases its advisory locks without explicit unlock.
+    """Verify closing a connection releases its advisory lock.
 
-    This is the crash-recovery mechanism `reembed_lock` and
-    `swap_lock` rely on: if the holder hangs or its host dies,
-    Postgres releases the lock when it detects the dead TCP session,
-    and another agent can take it.
+    This is the crash-recovery path `reembed_lock` and `swap_lock` rely on:
+    Postgres frees the lock when the holder session dies.
+
+    Mutation: A lock taken with a transaction-independent key that outlives the
+        session, such as a table-backed lock row, so a dead holder blocks every
+        later sweep.
+    Oracle: A second connection sees the lock denied while the holder is open,
+        then acquires it within 5 seconds of the holder dropping.
     """
     lock_id = 9992
     holder = psycopg.connect(pg_dsn, autocommit=True)
     try:
         with holder.cursor() as cur:
             cur.execute(
-                'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                'select pg_try_advisory_lock(%s)', (lock_id,))
             assert cur.fetchone()[0] is True
         with psycopg.connect(pg_dsn, autocommit=True) as observer:
             with observer.cursor() as cur:
                 cur.execute(
-                    'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                    'select pg_try_advisory_lock(%s)', (lock_id,))
                 assert cur.fetchone()[0] is False, (
                     'lock should still be held by holder')
     finally:
@@ -192,11 +224,11 @@ def test_advisory_lock_released_on_connection_close(pg_dsn):
         def _can_acquire() -> bool:
             with later.cursor() as cur:
                 cur.execute(
-                    'SELECT pg_try_advisory_lock(%s)', (lock_id,))
+                    'select pg_try_advisory_lock(%s)', (lock_id,))
                 got = cur.fetchone()[0]
                 if got:
                     cur.execute(
-                        'SELECT pg_advisory_unlock(%s)', (lock_id,))
+                        'select pg_advisory_unlock(%s)', (lock_id,))
                 return bool(got)
 
         assert wait_for(_can_acquire, timeout_sec=5.0), (
@@ -206,12 +238,13 @@ def test_advisory_lock_released_on_connection_close(pg_dsn):
 
 @pytest.fixture
 def _pg_store_backend(pg_dsn):
-    """A PostgresBackend bound to a fresh `store_pg_salvage` schema."""
+    """A PostgresBackend bound to a fresh `store_pg_salvage` schema.
+    """
     store_name = 'pg_salvage'
     schema = _store_schema(store_name)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     backend = open_postgres_backend(store_name, pg_dsn)
     try:
         yield backend, pg_dsn, store_name
@@ -219,29 +252,31 @@ def _pg_store_backend(pg_dsn):
         backend.close()
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def test_hnsw_partial_index_built_concurrently(
         _pg_store_backend):
-    """HNSW index uses vector_cosine_ops WHERE deleted_at IS NULL.
+    """Verify the store builds a valid partial HNSW index with cosine ops.
 
-    Inspects pg_index for cosine ops, partial WHERE, and valid
-    (`indisvalid = true`).
+    Mutation: Building the index with `vector_l2_ops`, without the `deleted_at`
+        predicate, or leaving an invalid index behind.
+    Oracle: The catalog: pg_index.indisvalid, pg_am.amname, and pg_get_indexdef
+        for the named index.
     """
     backend, pg_dsn, store_name = _pg_store_backend
     schema = _store_schema(store_name)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT i.indisvalid, am.amname,'
+                'select i.indisvalid, am.amname,'
                 ' pg_get_indexdef(i.indexrelid)'
-                ' FROM pg_index i'
-                ' JOIN pg_class c ON c.oid = i.indexrelid'
-                ' JOIN pg_am am ON am.oid = ('
-                '   SELECT relam FROM pg_class'
-                '   WHERE oid = i.indexrelid)'
-                ' WHERE c.relname = %s',
+                ' from pg_index i'
+                ' join pg_class c on c.oid = i.indexrelid'
+                ' join pg_am am on am.oid = ('
+                '   select relam from pg_class'
+                '   where oid = i.indexrelid)'
+                ' where c.relname = %s',
                 (f'idx_insights_hnsw_{schema}',))
             row = cur.fetchone()
     assert row is not None, 'HNSW index missing'
@@ -253,8 +288,15 @@ def test_hnsw_partial_index_built_concurrently(
 
 
 def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
-    """An invalid HNSW remnant from an aborted CONCURRENTLY build is
-    dropped before the next reindex retries.
+    """Verify _ensure_hnsw_index replaces an invalid HNSW remnant.
+
+    An aborted concurrent build leaves an index with `indisvalid = false` under
+    the same name.
+
+    Mutation: Dropping the invalid-remnant check, so `create index if not
+        exists` sees the name, skips, and leaves the broken index in place.
+    Oracle: pg_index.indisvalid read before (False, forced by update) and after
+        (True) the call.
     """
     store_name = 'pg_remnant'
     schema = _store_schema(store_name)
@@ -262,33 +304,33 @@ def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
     index_name = f'idx_insights_hnsw_{schema}'
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP INDEX IF EXISTS {schema}.{index_name}')
+            cur.execute(f'drop index if exists {schema}.{index_name}')
             cur.execute(
-                f'CREATE INDEX {index_name}'
-                f' ON {schema}.insights'
-                f' USING hnsw (embedding vector_cosine_ops)'
-                f' WHERE deleted_at IS NULL')
+                f'create index {index_name}'
+                f' on {schema}.insights'
+                f' using hnsw (embedding vector_cosine_ops)'
+                f' where deleted_at IS NULL')
             cur.execute(
-                'UPDATE pg_index SET indisvalid = false'
-                ' WHERE indexrelid = ('
-                '  SELECT oid FROM pg_class WHERE relname = %s)',
+                'update pg_index set indisvalid = false'
+                ' where indexrelid = ('
+                '  select oid from pg_class where relname = %s)',
                 (index_name,))
             cur.execute(
-                'SELECT indisvalid FROM pg_index WHERE indexrelid = ('
-                '  SELECT oid FROM pg_class WHERE relname = %s)',
+                'select indisvalid from pg_index where indexrelid = ('
+                '  select oid from pg_class where relname = %s)',
                 (index_name,))
             assert cur.fetchone()[0] is False
     _ensure_hnsw_index(pg_dsn, schema)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT indisvalid FROM pg_index WHERE indexrelid = ('
-                '  SELECT oid FROM pg_class WHERE relname = %s)',
+                'select indisvalid from pg_index where indexrelid = ('
+                '  select oid from pg_class where relname = %s)',
                 (index_name,))
             row = cur.fetchone()
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     assert row is not None
     assert row[0] is True
 
@@ -306,14 +348,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         `order by` AND a `limit`, which is the only shape the HNSW
         index answers.
     """
-    from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-    from memman.search.recall import run_recall
-    from memman.store.model import Insight
-
-    try:
-        drop_postgres_store('hnsw_smoke', pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store('hnsw_smoke', pg_dsn)
     backend = open_postgres_backend('hnsw_smoke', pg_dsn)
     backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
 
@@ -332,7 +367,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
     captured_sql: list[str] = []
     real_execute = psycopg.Cursor.execute
 
-    def spy(self, query, *args, **kwargs):
+    def spy(self: psycopg.Cursor, query: Any, *args: Any, **kwargs: Any) -> Any:
         captured_sql.append(str(query))
         return real_execute(self, query, *args, **kwargs)
 
@@ -344,14 +379,8 @@ def test_postgres_recall_issues_pgvector_distance_operator(
             query_vec=_voyage_shape_vector(seed=999),
             limit=5)
     finally:
-        try:
-            backend.close()
-        except Exception:
-            pass
-        try:
-            drop_postgres_store('hnsw_smoke', pg_dsn)
-        except Exception:
-            pass
+        backend.close()
+        drop_postgres_store('hnsw_smoke', pg_dsn)
 
     pgvector_ops = [s for s in captured_sql if '<=>' in s]
     assert pgvector_ops, (
@@ -371,14 +400,18 @@ def test_postgres_recall_issues_pgvector_distance_operator(
 
 def test_reembed_lock_session_scoped_and_releases_on_close(
         pg_dsn):
-    """Two PostgresBackends compete for `reembed_lock`. The second
-    gets False; once the first connection closes, the second acquires.
+    """Verify `reembed_lock` denies a second holder until release.
+
+    Mutation: A lock key that varies per connection, a blocking acquire, or a
+        release path that leaves the lock held.
+    Oracle: The yielded booleans: True, then False for the competitor, then
+        True once the first block exits.
     """
     store_name = 'pg_reembed'
     schema = _store_schema(store_name)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     a = open_postgres_backend(store_name, pg_dsn)
     b = open_postgres_backend(store_name, pg_dsn)
     try:
@@ -393,7 +426,7 @@ def test_reembed_lock_session_scoped_and_releases_on_close(
         b.close()
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
 
 @pytest.mark.parametrize('lock_name', ['reembed_lock', 'swap_lock'])
@@ -409,16 +442,15 @@ def test_lock_connection_sets_client_tcp_keepalive(
         socket; the server's `show tcp_keepalives_idle` reports the
         server socket and reads the same either way.
     """
-    from memman.store import postgres as pg_mod
     store_name = 'pg_keepalive'
     schema = _store_schema(store_name)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     original = pg_mod._open_connection
     keepidle = []
 
-    def spy(dsn, **kwargs):
+    def spy(dsn: str, **kwargs: Any) -> psycopg.Connection:
         conn = original(dsn, **kwargs)
         sock = socket.socket(fileno=conn.pgconn.socket)
         try:
@@ -439,29 +471,32 @@ def test_lock_connection_sets_client_tcp_keepalive(
         backend.close()
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
     assert keepidle == [30]
 
 
 def test_memman_reindex_timeout_caps_hnsw_build(
         pg_dsn, monkeypatch):
-    """`MEMMAN_REINDEX_TIMEOUT=7` puts statement_timeout on the
-    autocommit connection used for HNSW build. Asserts the SET
-    statement_timeout SQL is issued before CREATE INDEX by spying
-    on cursor.execute.
+    """Verify MEMMAN_REINDEX_TIMEOUT caps the HNSW build.
+
+    Mutation: Ignoring the env var (the default 180s applies), or issuing `set
+        statement_timeout` after `create index concurrently`, so a stuck build
+        is never capped.
+    Oracle: The statements captured from Cursor.execute: a `7s` timeout appears
+        at a lower index than the create statement.
     """
     store_name = 'pg_timeout'
     schema = _store_schema(store_name)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     _ensure_baseline_schema(pg_dsn, store_name)
 
     monkeypatch.setenv('MEMMAN_REINDEX_TIMEOUT', '7')
     captured: list[str] = []
     real_execute = psycopg.Cursor.execute
 
-    def spy(self, sql, *args, **kwargs):
+    def spy(self: psycopg.Cursor, sql: Any, *args: Any, **kwargs: Any) -> Any:
         captured.append(str(sql))
         return real_execute(self, sql, *args, **kwargs)
 
@@ -472,7 +507,7 @@ def test_memman_reindex_timeout_caps_hnsw_build(
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
     set_idx = next(
         (i for i, s in enumerate(captured)
@@ -491,23 +526,21 @@ def test_memman_reindex_timeout_caps_hnsw_build(
 
 def test_read_stored_dim_distinguishes_absent_from_unreachable(
         pg_dsn, monkeypatch):
-    """`_read_stored_dim` returns None for an absent schema and raises
-    for an unreachable connection.
+    """Verify _read_stored_dim tells an absent schema from an outage.
 
-    Pre-F.4 the helper swallowed every Exception, so a transient
-    connection outage masqueraded as a fresh schema and the next
-    fingerprint assert silently kicked off as if the dim were unknown.
-    The outage now arrives as `BackendError`, the contract every
-    backend raises; `__cause__` still carries the driver error, so
-    the two cases stay distinguishable.
+    None for an absent schema; BackendError, with the driver error as
+    `__cause__`, for an unreachable server.
+
+    Mutation: A handler that swallows every exception, so a connection outage
+        reads as a fresh schema and the next fingerprint check passes on an
+        unknown dimension.
+    Oracle: A dropped schema for the None case and an unresolvable host name
+        for the raise case.
     """
-    from memman.store.errors import BackendError
-    from memman.store.postgres import _read_stored_dim
-
     schema = _store_schema('absent_store')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
     assert _read_stored_dim(pg_dsn, 'absent_store') is None
 
     bad_dsn = 'postgresql://user@nonexistent.invalid:5432/x'

@@ -14,8 +14,9 @@ psycopg = pytest.importorskip('psycopg')
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, run_swap
-from memman.store.postgres import EMBEDDING_DIM, _store_schema
-from memman.store.postgres import open_postgres_backend
+from memman.store.model import Insight
+from memman.store.postgres import EMBEDDING_DIM, _assert_vector_dim_matches
+from memman.store.postgres import _store_schema, open_postgres_backend
 
 pytestmark = pytest.mark.postgres
 
@@ -25,7 +26,8 @@ def _pg_vec(seed: int, dim: int = EMBEDDING_DIM) -> list[float]:
 
 
 class _StubEmbedder:
-    """Second embedder bound to a different (provider, model, dim)."""
+    """Second embedder bound to a different (provider, model, dim).
+    """
 
     name = 'stub-target'
 
@@ -57,8 +59,8 @@ def _drop_schema(pg_dsn: str, store_name: str) -> None:
 
 
 def _seed(backend, n: int) -> list[str]:
-    """Insert n insights with current-dim embeddings; return ids."""
-    from memman.store.model import Insight
+    """Insert n insights with current-dim embeddings; return ids.
+    """
     ids = []
     with backend.transaction():
         for i in range(n):
@@ -88,7 +90,12 @@ def swap_backend(pg_dsn):
 
 
 def test_swap_completes_full_workflow(swap_backend, monkeypatch):
-    """run_swap walks all rows, cuts over, marks done."""
+    """run_swap walks all rows, cuts over, marks done.
+
+    Mutation: cutover leaving `embedding_pending` in place, or not
+        resizing `embedding` to the target dimension.
+    Oracle: `information_schema` column set and `atttypmod` of 384.
+    """
     backend, pg_dsn, store_name = swap_backend
     _seed(backend, 4)
     schema = _store_schema(store_name)
@@ -121,7 +128,12 @@ def test_swap_completes_full_workflow(swap_backend, monkeypatch):
 
 
 def test_swap_writes_fingerprint(swap_backend, monkeypatch):
-    """meta.embed_fingerprint reflects the target after cutover."""
+    """meta.embed_fingerprint reflects the target after cutover.
+
+    Mutation: `run_swap` skipping `write_fingerprint`, so the store
+        keeps claiming the old provider and dim.
+    Oracle: the `Fingerprint` built from the plan's hand-set values.
+    """
     backend, _pg_dsn, _store_name = swap_backend
     _seed(backend, 2)
     ec = _StubEmbedder(dim=256)
@@ -141,7 +153,12 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
 
 
 def test_swap_abort_drops_pending_column(swap_backend):
-    """abort_swap drops embedding_pending and clears swap meta."""
+    """abort_swap drops embedding_pending and clears swap meta.
+
+    Mutation: `abort_swap` clearing the meta but leaving the pending
+        column, or the reverse.
+    Oracle: `information_schema` column set and the empty swap state.
+    """
     backend, pg_dsn, store_name = swap_backend
     _seed(backend, 3)
     schema = _store_schema(store_name)
@@ -165,10 +182,10 @@ def test_swap_abort_drops_pending_column(swap_backend):
 def test_assert_dim_accepts_pending_during_swap(swap_backend):
     """_assert_vector_dim_matches accepts pending dim during backfill.
 
-    Without this, opening the store mid-swap with the new client would
-    crash on the dim assertion.
+    Mutation: the check comparing against `embedding` only, so opening
+        the store mid-swap with the new client raises.
+    Oracle: no raise for both the pending dim 256 and the live dim.
     """
-    from memman.store.postgres import _assert_vector_dim_matches
     backend, pg_dsn, store_name = swap_backend
     _seed(backend, 1)
     backend.swap_prepare(256)
@@ -179,7 +196,12 @@ def test_assert_dim_accepts_pending_during_swap(swap_backend):
 
 
 def test_swap_lock_blocks_concurrent_swap(swap_backend):
-    """The session-scoped embed_swap lock blocks a second swap."""
+    """The session-scoped embed_swap lock blocks a second swap.
+
+    Mutation: `swap_lock` using a per-connection key or a
+        non-exclusive lock, so both holders acquire it.
+    Oracle: the first holder sees True, the second sees False.
+    """
     backend, pg_dsn, store_name = swap_backend
     other = open_postgres_backend(store_name, pg_dsn)
     try:

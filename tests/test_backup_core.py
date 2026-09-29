@@ -1,4 +1,5 @@
-"""Unit tests for memman.backup core (snapshot, bundle, restore)."""
+"""Unit tests for memman.backup core (snapshot, bundle, restore).
+"""
 
 import json
 import os
@@ -6,11 +7,14 @@ import sqlite3
 import tarfile
 from pathlib import Path
 
+import memman.backup as backup_mod
 import pytest
 from memman import config
 from memman.backup import BACKUP_FORMAT_VERSION, build_bundle, restore
 from memman.backup import snapshot_sqlite
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
+from memman.queue import enqueue, queue_db, queue_db_path
+from memman.setup.scheduler import _write_env_keys
 from memman.store.db import read_active, store_dir, write_active
 from memman.store.sqlite import open_sqlite_backend
 from tests.conftest import make_insight
@@ -23,7 +27,8 @@ def _data_dir() -> str:
 
 
 def _seed_store(data_dir: str, store: str = 'default', n: int = 3) -> None:
-    """Materialize a sqlite store with a fingerprint and `n` insights."""
+    """Materialize a sqlite store with a fingerprint and `n` insights.
+    """
     backend = open_sqlite_backend(store, data_dir)
     write_fingerprint(backend, _FP)
     for i in range(n):
@@ -34,10 +39,15 @@ def _seed_store(data_dir: str, store: str = 'default', n: int = 3) -> None:
 
 
 class TestSnapshotSqlite:
-    """Online sqlite snapshot fidelity."""
+    """Online sqlite snapshot fidelity.
+    """
 
     def test_row_count_parity(self):
-        """The snapshot copy has the same insight count as the source."""
+        """The snapshot copy has the same insight count as the source.
+
+        Mutation: snapshot_sqlite copying an empty or partial database.
+        Oracle: row count of three inserted insights.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=3)
         dst = Path(data_dir) / 'snap.db'
@@ -48,7 +58,13 @@ class TestSnapshotSqlite:
         assert count == 3
 
     def test_succeeds_with_open_writer_connection(self):
-        """Snapshot works while a live backend connection stays open."""
+        """Snapshot works while a live backend connection stays open.
+
+        Mutation: opening the source read-write, or failing while a writer
+            holds the db.
+        Oracle: the row inserted through the still-open backend appears in the
+            copy.
+        """
         data_dir = _data_dir()
         backend = open_sqlite_backend('default', data_dir)
         write_fingerprint(backend, _FP)
@@ -64,10 +80,17 @@ class TestSnapshotSqlite:
 
 
 class TestBuildBundle:
-    """Bundle assembly: atomicity, contents, secret exclusion."""
+    """Bundle assembly: atomicity, contents, secret exclusion.
+    """
 
     def test_atomic_and_complete(self, tmp_path):
-        """A successful bundle leaves no staging and contains every member."""
+        """A successful bundle leaves no staging and holds every member.
+
+        Mutation: build_bundle leaving files in .memman-incoming, omitting a
+            member, or copying the -wal/-shm side files.
+        Oracle: member names read back from the tar, and an empty staging
+            directory.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=2)
         target = tmp_path / 'archive'
@@ -84,7 +107,13 @@ class TestBuildBundle:
         assert not any(n.endswith(('-wal', '-shm')) for n in names)
 
     def test_secret_keys_excluded(self, tmp_path, env_file):
-        """env.nonsecret keeps per-store backend but strips every secret."""
+        """env.nonsecret keeps per-store backend but strips every secret.
+
+        Mutation: is_secret passing a per-store DSN or the default DSN into
+            env.nonsecret.
+        Oracle: absent secret keys and the present sqlite backend key in the
+            env text.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 's1', n=1)
         env_file('MEMMAN_BACKEND_s1', 'sqlite')
@@ -101,9 +130,13 @@ class TestBuildBundle:
         assert 'MEMMAN_VOYAGE_API_KEY' not in env_text
 
     def test_partial_store_failure_does_not_abort(self, tmp_path, monkeypatch):
-        """A snapshot failure on one store marks it failed; bundle still completes."""
-        import memman.backup as backup_mod
+        """A failing store snapshot is marked failed; the bundle completes.
 
+        Mutation: the per-store except clause removed, so one snapshot error
+            aborts the bundle.
+        Oracle: a stub snapshot raising for one store; the other store status
+            is ok.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'good', n=2)
         _seed_store(data_dir, 'bad', n=1)
@@ -123,11 +156,13 @@ class TestBuildBundle:
         assert Path(result['bundle']).exists()
 
     def test_queue_captured_and_restored(self, tmp_path):
-        """Pending queue rows are snapshotted into the bundle and restored."""
-        import sqlite3 as _sq
+        """Pending queue rows are snapshotted into the bundle and restored.
 
-        from memman.queue import enqueue, queue_db, queue_db_path
-
+        Mutation: skipping queue.db in the bundle, or restore not copying it
+            back.
+        Oracle: pending count of one in the manifest and in the restored queue
+            table.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         with queue_db(data_dir) as conn:
@@ -142,17 +177,19 @@ class TestBuildBundle:
         fresh = str(tmp_path / 'fresh_q')
         res = restore(result['bundle'], fresh)
         assert res['queue_restored'] is True
-        conn = _sq.connect(queue_db_path(fresh))
+        conn = sqlite3.connect(queue_db_path(fresh))
         pending = conn.execute(
             "select count(*) from queue where status = 'pending'").fetchone()[0]
         conn.close()
         assert pending == 1
 
     def test_queue_snapshotted_before_stores(self, tmp_path, monkeypatch):
-        """queue.db is copied before any store DB (the loss-safety ordering)."""
-        import memman.backup as backup_mod
-        from memman.queue import enqueue, queue_db
+        """queue.db is copied before any store db, for loss safety.
 
+        Mutation: moving the queue copy after the store loop, so a done row
+            could outrun its insight.
+        Oracle: copy order recorded by a spy on _online_copy.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         with queue_db(data_dir) as conn:
@@ -170,7 +207,12 @@ class TestBuildBundle:
         assert 'memman.db' in order[1:]
 
     def test_host_local_backup_keys_excluded(self, tmp_path, env_file):
-        """BACKUP_CRON/TARGET/KEEP are host-local and stay out of the bundle."""
+        """BACKUP_CRON, TARGET and KEEP are host-local and stay out of the bundle.
+
+        Mutation: _HOST_LOCAL_KEYS losing a key, so a restore adopts the source
+            host schedule.
+        Oracle: absent key names in env.nonsecret text.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         env_file('MEMMAN_BACKUP_CRON', '0 3 * * *')
@@ -184,7 +226,12 @@ class TestBuildBundle:
         assert 'MEMMAN_BACKUP_KEEP' not in env_text
 
     def test_manifest_records_parseable_fingerprint(self, tmp_path):
-        """The manifest's per-store fingerprint parses back to a Fingerprint."""
+        """The manifest's per-store fingerprint parses back to a Fingerprint.
+
+        Mutation: recording no fingerprint, or a string Fingerprint.from_json
+            rejects.
+        Oracle: the fingerprint written by the seed helper, dim 512.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         target = tmp_path / 'archive_fp'
@@ -197,10 +244,16 @@ class TestBuildBundle:
 
 
 class TestRestore:
-    """Restore rebuilds stores + config and reports secrets to re-enter."""
+    """Restore rebuilds stores + config and reports secrets to re-enter.
+    """
 
     def test_round_trip_into_fresh_dir(self, tmp_path):
-        """Restoring into an empty dir recreates the store and active pointer."""
+        """Restoring into an empty dir recreates the store and active pointer.
+
+        Mutation: restore skipping the db copy or the write_active call.
+        Oracle: row count of four and the active store name read from the fresh
+            dir.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=4)
         target = tmp_path / 'archive_rt'
@@ -252,7 +305,12 @@ class TestRestore:
         assert count == 4
 
     def test_reports_missing_secrets(self, tmp_path):
-        """A fresh restore lists secret keys the operator must re-enter."""
+        """A fresh restore lists secret keys the operator must re-enter.
+
+        Mutation: secret_keys_needed built from the bundle rather than the
+            target env.
+        Oracle: the voyage API key name, absent from the fresh target env.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         target = tmp_path / 'archive_sec2'
@@ -261,9 +319,12 @@ class TestRestore:
         assert config.VOYAGE_API_KEY in result['secret_keys_needed']
 
     def test_preserves_existing_host_secret(self, tmp_path):
-        """Restore merges non-secret config without clobbering host secrets."""
-        from memman.setup.scheduler import _write_env_keys
+        """Restore merges non-secret config without clobbering host secrets.
 
+        Mutation: restore writing the whole bundled env over the target, or
+            dropping a host key.
+        Oracle: the host secret value read back from the target env file.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         target = tmp_path / 'archive_keep'
@@ -276,9 +337,13 @@ class TestRestore:
         assert env[config.VOYAGE_API_KEY] == 'host-secret'
 
     def test_partial_failure_isolated(self, tmp_path, monkeypatch):
-        """A per-store restore failure is isolated; other stores still restore."""
-        import memman.backup as backup_mod
+        """A per-store restore failure is isolated; other stores restore.
 
+        Mutation: the per-store except clause removed, so one copy error aborts
+            the restore.
+        Oracle: a stub copy raising for one store; result lists restored and
+            failed.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'alpha', n=2)
         _seed_store(data_dir, 'beta', n=1)
@@ -297,7 +362,12 @@ class TestRestore:
         assert any(f['store'] == 'beta' for f in result['failed'])
 
     def test_reports_embed_mismatch(self, tmp_path, env_file):
-        """A store whose fingerprint differs from the bundled embed model is flagged."""
+        """A store whose fingerprint differs from the host embed model is flagged.
+
+        Mutation: the comparison of fingerprint model to host model dropped.
+        Oracle: host env set to a model other than the seeded fingerprint
+            model.
+        """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         env_file('MEMMAN_VOYAGE_EMBED_MODEL', 'voyage-3-large')
@@ -373,7 +443,12 @@ class TestRestore:
         restore(str(bundle), str(tmp_path / 'out_v8'))
 
     def test_rejects_unknown_format_version(self, tmp_path):
-        """A bundle with a newer format_version is refused."""
+        """A bundle with a newer format_version is refused.
+
+        Mutation: the format_version check dropped, so a future bundle restores
+            as current.
+        Oracle: hand-built manifest with format_version 999.
+        """
         staging = tmp_path / 'staging'
         staging.mkdir()
         (staging / 'manifest.json').write_text(json.dumps({

@@ -9,6 +9,8 @@ is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
 EnvironmentFile (systemd) or a wrapper script (launchd).
 """
 
+import fcntl
+import logging
 import os
 import platform
 import re
@@ -44,7 +46,8 @@ VALID_DEBUG_STATES = (DEBUG_ON, DEBUG_OFF)
 
 
 def _state_file_path() -> Path:
-    """Return ~/.memman/scheduler.state. Per-host; never synced."""
+    """Return ~/.memman/scheduler.state. Per-host; never synced.
+    """
     return Path.home() / '.memman' / STATE_FILENAME
 
 
@@ -66,66 +69,75 @@ def read_state() -> str:
     path = _state_file_path()
     try:
         value = path.read_text().strip()
-    except (OSError, FileNotFoundError):
+    except OSError:
         return STATE_STOPPED
     return STATE_STARTED if value == STATE_STARTED else STATE_STOPPED
 
 
 def write_state(state: str) -> None:
-    """Atomically persist the scheduler intent state."""
+    """Atomically persist the scheduler intent state.
+    """
     if state not in {STATE_STARTED, STATE_STOPPED}:
         raise ValueError(f'invalid scheduler state {state!r}')
     atomic_write_secure(_state_file_path(), state + '\n')
 
 
 def clear_state() -> None:
-    """Remove the state file if present (used on uninstall)."""
+    """Remove the state file if present (used on uninstall).
+    """
     path = _state_file_path()
     if path.exists():
         path.unlink()
 
 
 def _backup_state_path() -> Path:
-    """Return ~/.memman/backup.state. Per-host; never synced."""
+    """Return ~/.memman/backup.state. Per-host; never synced.
+    """
     return Path.home() / '.memman' / BACKUP_STATE_FILENAME
 
 
 def read_backup_state() -> str | None:
-    """Return the last-fired minute key ('YYYY-MM-DDTHH:MM') or None."""
+    """Return the last-fired minute key ('YYYY-MM-DDTHH:MM') or None.
+    """
     try:
         return _backup_state_path().read_text().strip() or None
-    except (OSError, FileNotFoundError):
+    except OSError:
         return None
 
 
 def write_backup_state(minute_key: str) -> None:
-    """Persist the last-fired minute key for the serve-loop backup guard."""
+    """Persist the last-fired minute key for the serve-loop backup guard.
+    """
     atomic_write_secure(_backup_state_path(), minute_key + '\n')
 
 
 def clear_backup_state() -> None:
-    """Remove the backup-state file if present (used on uninstall)."""
+    """Remove the backup-state file if present (used on uninstall).
+    """
     path = _backup_state_path()
     if path.exists():
         path.unlink()
 
 
 def _serve_interval_path() -> Path:
-    """Return ~/.memman/scheduler.serve_interval. Per-host; never synced."""
+    """Return ~/.memman/scheduler.serve_interval. Per-host; never synced.
+    """
     return Path.home() / '.memman' / SERVE_INTERVAL_FILENAME
 
 
 def write_serve_interval(seconds: int) -> None:
-    """Persist the active serve loop's interval for status/doctor reads."""
+    """Persist the active serve loop's interval for status/doctor reads.
+    """
     atomic_write_secure(_serve_interval_path(), f'{int(seconds)}\n')
 
 
 def read_serve_interval() -> int | None:
-    """Read the persisted serve interval, or None if absent/unreadable."""
+    """Read the persisted serve interval, or None if absent/unreadable.
+    """
     path = _serve_interval_path()
     try:
         raw = path.read_text().strip()
-    except (OSError, FileNotFoundError):
+    except OSError:
         return None
     try:
         return int(raw)
@@ -134,50 +146,57 @@ def read_serve_interval() -> int | None:
 
 
 def clear_serve_interval() -> None:
-    """Remove the serve interval file if present."""
+    """Remove the serve interval file if present.
+    """
     path = _serve_interval_path()
     if path.exists():
         path.unlink()
 
 
 def _debug_state_file_path() -> Path:
-    """Return ~/.memman/debug.state. Per-host; never synced."""
+    """Return ~/.memman/debug.state. Per-host; never synced.
+    """
     return Path.home() / '.memman' / DEBUG_STATE_FILENAME
 
 
 def read_debug_state() -> str:
-    """Read the persistent debug-trace state. Missing file -> 'off'."""
+    """Read the persistent debug-trace state. Missing file -> 'off'.
+    """
     path = _debug_state_file_path()
     try:
         value = path.read_text().strip()
-    except (OSError, FileNotFoundError):
+    except OSError:
         return DEBUG_OFF
     return value if value in VALID_DEBUG_STATES else DEBUG_OFF
 
 
 def write_debug_state(state: str) -> None:
-    """Atomically persist the debug-trace state."""
+    """Atomically persist the debug-trace state.
+    """
     if state not in VALID_DEBUG_STATES:
         raise ValueError(f'invalid debug state {state!r}')
     atomic_write_secure(_debug_state_file_path(), state + '\n')
 
 
 def clear_debug_state() -> None:
-    """Remove the debug-state file (used on uninstall)."""
+    """Remove the debug-state file (used on uninstall).
+    """
     path = _debug_state_file_path()
     if path.exists():
         path.unlink()
 
 
 def set_debug(on: bool) -> list[str]:
-    """Toggle the persistent debug-trace flag in ~/.memman/debug.state."""
+    """Toggle the persistent debug-trace flag in ~/.memman/debug.state.
+    """
     value = DEBUG_ON if on else DEBUG_OFF
     write_debug_state(value)
     return [f'wrote {_debug_state_file_path()} = {value} (mode 600, atomic)']
 
 
 def get_debug() -> bool:
-    """Return True if ~/.memman/debug.state says 'on'."""
+    """Return True if ~/.memman/debug.state says 'on'.
+    """
     return read_debug_state() == DEBUG_ON
 
 
@@ -190,9 +209,17 @@ def detect_scheduler() -> str:
     2. macOS -> 'launchd'.
     3. Linux with systemctl + /run/systemd/system -> 'systemd'.
 
-    Raises `RuntimeError` on hosts that match none of the above. Set
-    `MEMMAN_SCHEDULER_KIND=serve` and run `memman scheduler serve`, or
-    install systemd/launchd integration.
+    Returns
+    -------
+    str
+        The scheduler kind.
+
+    Raises
+    ------
+    RuntimeError
+        The host matches none of the above. Set
+        `MEMMAN_SCHEDULER_KIND=serve` and run `memman scheduler serve`,
+        or install systemd/launchd integration.
     """
     if os.environ.get(config.SCHEDULER_KIND) == SCHEDULER_KIND_SERVE:
         return SCHEDULER_KIND_SERVE
@@ -212,19 +239,19 @@ def detect_scheduler() -> str:
 def memman_binary_path() -> str:
     """Return the absolute path to the running memman binary.
 
-    Resolves to the console-script sibling of the current Python
-    interpreter (`sys.executable`) so the installer self-identifies
-    correctly regardless of `$PATH` order. Falls back to
-    `shutil.which` only when the sibling does not exist (covers
-    layouts where the console script is not co-located with the
-    interpreter, e.g. system `python3` + `pip install --user`).
+    Returns
+    -------
+    str
+        The console-script sibling of the current Python interpreter
+        (`sys.executable`), so the result does not depend on `$PATH`
+        order when several installs coexist (pipx plus a Poetry venv).
+        Falls back to `shutil.which` when the sibling does not exist,
+        as with system `python3` plus `pip install --user`.
 
-    Without this, two side-by-side installs (a pipx production
-    install at `~/.local/bin/memman` plus a Poetry editable dev
-    install in a `~/.venv/...` venv) silently fight: whichever
-    venv comes first on PATH is what `memman install` writes into
-    the systemd unit's `ExecStart`, even when the operator invoked
-    install from the other one.
+    Raises
+    ------
+    RuntimeError
+        Neither the sibling nor `$PATH` holds a memman binary.
     """
     sibling = Path(sys.executable).with_name('memman')
     if sibling.exists() and os.access(sibling, os.X_OK):
@@ -245,10 +272,6 @@ def install(data_dir: str,
     with any existing keys) and installs the trigger that runs
     `memman scheduler drain` at the given interval.
 
-    `knobs` is the install-time snapshot of `INSTALLABLE_KEYS` values
-    collected from `os.environ` by the caller. Empty values must be
-    omitted by the caller.
-
     Trigger by environment:
       - systemd (Linux host) -> user timer + service
       - launchd (Mac host) -> launch agent plist
@@ -256,8 +279,21 @@ def install(data_dir: str,
         interval and expects the operator to run `memman scheduler serve`
         themselves (typically as PID 1 in a container).
 
-    Always ends with state file = STATE_STARTED so the install path
-    never leaves the user with installed-but-stopped state.
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the env file.
+    knobs : dict[str, str]
+        Install-time snapshot of `INSTALLABLE_KEYS` values from
+        `os.environ`. The caller omits empty values.
+    interval_seconds : int
+        Seconds between drains.
+
+    Returns
+    -------
+    dict
+        Platform result with `state` (always STATE_STARTED, so install
+        never leaves an installed-but-stopped state) and `env_actions`.
     """
     binary = memman_binary_path()
 
@@ -303,9 +339,19 @@ def _write_env_keys(updates: dict[str, str],
                     data_dir: str | None = None) -> list[str]:
     """Merge updates into <data_dir>/env, atomically, at mode 600.
 
-    Preserves any keys already in the file that are not in updates or
-    removes. Atomic: writes to a .tmp sibling at mode 600 then
-    os.replace() so a concurrent reader never sees a partial file.
+    Parameters
+    ----------
+    updates : dict[str, str]
+        Keys to set.
+    removes : set[str] | None
+        Keys to drop. Keys in neither `updates` nor `removes` are kept.
+    data_dir : str | None
+        Data directory holding the env file.
+
+    Returns
+    -------
+    list[str]
+        Human-readable actions taken.
     """
     path = config.env_file_path(data_dir)
     existing = config.parse_env_file(path)
@@ -324,13 +370,24 @@ def _write_env_keys_with_flock(
         data_dir: str | None = None) -> list[str]:
     """`_write_env_keys` guarded by an `fcntl.flock` on a sibling lock file.
 
-    Used by hot-path auto-create to serialize concurrent processes
-    racing to write the same per-store key. Single-machine only:
-    flock semantics on NFS or other shared filesystems are not
-    guaranteed and are out of scope.
-    """
-    import fcntl
+    Serializes concurrent processes racing to write the same per-store
+    key. Single-machine only: flock semantics on NFS or other shared
+    filesystems are not guaranteed.
 
+    Parameters
+    ----------
+    updates : dict[str, str]
+        Keys to set.
+    removes : set[str] | None
+        Keys to drop.
+    data_dir : str | None
+        Data directory holding the env file.
+
+    Returns
+    -------
+    list[str]
+        Human-readable actions taken.
+    """
     path = config.env_file_path(data_dir)
     lock_path = path.with_suffix(path.suffix + '.lock')
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -351,8 +408,16 @@ def uninstall(data_dir: str | None = None) -> dict:
     re-install resurrects model/provider preferences without the user
     having to re-export them.
 
-    `data_dir` locates the env file. When omitted, falls back to
-    `MEMMAN_DATA_DIR` then `~/.memman`.
+    Parameters
+    ----------
+    data_dir : str | None
+        Locates the env file. When omitted, falls back to
+        `MEMMAN_DATA_DIR` then `~/.memman`.
+
+    Returns
+    -------
+    dict
+        Platform result with `env_actions`.
     """
     clear_state()
     clear_debug_state()
@@ -373,7 +438,8 @@ def uninstall(data_dir: str | None = None) -> dict:
 
 
 def _strip_secrets_from_env_file(data_dir: str | None) -> list[str]:
-    """Remove secret keys from the env file, keep non-secret settings."""
+    """Remove secret keys from the env file, keep non-secret settings.
+    """
     path = config.env_file_path(data_dir)
     if not path.exists():
         return []
@@ -381,21 +447,45 @@ def _strip_secrets_from_env_file(data_dir: str | None) -> list[str]:
         {}, removes=set(config.SECRET_VARS), data_dir=data_dir)
 
 
+def _systemd_stop_disable(timer_name: str) -> None:
+    """Stop and disable a user systemd timer, ignoring failures.
+    """
+    # Separate stop and disable calls rather than `disable --now`: some
+    # systemd versions print a benign dbus error
+    # (`DisableUnitFilesWithFlagsAndInstallInfo`) from the combined
+    # path. Captured stderr keeps that chatter from the user.
+    subprocess.run(
+        ['systemctl', '--user', 'stop', timer_name],
+        check=False, capture_output=True)
+    subprocess.run(
+        ['systemctl', '--user', 'disable', timer_name],
+        check=False, capture_output=True)
+
+
+def _require_installed(unit_path: Path) -> None:
+    """Raise FileNotFoundError when no scheduler unit sits at `unit_path`.
+    """
+    if not unit_path.exists():
+        raise FileNotFoundError(
+            f'scheduler unit not installed at {unit_path};'
+            " run 'memman install' first")
+
+
 def start() -> dict:
     """Activate the scheduler trigger. Idempotent.
 
     systemd: `systemctl --user enable --now`. launchd: `launchctl load -w`.
     serve: no-op beyond writing the state file.
-    Raises FileNotFoundError if the trigger isn't installed (run
-    `memman install` first).
+
+    Raises
+    ------
+    FileNotFoundError
+        The trigger is not installed (run `memman install` first).
     """
     kind = detect_scheduler()
     if kind == 'systemd':
         timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
-        if not timer_path.exists():
-            raise FileNotFoundError(
-                f'scheduler unit not installed at {timer_path};'
-                " run 'memman install' first")
+        _require_installed(timer_path)
         subprocess.run(
             ['systemctl', '--user', 'enable', '--now',
              SYSTEMD_TIMER_NAME], check=False)
@@ -409,10 +499,7 @@ def start() -> dict:
             }
     if kind == 'launchd':
         plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-        if not plist_path.exists():
-            raise FileNotFoundError(
-                f'scheduler unit not installed at {plist_path};'
-                " run 'memman install' first")
+        _require_installed(plist_path)
         subprocess.run(
             ['launchctl', 'load', '-w', str(plist_path)], check=False)
         _verify_launchd_loaded()
@@ -443,16 +530,8 @@ def stop() -> dict:
     kind = detect_scheduler()
     if kind == 'systemd':
         timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
-        if not timer_path.exists():
-            raise FileNotFoundError(
-                f'scheduler unit not installed at {timer_path};'
-                " run 'memman install' first")
-        subprocess.run(
-            ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
-            check=False, capture_output=True)
-        subprocess.run(
-            ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
-            check=False, capture_output=True)
+        _require_installed(timer_path)
+        _systemd_stop_disable(SYSTEMD_TIMER_NAME)
         write_state(STATE_STOPPED)
         return {
             'platform': 'systemd',
@@ -463,10 +542,7 @@ def stop() -> dict:
             }
     if kind == 'launchd':
         plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-        if not plist_path.exists():
-            raise FileNotFoundError(
-                f'scheduler unit not installed at {plist_path};'
-                " run 'memman install' first")
+        _require_installed(plist_path)
         subprocess.run(
             ['launchctl', 'unload', '-w', str(plist_path)], check=False)
         write_state(STATE_STOPPED)
@@ -495,18 +571,16 @@ def trigger() -> dict:
     dict
         `platform` and the `actions` taken, plus a `note` reporting
         either that the run was dispatched or that one was already in
-        progress.
+        progress. The run may still be queued: poll the unit or read
+        `memman log worker` for the drain's outcome.
 
-    Notes
-    -----
-    - systemd starts the service with `systemctl --user start
-      --no-block` and launchd with `launchctl start`. Both return as
-      soon as the run is queued, so a caller that needs the drain's
-      outcome polls the unit or reads `memman log worker`. It cannot
-      read the outcome from this return.
-    - Serve mode has no on-demand trigger and raises: that loop drains
-      on its own cadence, and `scheduler serve --once` is the way to
-      run a single drain there.
+    Raises
+    ------
+    RuntimeError
+        Serve mode, which drains on its own cadence (`scheduler serve
+        --once` runs a single drain there), or a failed start command.
+    FileNotFoundError
+        The unit is not installed.
     """
     kind = detect_scheduler()
     if kind == SCHEDULER_KIND_SERVE:
@@ -516,10 +590,7 @@ def trigger() -> dict:
             ' Use `memman scheduler serve --once` to run a single drain.')
     if kind == 'systemd':
         service_path = _systemd_unit_dir() / SYSTEMD_SERVICE_NAME
-        if not service_path.exists():
-            raise FileNotFoundError(
-                f'scheduler unit not installed at {service_path};'
-                " run 'memman install' first")
+        _require_installed(service_path)
         cmd = ['systemctl', '--user', 'start', '--no-block',
                SYSTEMD_SERVICE_NAME]
         out = subprocess.run(
@@ -542,10 +613,7 @@ def trigger() -> dict:
             'note': 'dispatched; see `memman log worker`',
             }
     plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-    if not plist_path.exists():
-        raise FileNotFoundError(
-            f'scheduler unit not installed at {plist_path};'
-            " run 'memman install' first")
+    _require_installed(plist_path)
     cmd = ['launchctl', 'start', LAUNCHD_LABEL]
     out = subprocess.run(
         cmd, capture_output=True, text=True, check=False)
@@ -561,7 +629,8 @@ def trigger() -> dict:
 
 
 def _verify_systemd_active() -> None:
-    """Poll systemctl is-active; raise if the timer isn't active."""
+    """Poll systemctl is-active; raise if the timer isn't active.
+    """
     try:
         out = subprocess.run(
             ['systemctl', '--user', 'is-active', SYSTEMD_TIMER_NAME],
@@ -578,7 +647,8 @@ def _verify_systemd_active() -> None:
 
 
 def _verify_launchd_loaded() -> None:
-    """Check launchctl list; raise if the job isn't loaded."""
+    """Check launchctl list; raise if the job isn't loaded.
+    """
     try:
         out = subprocess.run(
             ['launchctl', 'list', LAUNCHD_LABEL],
@@ -593,22 +663,20 @@ def _verify_launchd_loaded() -> None:
 
 
 def _systemd_unit_dir() -> Path:
+    """Return the user systemd unit directory.
+    """
     return Path.home() / '.config' / 'systemd' / 'user'
 
 
 def _launchd_agent_dir() -> Path:
+    """Return the user launchd agent directory.
+    """
     return Path.home() / 'Library' / 'LaunchAgents'
 
 
 def _install_systemd(binary: str, data_dir: str,
                      interval_seconds: int) -> dict:
     """Write systemd timer+service units and enable the timer.
-
-    The post-write sequence is `daemon-reload` then `enable` then
-    `restart` (not `enable --now`) so re-installing over an
-    already-active unit picks up the new schedule. `enable --now` is a
-    no-op on a running timer and would leave the unit on the
-    pre-reload schedule.
     """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
@@ -644,6 +712,9 @@ def _install_systemd(binary: str, data_dir: str,
     timer_path.write_text(timer_contents)
     service_path.write_text(service_contents)
     actions = [f'wrote {timer_path}', f'wrote {service_path}']
+    # daemon-reload, enable, then restart rather than `enable --now`:
+    # `enable --now` is a no-op on a running timer, which would keep
+    # the pre-reload schedule when re-installing over an active unit.
     subprocess.run(
         ['systemctl', '--user', 'daemon-reload'], check=False)
     subprocess.run(
@@ -667,25 +738,16 @@ def _install_systemd(binary: str, data_dir: str,
 
 def _uninstall_systemd() -> dict:
     """Stop the timer, disable the unit, and remove unit files.
-
-    Splits stop+disable into separate calls instead of `disable --now`
-    because some systemd versions surface a benign-but-noisy
-    `DisableUnitFilesWithFlagsAndInstallInfo` dbus error from the
-    combined path; the split path is universally compatible. Stderr is
-    captured so transient dbus chatter never reaches the user.
     """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
     service_path = unit_dir / SYSTEMD_SERVICE_NAME
     actions = []
-    subprocess.run(
-        ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
-        check=False, capture_output=True)
-    actions.append('systemctl --user stop memman-enrich.timer')
-    subprocess.run(
-        ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
-        check=False, capture_output=True)
-    actions.append('systemctl --user disable memman-enrich.timer')
+    _systemd_stop_disable(SYSTEMD_TIMER_NAME)
+    actions.extend((
+        'systemctl --user stop memman-enrich.timer',
+        'systemctl --user disable memman-enrich.timer',
+        ))
     for p in (timer_path, service_path):
         if p.exists():
             p.unlink()
@@ -698,7 +760,8 @@ def _uninstall_systemd() -> dict:
 
 def _install_launchd(binary: str, data_dir: str,
                      interval_seconds: int) -> dict:
-    """Write launchd plist and load it."""
+    """Write launchd plist and load it.
+    """
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_LABEL}.plist'
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
@@ -738,7 +801,7 @@ def _install_launchd(binary: str, data_dir: str,
     agent_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path.parent.mkdir(parents=True, exist_ok=True)
     wrapper_path.write_text(wrapper_contents)
-    Path(wrapper_path).chmod(0o755)
+    wrapper_path.chmod(0o755)
     plist_path.write_text(plist_contents)
     actions = [
         f'wrote {wrapper_path} (mode 755)', f'wrote {plist_path}']
@@ -759,7 +822,8 @@ def _install_launchd(binary: str, data_dir: str,
 
 
 def _uninstall_launchd() -> dict:
-    """Unload plist and remove files."""
+    """Unload plist and remove files.
+    """
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_LABEL}.plist'
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
@@ -783,9 +847,19 @@ def install_backup(data_dir: str, cron_expr: str) -> dict:
     `StartCalendarInterval`, or a serve-mode note (the serve loop
     fires backups in-process from `MEMMAN_BACKUP_CRON`). Re-running
     rewrites the unit so a changed cron applies immediately.
+
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the env file.
+    cron_expr : str
+        Five-field cron expression.
+
+    Returns
+    -------
+    dict
+        Platform result with the actions taken.
     """
-    # deferred: memman.backup imports scheduler, so a top-level import
-    # of memman.backup.cron here would be a circular import.
     from memman.backup.cron import cron_to_launchd, cron_to_oncalendar
 
     binary = memman_binary_path()
@@ -804,7 +878,7 @@ def install_backup(data_dir: str, cron_expr: str) -> dict:
         }
 
 
-def uninstall_backup(data_dir: str | None = None) -> dict:
+def uninstall_backup() -> dict:
     """Remove the backup trigger and clear backup.state. Keeps env keys.
 
     Non-secret env keys (`MEMMAN_BACKUP_*`) are intentionally left in
@@ -823,7 +897,8 @@ def uninstall_backup(data_dir: str | None = None) -> dict:
 
 
 def _verify_systemd_backup_active() -> None:
-    """Poll systemctl is-active; raise if the backup timer isn't active."""
+    """Poll systemctl is-active; raise if the backup timer isn't active.
+    """
     try:
         out = subprocess.run(
             ['systemctl', '--user', 'is-active', SYSTEMD_BACKUP_TIMER_NAME],
@@ -840,7 +915,8 @@ def _verify_systemd_backup_active() -> None:
 
 
 def _verify_launchd_backup_loaded() -> None:
-    """Check launchctl list; raise if the backup job isn't loaded."""
+    """Check launchctl list; raise if the backup job isn't loaded.
+    """
     try:
         out = subprocess.run(
             ['launchctl', 'list', LAUNCHD_BACKUP_LABEL],
@@ -914,19 +990,17 @@ def _install_systemd_backup(binary: str, data_dir: str,
 
 
 def _uninstall_systemd_backup() -> dict:
-    """Stop+disable the backup timer and remove its unit files."""
+    """Stop+disable the backup timer and remove its unit files.
+    """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_BACKUP_TIMER_NAME
     service_path = unit_dir / SYSTEMD_BACKUP_SERVICE_NAME
     actions = []
-    subprocess.run(
-        ['systemctl', '--user', 'stop', SYSTEMD_BACKUP_TIMER_NAME],
-        check=False, capture_output=True)
-    actions.append('systemctl --user stop memman-backup.timer')
-    subprocess.run(
-        ['systemctl', '--user', 'disable', SYSTEMD_BACKUP_TIMER_NAME],
-        check=False, capture_output=True)
-    actions.append('systemctl --user disable memman-backup.timer')
+    _systemd_stop_disable(SYSTEMD_BACKUP_TIMER_NAME)
+    actions.extend((
+        'systemctl --user stop memman-backup.timer',
+        'systemctl --user disable memman-backup.timer',
+        ))
     for p in (timer_path, service_path):
         if p.exists():
             p.unlink()
@@ -939,7 +1013,8 @@ def _uninstall_systemd_backup() -> dict:
 
 def _render_launchd_calendar(
         calendar: dict[str, int] | list[dict[str, int]]) -> str:
-    """Render a StartCalendarInterval dict or list of dicts into plist XML."""
+    """Render a StartCalendarInterval dict or list of dicts into plist XML.
+    """
     def _one(entry: dict) -> str:
         inner = ''.join(
             f'<key>{key}</key><integer>{value}</integer>'
@@ -1003,7 +1078,7 @@ def _install_launchd_backup(
     agent_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path.parent.mkdir(parents=True, exist_ok=True)
     wrapper_path.write_text(wrapper_contents)
-    Path(wrapper_path).chmod(0o755)
+    wrapper_path.chmod(0o755)
     plist_path.write_text(plist_contents)
     actions = [
         f'wrote {wrapper_path} (mode 755)', f'wrote {plist_path}']
@@ -1022,7 +1097,8 @@ def _install_launchd_backup(
 
 
 def _uninstall_launchd_backup() -> dict:
-    """Unload the backup plist and remove its files."""
+    """Unload the backup plist and remove its files.
+    """
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_BACKUP_LABEL}.plist'
     wrapper_path = (
@@ -1047,6 +1123,23 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
     (any value >= 0; 0 means continuous mode). The running serve loop
     reads its interval from the CLI flag, so the file write is
     advisory until the next `memman scheduler serve` restart.
+
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the env file.
+    new_seconds : int
+        New interval in seconds.
+
+    Returns
+    -------
+    dict
+        Platform result with the actions taken.
+
+    Raises
+    ------
+    RuntimeError
+        `new_seconds` is negative, or under 60 on systemd or launchd.
     """
     if new_seconds < 0:
         raise RuntimeError(
@@ -1061,8 +1154,7 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
             ' `memman scheduler serve --interval N`.')
     if kind == SCHEDULER_KIND_SERVE and (
             _systemd_is_enabled() or _launchd_is_loaded()):
-        import logging as _logging
-        _logging.getLogger('memman').warning(
+        logging.getLogger('memman').warning(
             'MEMMAN_SCHEDULER_KIND=serve is set but a systemd/launchd'
             ' unit is still active. Drains may run from both. Run'
             ' `memman uninstall` to remove the OS timer if you intend'
@@ -1071,12 +1163,7 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
         binary = memman_binary_path()
         result = _install_systemd(binary, data_dir, new_seconds)
         if prior_state == STATE_STOPPED:
-            subprocess.run(
-                ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
-                check=False, capture_output=True)
-            subprocess.run(
-                ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
-                check=False, capture_output=True)
+            _systemd_stop_disable(SYSTEMD_TIMER_NAME)
             result['actions'].append(
                 'systemctl --user stop+disable memman-enrich.timer'
                 ' (restored prior stopped state)')
@@ -1112,7 +1199,8 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
 
 
 def _systemd_is_enabled() -> bool:
-    """True if the systemd timer is currently enabled."""
+    """True if the systemd timer is currently enabled.
+    """
     try:
         out = subprocess.run(
             ['systemctl', '--user', 'is-enabled', SYSTEMD_TIMER_NAME],
@@ -1123,7 +1211,8 @@ def _systemd_is_enabled() -> bool:
 
 
 def _launchd_is_loaded() -> bool:
-    """True if the launchd agent is currently loaded."""
+    """True if the launchd agent is currently loaded.
+    """
     try:
         out = subprocess.run(
             ['launchctl', 'list', LAUNCHD_LABEL],
@@ -1134,7 +1223,8 @@ def _launchd_is_loaded() -> bool:
 
 
 def _parse_interval_from_systemd_timer(path: Path) -> int | None:
-    """Extract OnUnitActiveSec from the systemd timer file."""
+    """Extract OnUnitActiveSec from the systemd timer file.
+    """
     if not path.exists():
         return None
     for raw in path.read_text().splitlines():
@@ -1150,7 +1240,8 @@ def _parse_interval_from_systemd_timer(path: Path) -> int | None:
 
 
 def _parse_interval_from_launchd_plist(path: Path) -> int | None:
-    """Extract StartInterval from the launchd plist file."""
+    """Extract StartInterval from the launchd plist file.
+    """
     if not path.exists():
         return None
     text = path.read_text()
@@ -1162,7 +1253,8 @@ def _parse_interval_from_launchd_plist(path: Path) -> int | None:
 
 
 def _systemd_status() -> dict:
-    """Collect systemd timer status."""
+    """Collect systemd timer status.
+    """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
     service_path = unit_dir / SYSTEMD_SERVICE_NAME
@@ -1226,7 +1318,8 @@ def _parse_systemd_timestamp(raw: str) -> datetime | None:
 
 
 def _launchd_status() -> dict:
-    """Collect launchd agent status."""
+    """Collect launchd agent status.
+    """
     plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
     result = {
         'platform': 'launchd',
@@ -1265,20 +1358,23 @@ def _launchd_status() -> dict:
 def status() -> dict:
     """Return the scheduler's current status.
 
-    Fields:
-      - platform - 'systemd' | 'launchd' | 'serve'
-      - installed - True iff the trigger file/marker exists
-      - active - True iff the trigger is currently active (timer
-        running on systemd/launchd; STATE_STARTED for serve)
-      - next_run - best-effort next-fire timestamp (systemd/launchd only)
-      - interval_seconds - configured interval (read from
-        ~/.memman/scheduler.serve_interval for serve mode)
-      - state - persisted user intent ('started' | 'stopped')
+    Returns
+    -------
+    dict
+        Keys:
 
-    `state` is the pause/resume gate: `memman scheduler stop` flips it
-    to STOPPED; the serve loop polls it every iteration and exits when
-    stopped, while `_require_started` rejects writes in the same state.
-    `memman scheduler start` resumes both.
+        - platform - 'systemd' | 'launchd' | 'serve'
+        - installed - True iff the trigger file/marker exists
+        - active - True iff the trigger is currently active (timer
+          running on systemd/launchd; STATE_STARTED for serve)
+        - next_run - best-effort next-fire timestamp (systemd/launchd
+          only)
+        - interval_seconds - configured interval (read from
+          ~/.memman/scheduler.serve_interval for serve mode)
+        - state - persisted user intent ('started' | 'stopped'). It is
+          the pause/resume gate: `memman scheduler stop` sets STOPPED
+          and `memman scheduler start` sets STARTED. The serve loop
+          exits, and writes are rejected, while it reads STOPPED.
     """
     kind = detect_scheduler()
     if kind == 'systemd':

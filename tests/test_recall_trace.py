@@ -6,6 +6,8 @@ pin the hoist (the read can fall through to a file read on the
 synchronous hot path) and the id-based rerank movement metric.
 """
 
+import math
+
 from memman import trace
 from memman.search.recall import ANCHOR_TOP_K, run_recall
 from tests.conftest import make_insight
@@ -19,8 +21,8 @@ def _seed(backend, count=8, category='fact'):
 
 
 def _vec512(second):
-    """Unit vector [1, second, 0, ...]/norm at the mock dim (512)."""
-    import math
+    """Unit vector [1, second, 0, ...]/norm at the mock dim (512).
+    """
     n = math.sqrt(1.0 + second * second)
     v = [0.0] * 512
     v[0] = 1.0 / n

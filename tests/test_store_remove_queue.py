@@ -1,16 +1,18 @@
 """A failed store drop must not destroy the store's queued writes.
 
 `factory.drop_store` purges the store's queue rows so the worker
-stops retrying them against storage that is gone. Running that purge
-in a `finally` applied it to the failure case too: a drop that raised
--- an unreachable Postgres, a name the backend rejects -- left the
-store fully intact and its pending memories deleted.
+stops retrying them against storage that is gone. The purge runs only
+after a clean drop. A drop that raises -- an unreachable Postgres, a
+name the backend rejects -- leaves the store intact and its pending
+memories queued.
 """
 
+import memman.store.sqlite as sqlite_backend
 import pytest
+from memman import config
 from memman import queue as _queue
 from memman.store import factory
-from memman.store.errors import ConfigError
+from memman.store.errors import BackendError, ConfigError
 from tests.conftest import _set_env_file_value, invoke
 
 
@@ -20,7 +22,8 @@ def runner(mm_runner):
 
 
 def _queue_rows(data_dir, store):
-    """Count queue rows currently held for `store`."""
+    """Count queue rows currently held for `store`.
+    """
     with _queue.queue_db(data_dir) as conn:
         row = conn.execute(
             'select count(*) from queue where store = ?',
@@ -29,7 +32,8 @@ def _queue_rows(data_dir, store):
 
 
 def _enqueue(data_dir, store):
-    """Put one pending row on the queue for `store`."""
+    """Put one pending row on the queue for `store`.
+    """
     with _queue.queue_db(data_dir) as conn:
         _queue.enqueue(conn, store=store, content='pending memory')
 
@@ -42,8 +46,6 @@ def test_failed_drop_keeps_queue_rows(tmp_path, monkeypatch):
     Oracle: the row count before the failed drop equals the count
     after it.
     """
-    import memman.store.sqlite as sqlite_backend
-
     data_dir = str(tmp_path)
     (tmp_path / 'data' / 'shop').mkdir(parents=True)
     _enqueue(data_dir, 'shop')
@@ -120,8 +122,6 @@ def test_store_remove_reports_a_failed_drop_without_traceback(runner,
     either way and only the store name discriminates -- the seam's
     own message carries the refusal text but not the name.
     """
-    import memman.store.sqlite as sqlite_backend
-
     _, data_dir = runner
     invoke(runner, ['store', 'create', 'shop'])
 
@@ -149,9 +149,6 @@ def test_store_remove_keeps_env_keys_when_the_drop_fails(runner,
     unconditionally after it.
     Oracle: `MEMMAN_BACKEND_shop` still reads back after the failure.
     """
-    import memman.store.sqlite as sqlite_backend
-    from memman import config
-
     _, data_dir = runner
     invoke(runner, ['store', 'create', 'shop'])
     _set_env_file_value('MEMMAN_BACKEND_shop', 'sqlite')
@@ -172,7 +169,7 @@ def test_postgres_drop_translates_driver_errors():
 
     `store remove` catches `BackendError`; a raw `psycopg.Error`
     would sail past that handler and reach the operator as a
-    traceback, which is how an unreachable Postgres used to look.
+    traceback.
 
     Mutation: re-raising the driver error unchanged instead of
     wrapping it.
@@ -180,7 +177,6 @@ def test_postgres_drop_translates_driver_errors():
     closed port, plus `__cause__` preserving the driver error.
     """
     pytest.importorskip('psycopg')
-    from memman.store.errors import BackendError
     from memman.store.postgres import drop_postgres_store
 
     with pytest.raises(BackendError) as caught:

@@ -2,28 +2,15 @@
 
 Accumulates the provider-reported `usage` block of every completion
 attempt into a module-level ledger keyed by pipeline stage.
-`MemmanLLMClient.complete` records one entry per HTTP attempt --
-success, malformed, empty and error responses alike -- so the ledger
-measures what the endpoint was asked to do, not just what the
-pipeline kept: an empty body retried twice is three billed
-completions, and a success-only recorder books zero for two of them.
+`MemmanLLMClient.complete` records one entry per HTTP attempt
+(success, malformed, empty, or error), so an empty body retried twice
+books three billed completions.
 
 Notes
 -----
-- `calls` counts HTTP-200 attempts (billed completions); non-2xx
-  attempts land in `http_errors` instead, so a 429 storm retried
-  three times cannot inflate the billed-call signal 3x. Token
-  fields sum the provider-reported `usage` values from either kind
-  of attempt (an error body reporting usage was still billed).
-- An HTTP-200 response with no `usage` block increments
-  `missing_usage` and adds nothing to the token fields -- "provider
-  reported zero" and "provider reported nothing" must stay
-  distinguishable.
 - The ledger is never reset. Consumers take a `snapshot()` before a
   unit of work and diff with `delta()` after, so row-level and
-  drain-level readings coexist without clobbering each other.
-- `record` and `snapshot` hold the lock, so a caller running
-  completions on several threads still books each attempt whole.
+  drain-level readings coexist.
 """
 
 import threading
@@ -55,7 +42,9 @@ def record(stage: str, usage: dict | None, *,
     usage : dict | None
         The response body's `usage` block, or None when the provider
         reported nothing (counted in `missing_usage` for billed
-        attempts).
+        attempts, so "reported zero" and "reported nothing" stay
+        distinguishable). Token fields sum `usage` from either kind of
+        attempt, since an error body reporting usage was still billed.
     http_error : bool, default False
         True for a non-2xx attempt: booked as `http_errors`, not
         `calls`, and never as `missing_usage` -- an unbilled
@@ -86,7 +75,8 @@ def record(stage: str, usage: dict | None, *,
 
 
 def snapshot() -> dict[str, dict[str, int]]:
-    """Return a copy of the ledger for later diffing with `delta`."""
+    """Return a copy of the ledger for later diffing with `delta`.
+    """
     with _LOCK:
         return {s: dict(v) for s, v in _LEDGER.items()}
 

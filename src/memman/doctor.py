@@ -9,19 +9,32 @@ with an overall worst-status summary. Each per-store check takes a
 import logging
 import os
 import stat
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from memman.embed import PROVIDER_REQUIRED_KEYS
+from memman import config, extras
+from memman.embed import PROVIDER_REQUIRED_KEYS, get_client
+from memman.embed import registry as _ec_registry
+from memman.embed.fingerprint import stored_fingerprint
+from memman.exceptions import ConfigError
+from memman.llm import client as llm_client
 from memman.llm import usage as llm_usage
+from memman.pipeline.remember import compute_prompt_version
+from memman.queue import last_worker_run, queue_db
+from memman.queue import stats as queue_stats
+from memman.setup import scheduler as sch
 from memman.setup.settings import add_claude_hooks_selective, read_json_file
+from memman.store import factory
 from memman.store.backend import Backend
 
 logger = logging.getLogger('memman')
 
 
 def check_integrity(backend: Backend) -> dict[str, Any]:
-    """Run the backend's integrity probe."""
+    """Run the backend's integrity probe.
+    """
     result = backend.integrity_check()
     ok = bool(result.get('ok'))
     return {
@@ -115,8 +128,10 @@ def check_replacement_integrity(backend: Backend) -> dict[str, Any]:
 
 
 def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
-    """Verify all embeddings have the same size (byte length on SQLite,
-    pgvector dimension on Postgres).
+    """Fail when embeddings differ in size.
+
+    Size is the byte length on SQLite and the pgvector dimension on
+    Postgres.
     """
     dist = backend.nodes.embedding_size_distribution()
     sizes = {str(size): cnt for size, cnt in dist.items()}
@@ -140,33 +155,37 @@ _ORPHAN_ARTIFACTS = (
 
 
 def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
-    """Flag SQLite source files left behind on a Postgres-routed store.
+    """Warn about SQLite source files left on a Postgres-routed store.
 
     A successful `memman migrate <store>` archives the source
     `memman.db` (plus WAL/SHM) under
     `<data_dir>/archive/<store>/<YYYYMMDD>_<NN>/`. When the archive
-    step itself fails, the source is left in place instead, no
-    longer the source of truth since writes now go to Postgres, so
-    it reads as "stale" here until the operator archives or deletes
-    it by hand. Report each store where survivors remain.
+    step fails, the source stays in place until the operator archives
+    or deletes it by hand.
 
-    Iteration is per-store via `factory.list_stores`: only stores
-    whose resolved backend is `postgres` are scanned. The check is
-    a `warn` (not `fail`) because preserved-but-stale is a known
-    operator-driven state, not a corruption signal.
+    Parameters
+    ----------
+    data_dir : str
+        Data directory. Only stores whose resolved backend is
+        `postgres` are scanned.
+
+    Returns
+    -------
+    dict[str, Any]
+        `warn` with the surviving file names per store, else `pass`. A
+        leftover file is a known operator-driven state, so it never
+        fails.
     """
-    from memman.store.factory import list_stores, resolve_store_backend
-
     data_root = Path(data_dir) / 'data'
     if not data_root.is_dir():
         return {
             'name': 'stale_post_migrate_source', 'status': 'pass',
             'detail': {'stores': []},
             }
-    stores = list_stores(data_dir)
+    stores = factory.list_stores(data_dir)
     stale: dict[str, list[str]] = {}
     for store in stores:
-        if resolve_store_backend(store, data_dir) != 'postgres':
+        if factory.resolve_store_backend(store, data_dir) != 'postgres':
             continue
         store_path = data_root / store
         if not store_path.is_dir():
@@ -195,10 +214,8 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
 
 
 def check_queue_backlog(data_dir: str) -> dict[str, Any]:
-    """Report pending/failed counts and oldest-pending age."""
-    from memman.queue import queue_db
-    from memman.queue import stats as queue_stats
-
+    """Report pending/failed counts and oldest-pending age.
+    """
     with queue_db(data_dir) as conn:
         s = queue_stats(conn)
 
@@ -240,11 +257,9 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 def check_optional_extras() -> dict[str, Any]:
     """Report which `memman[extras]` install groups resolve at runtime.
 
-    Always passes; the result is informational. Lets users verify their
-    install matches their backend choice (e.g., backend=postgres
-    requires the `postgres` extra to be active).
+    Always passes. The `active` list shows whether the install matches
+    the backend choice (backend=postgres needs the `postgres` extra).
     """
-    from memman import extras
     active = extras.detect_active_extras()
     return {
         'name': 'optional_extras',
@@ -254,29 +269,27 @@ def check_optional_extras() -> dict[str, Any]:
 
 
 def check_env_completeness() -> dict[str, Any]:
-    """Verify ~/.memman/env contains every INSTALLABLE_KEYS entry.
+    """Warn when ~/.memman/env lacks an INSTALLABLE_KEYS entry.
 
-    Catches the upgrade case where a new release adds a key the user's
-    existing file lacks. Reports the missing keys so the user can run
-    `memman install` to repopulate.
+    Catches a new release that adds a key the existing file lacks. The
+    `fix` field tells the user to run `memman install`. Per-store
+    dispatch keys are `check_per_store_keys`' job.
 
-    Per-store dispatch is validated separately by `check_per_store_keys`;
-    this check covers global installable knobs only.
+    Returns
+    -------
+    dict[str, Any]
+        `warn` with the `missing` key names, else `pass`.
 
     Notes
     -----
     - A provider key counts as missing only when a configured provider
       reads it: the embed provider's own keys, and the Voyage key
-      whenever reranking is on for any store -- Voyage is the one
-      shipped reranker, so there is no provider switch to read. The
-      LLM key is never flagged, since a loopback endpoint needs none.
+      whenever reranking is on for any store. The LLM key is never
+      flagged, since a loopback endpoint needs none.
     - Reranking is on for a store as recall reads it: the store's
       `MEMMAN_RERANK_ENABLED_<store>` when set, else the global
-      `MEMMAN_RERANK_ENABLED`, which counts as on when unset or
-      empty.
+      `MEMMAN_RERANK_ENABLED`, which counts as on when unset or empty.
     """
-    from memman import config
-
     path = config.env_file_path()
     parsed = config.parse_env_file(path)
 
@@ -329,37 +342,35 @@ def check_env_completeness() -> dict[str, Any]:
         }
 
 
-from memman.store.factory import known_backends as _known_backends
-
-
 def check_per_store_keys(data_dir: str) -> dict[str, Any]:
     """Validate per-store backend dispatch keys for every known store.
 
-    Iteration set is the union of (a) every store enumerated by
-    `list_stores` and (b) every store declared in the env file via a
-    `MEMMAN_BACKEND_<store>` key. The union surfaces declared-but-not-
-    yet-on-disk stores (the operator wrote the routing key but never
-    ran `store create`).
+    The stores checked are those `list_stores` finds plus those the env
+    file declares with a `MEMMAN_BACKEND_<store>` key, so a store routed
+    but not yet created still appears.
 
-    For each store:
-    - resolve `MEMMAN_BACKEND_<store>` (per-store key first, then
-      `MEMMAN_DEFAULT_BACKEND`, then 'sqlite');
-    - fail when the resolved value is not a registered backend;
-    - fail when the resolved kind is `postgres` and no DSN is reachable
-      via `MEMMAN_POSTGRES_DSN_<store>` or `MEMMAN_DEFAULT_POSTGRES_DSN`.
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the env file.
 
-    The DSN-drift warn (per-store vs default) is intentionally not
-    raised: per-store routing pins a store to a specific DSN, so
-    differing values are the canonical state, not a typo.
+    Returns
+    -------
+    dict[str, Any]
+        `fail` when a store resolves to an unregistered backend
+        (per-store key, then `MEMMAN_DEFAULT_BACKEND`, then `sqlite`),
+        or to `postgres` with no DSN in `MEMMAN_POSTGRES_DSN_<store>` or
+        `MEMMAN_DEFAULT_POSTGRES_DSN`. Else `pass`, including with no
+        stores.
 
-    Empty data dirs (no stores at all) pass with an empty list.
+    Notes
+    -----
+    - A per-store DSN that differs from the default never warns:
+      per-store routing pins a store to its own DSN.
     """
-    from memman import config
-    from memman.store.factory import list_stores
-
     file_values = config.parse_env_file(config.env_file_path(data_dir))
     try:
-        on_disk = list_stores(data_dir)
+        on_disk = factory.list_stores(data_dir)
     except Exception as exc:
         return {
             'name': 'per_store_keys',
@@ -374,14 +385,7 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
         }
     stores = sorted(set(on_disk) | declared)
 
-    rank = {'pass': 0, 'warn': 1, 'fail': 2}
-    worst = 'pass'
-
-    def _bump(level: str) -> None:
-        nonlocal worst
-        if rank[level] > rank[worst]:
-            worst = level
-
+    registered = factory.known_backends()
     entries: list[dict[str, Any]] = []
 
     for store in stores:
@@ -401,27 +405,24 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             'error': None,
             'warning': None,
             }
-        registered = _known_backends()
         if kind not in registered:
             entry['error'] = (
                 f'unknown backend {kind!r}; registered:'
                 f' {", ".join(sorted(registered))}')
-            _bump('fail')
         elif kind == 'postgres':
-            dsn_key = config.env_key_for('postgres', 'DSN', store)
-            per_store_dsn = file_values.get(dsn_key)
-            default_dsn = file_values.get(config.DEFAULT_PG_DSN)
-            dsn = per_store_dsn or default_dsn
-            if not dsn:
+            dsn_key = config.POSTGRES_DSN_FOR(store)
+            if not (file_values.get(dsn_key)
+                    or file_values.get(config.DEFAULT_PG_DSN)):
                 entry['error'] = (
-                    f'no DSN: set {config.env_key_for("postgres", "DSN", store)} or'
+                    f'no DSN: set {dsn_key} or'
                     f' {config.DEFAULT_PG_DSN}')
-                _bump('fail')
         entries.append(entry)
 
     return {
         'name': 'per_store_keys',
-        'status': worst,
+        'status': (
+            'fail' if any(entry['error'] for entry in entries)
+            else 'pass'),
         'detail': {'stores': entries},
         }
 
@@ -429,8 +430,9 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
 def check_env_permissions() -> dict[str, Any]:
     """Verify ~/.memman/env is 0600 and ~/.memman is 0700.
 
-    Relaxed to a PASS when the files don't exist (fresh install, no
-    keys yet - that's a separate problem surfaced by other tools).
+    A missing directory or env file passes, since a fresh install has
+    no keys yet. A missing env file still warns when the directory is
+    open to group or other.
     """
     home = Path.home()
     mm_dir = home / '.memman'
@@ -463,7 +465,7 @@ def check_env_permissions() -> dict[str, Any]:
     return {'name': 'env_permissions', 'status': status, 'detail': detail}
 
 
-def _memman_hook_pairs(data: dict) -> set[tuple[str, str, str]]:
+def _memman_hook_pairs(data: dict[str, Any]) -> set[tuple[str, str, str]]:
     """Collect one triple per memman-owned hook command.
 
     Parameters
@@ -509,7 +511,11 @@ def check_claude_hooks() -> dict[str, Any]:
     -------
     dict[str, Any]
         `name`, `status`, and a `detail` carrying the `missing`,
-        `extra`, and `dangling` command lists.
+        `extra`, and `dangling` command lists. Status is `fail` when a
+        registered command path no longer resolves (the shell exits
+        127 at every matching event), `warn` when a registration only
+        differs (`memman install` repairs it), else `pass`. A machine
+        with no Claude Code settings passes.
 
     Notes
     -----
@@ -517,12 +523,6 @@ def check_claude_hooks() -> dict[str, Any]:
       rewrites `settings.json`, so a release that adds, drops, or
       re-matches a hook leaves the old registration live until
       `memman install` runs again.
-    - A command path that no longer resolves fails: Claude Code runs a
-      missing script and the shell exits 127 at every matching event.
-      A registration that merely differs warns, since `memman install`
-      repairs it.
-    - No Claude Code settings at all passes; a machine without Claude
-      Code installed registers nothing here.
     """
     config_dir = Path.home() / '.claude'
     settings_path = config_dir / 'settings.json'
@@ -535,7 +535,7 @@ def check_claude_hooks() -> dict[str, Any]:
             'detail': {**detail, 'reason': 'no Claude Code settings'},
             }
 
-    expected_data: dict = {}
+    expected_data: dict[str, Any] = {}
     add_claude_hooks_selective(
         expected_data, str(config_dir / 'hooks' / 'memman'),
         remind=True, compact=True, task_recall=True, exit_plan=True)
@@ -568,12 +568,10 @@ def check_claude_hooks() -> dict[str, Any]:
 
 
 def check_scheduler_state() -> dict[str, Any]:
-    """Compare persisted scheduler state against OS install/active truth.
+    """Warn when the scheduler unit is not installed; report its state.
     """
-    from memman.setup.scheduler import status as sch_status
-
     try:
-        s = sch_status()
+        s = sch.status()
     except Exception as exc:
         return {
             'name': 'scheduler_state',
@@ -601,20 +599,23 @@ def check_scheduler_state() -> dict[str, Any]:
 def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
     """Verify the worker fired within max(3 x interval, 180s).
 
-    Cross-references scheduler state: only fails when the scheduler is
-    installed AND active but no recent worker_runs row exists. Empty
-    drains rate-limit the heartbeat write to once per 60s wall, so a
-    floor of 180s (3 x 60s) avoids false fails at sub-minute intervals
-    (interval=0, 1, 10, etc. - serve mode only). At intervals >= 60s
-    the 3x multiplier dominates: two consecutive misses indicate a
-    real problem; one-miss tolerance handles transient delays.
-    """
-    from memman.queue import last_worker_run, queue_db
-    from memman.setup.scheduler import STATE_STARTED
-    from memman.setup.scheduler import status as sch_status
+    Fails only when the scheduler is installed and started but the last
+    `worker_runs` row is older than that limit (or absent, or carries
+    an error). Warns past max(2 x interval, 120s).
 
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the queue database.
+
+    Returns
+    -------
+    dict[str, Any]
+        `name`, `status`, and a `detail` carrying the last run's age and
+        counts. A scheduler that is not installed and started passes.
+    """
     try:
-        s = sch_status()
+        s = sch.status()
         interval = s.get('interval_seconds')
         state = s.get('state')
         installed = s.get('installed', False)
@@ -628,7 +629,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
         installed = False
         platform = ''
 
-    if not installed or state != STATE_STARTED:
+    if not installed or state != sch.STATE_STARTED:
         return {
             'name': 'scheduler_heartbeat',
             'status': 'pass',
@@ -656,8 +657,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
                 },
             }
 
-    import time as _time
-    age = int(_time.time()) - int(last['started_at'])
+    age = int(time.time()) - int(last['started_at'])
     detail = {
         'started_at': last['started_at'],
         'age_seconds': age,
@@ -669,6 +669,11 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
         'platform': platform,
         }
 
+    # Notes:
+    # - Empty drains write the heartbeat at most once per 60s, so the
+    #   180s floor avoids false fails at sub-minute serve intervals.
+    # - From 60s up, the 3x multiplier dominates: it tolerates one
+    #   missed run and fails on two.
     threshold_fail = (
         max(3 * interval, 180) if interval is not None else 180)
     threshold_warn = (
@@ -695,22 +700,27 @@ DRAIN_HEARTBEAT_STALE_SECONDS = 5 * 60
 
 
 def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
-    """Warn when any in-progress drain run is past 5 minutes without a beat.
+    """Warn when an in-progress drain run has no heartbeat for 5 minutes.
 
-    Iterates `list_stores(data_dir)` and queries each Postgres-backed
-    store's per-store `worker_runs` table for rows with `ended_at IS
-    NULL` whose `last_heartbeat_at` is older than 5 minutes. SQLite-
-    backed stores return an empty list (single-process; drain hangs
-    are visible at the foreground prompt). The aggregate status warns
-    when any store has stale runs.
+    Scans each Postgres-backed store's `worker_runs` rows with
+    `ended_at IS NULL` and a `last_heartbeat_at` older than
+    `DRAIN_HEARTBEAT_STALE_SECONDS`. SQLite stores are skipped: a hung
+    drain there shows at the foreground prompt. A store that cannot be
+    read fails the check.
+
+    Parameters
+    ----------
+    data_dir : str
+        Data directory whose stores are scanned.
+
+    Returns
+    -------
+    dict[str, Any]
+        `fail` when a store cannot be read, `warn` when a run is stale,
+        else `pass`. `detail` carries the stale runs and the threshold.
     """
-    from datetime import datetime, timezone
-
-    from memman.store.factory import list_stores, open_backend
-    from memman.store.factory import resolve_store_backend
-
     try:
-        stores = list_stores(data_dir)
+        stores = factory.list_stores(data_dir)
     except Exception as exc:
         return {
             'name': 'drain_heartbeat',
@@ -720,7 +730,7 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
 
     pg_stores = [
         s for s in stores
-        if resolve_store_backend(s, data_dir) == 'postgres']
+        if factory.resolve_store_backend(s, data_dir) == 'postgres']
     if not pg_stores:
         return {
             'name': 'drain_heartbeat',
@@ -737,7 +747,8 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
     failures: list[dict[str, str]] = []
     for store in pg_stores:
         try:
-            with open_backend(store, data_dir, read_only=True) as backend:
+            with factory.open_backend(
+                    store, data_dir, read_only=True) as backend:
                 runs = backend.recent_runs(limit=50)
         except Exception as exc:
             failures.append({
@@ -781,49 +792,43 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
 
 
 def check_llm_probe() -> dict[str, Any]:
-    """Probe the LLM endpoint with the cheapest possible call.
+    """Probe the LLM endpoint with one minimal call.
 
-    Verifies API key validity + endpoint reachability.
+    Passes when the key is valid and the endpoint returns text.
     """
-    import time as _time
-
     detail: dict[str, Any] = {
         'model': None,
         'elapsed_ms': None,
         'sample': None,
         'error': None,
         }
-    t0 = _time.monotonic()
+    t0 = time.monotonic()
     try:
-        from memman.exceptions import ConfigError
-        from memman.llm.client import get_llm_client
         try:
-            client = get_llm_client()
+            client = llm_client.get_llm_client()
         except ConfigError as exc:
             detail['error'] = str(exc)
-            detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+            detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
             return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
         out = client.complete(
             'Reply with exactly: ok', 'probe',
             stage=llm_usage.STAGE_PROBE)
         detail['model'] = client.model
         detail['sample'] = (out or '')[:60]
-        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
         if out:
             return {'name': 'llm_probe', 'status': 'pass', 'detail': detail}
         detail['error'] = 'empty response'
         return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
     except Exception as exc:
         detail['error'] = f'{type(exc).__name__}: {exc}'
-        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
         return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
 
 
 def check_embed_probe() -> dict[str, Any]:
-    """Probe the embedding endpoint with the cheapest possible call.
+    """Probe the embedding endpoint with one minimal call.
     """
-    import time as _time
-
     detail: dict[str, Any] = {
         'provider': None,
         'model': None,
@@ -831,41 +836,35 @@ def check_embed_probe() -> dict[str, Any]:
         'dim': None,
         'error': None,
         }
-    t0 = _time.monotonic()
+    t0 = time.monotonic()
     try:
-        from memman.embed import get_client
         ec = get_client()
         detail['provider'] = ec.name
         detail['model'] = ec.model
         if not ec.available():
             detail['error'] = ec.unavailable_message()
-            detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+            detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
             return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
         vec = ec.embed('probe')
         detail['dim'] = len(vec) if vec else 0
-        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
         if vec:
             return {'name': 'embed_probe', 'status': 'pass', 'detail': detail}
         detail['error'] = 'empty embedding'
         return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
     except Exception as exc:
         detail['error'] = f'{type(exc).__name__}: {exc}'
-        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        detail['elapsed_ms'] = int((time.monotonic() - t0) * 1000)
         return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
 
 
 def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
     """Report the store's stored fingerprint and credential availability.
 
-    Under per-store embedder sovereignty there is no env-active
-    fingerprint to compare against. The check reports the stored
-    `meta.embed_fingerprint` and verifies that credentials for that
-    fingerprint's provider are available; missing credentials produce
-    a fail because recall against this store cannot proceed.
+    Each store carries its own embedder, so no env-level fingerprint
+    exists to compare against. Missing credentials for the stored
+    provider fail the check, since recall on the store cannot proceed.
     """
-    from memman.embed import registry as _ec_registry
-    from memman.embed.fingerprint import stored_fingerprint
-
     detail: dict[str, Any] = {
         'stored': None,
         'credentials_available': None,
@@ -873,13 +872,6 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
         }
 
     stored = stored_fingerprint(backend)
-    if stored is not None:
-        detail['stored'] = {
-            'provider': stored.provider,
-            'model': stored.model,
-            'dim': stored.dim,
-            }
-
     if stored is None:
         if backend.nodes.count_active() == 0:
             return {
@@ -892,9 +884,14 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
 
+    detail['stored'] = {
+        'provider': stored.provider,
+        'model': stored.model,
+        'dim': stored.dim,
+        }
     ec = _ec_registry.get_for(stored.provider, stored.model)
     detail['credentials_available'] = ec.available()
-    if not ec.available():
+    if not detail['credentials_available']:
         detail['error'] = ec.unavailable_message()
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
@@ -907,9 +904,8 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
 def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
     """Warn when `embed_swap_*` meta keys persist on a non-swapping store.
 
-    Cutover and abort delete the swap meta keys. Any leftover key
-    indicates a regression in the cleanup path and is reported as a
-    warning so the operator can investigate.
+    Cutover and abort delete the swap meta keys, so a leftover key
+    points at a fault in that cleanup.
     """
     leftover = sorted(
         k for k in backend.meta.keys()  # noqa: SIM118
@@ -924,7 +920,7 @@ def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
 
 
 def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
-    """Single source of truth for the stale-row predicate.
+    """True when a stored prompt version has drifted from the active one.
 
     Parameters
     ----------
@@ -936,7 +932,7 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
     Returns
     -------
     bool
-        True when the row's key is present and has drifted.
+        True when the row's key is present and differs.
 
     Notes
     -----
@@ -952,14 +948,8 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
 
 
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
-    """Surface rows whose prompt_version no longer matches active.
-
-    Reads each row's `prompt_version` directly. No meta-key
-    fingerprint is maintained; the data already lives on each insight.
+    """Warn when rows carry a prompt_version that differs from the active one.
     """
-    from memman import config
-    from memman.pipeline.remember import compute_prompt_version
-
     detail: dict[str, Any] = {
         'active_prompt_version': None,
         'active_model': None,
@@ -973,7 +963,6 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
         return {
             'name': 'provenance_drift', 'status': 'fail',
             'detail': detail}
-    from memman.exceptions import ConfigError
     try:
         detail['active_model'] = config.require(config.LLM_MODEL)
     except ConfigError:
@@ -1013,8 +1002,19 @@ def run_all_checks(
         data_dir: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
-    Routes every check through the Backend Protocol so SQLite and
-    Postgres are both supported.
+    Parameters
+    ----------
+    backend : Backend
+        The open store.
+    data_dir : str | None
+        Data directory. When None, only the per-store checks run.
+
+    Returns
+    -------
+    dict[str, Any]
+        `status` is the worst check status (`pass`, `warn`, `fail`),
+        or `empty` with no checks when the store holds no active row
+        and `data_dir` is None. Also `total_active` and `checks`.
     """
     total = backend.nodes.count_active()
     checks = []

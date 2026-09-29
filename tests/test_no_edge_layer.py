@@ -8,34 +8,47 @@ rows name.
 
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
+from typing import Any, NoReturn
 
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.doctor import run_all_checks
 from memman.embed.fingerprint import bound_embedder
+from memman.maintenance import run_maintenance
 from memman.migrate import MigrateInsight, MigrationPayload
+from memman.pipeline import enrich
 from memman.pipeline.remember import run_remember
 from memman.queue import open_queue_db
 from memman.search import recall as recall_mod
 from memman.search.recall import ANCHOR_TOP_K, RERANK_SHORTLIST, run_recall
+from memman.session import active_store
+from memman.setup import wizard
+from memman.store import factory
+from memman.store.backend import Backend
+from memman.store.db import open_db
 from memman.store.factory import open_backend
+from memman.store.node import insert_insight
+from memman.store.sqlite import SqliteNodeStore
 from tests.conftest import _vec, invoke, make_insight, parse_remember
 from tests.conftest import set_created_at
 
 
-def _remember(runner, text):
-    """Store `text` verbatim and return its id."""
+def _remember(runner: tuple, text: str) -> str:
+    """Store `text` verbatim and return its id.
+    """
     res = invoke(runner, ['remember', text])
     assert res.exit_code == 0, res.output
     return parse_remember(res, runner)['id']
 
 
-def _table_names(backend):
-    """Every table name in the store, on either backend."""
+def _table_names(backend: Backend) -> set[str]:
+    """Every table name in the store, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query(
             "select name from sqlite_master where type = 'table'").fetchall()
@@ -47,8 +60,9 @@ def _table_names(backend):
         return {r[0] for r in cur.fetchall()}
 
 
-def _insight_columns(backend):
-    """Every column name of the insights table, on either backend."""
+def _insight_columns(backend: Backend) -> set[str]:
+    """Every column name of the insights table, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query('pragma table_info(insights)').fetchall()
         return {r[1] for r in rows}
@@ -130,7 +144,6 @@ def test_opening_a_store_writes_no_constants_hash(tmp_path):
         hash on a fresh store's first open.
     Oracle: the meta key read inside the same open.
     """
-    from memman.session import active_store
     with active_store(data_dir=str(tmp_path), store='default') as backend:
         assert backend.meta.get('constants_hash') is None
 
@@ -143,9 +156,7 @@ def test_a_drain_reads_no_whole_store_vectors(mm_runner, monkeypatch):
     Oracle: the stored row, with both whole-store readers patched to
         raise.
     """
-    from memman.store.sqlite import SqliteNodeStore
-
-    def boom(self):
+    def boom(self: SqliteNodeStore) -> NoReturn:
         raise AssertionError('whole-store vector read')
 
     monkeypatch.setattr(
@@ -200,16 +211,17 @@ def test_the_newest_row_scores_above_an_older_one_on_recency(backend):
 
 
 class _SpyingSession:
-    """Recall session proxy that records the vector channel's k."""
+    """Recall session proxy that records the vector channel's k.
+    """
 
-    def __init__(self, inner, calls):
+    def __init__(self, inner: Any, calls: dict[str, int]) -> None:
         self._inner = inner
         self._calls = calls
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    def vector_anchors(self, query_vec, **kwargs):
+    def vector_anchors(self, query_vec: Any, **kwargs: Any) -> Any:
         self._calls['vector_k'] = kwargs['k']
         return self._inner.vector_anchors(query_vec, **kwargs)
 
@@ -229,14 +241,15 @@ def test_the_vector_channel_alone_widens_to_the_rerank_shortlist(
     real_session = backend.recall_session
 
     @contextmanager
-    def spying_session():
+    def spying_session() -> Iterator[_SpyingSession]:
         with real_session() as session:
             yield _SpyingSession(session, calls)
 
     monkeypatch.setattr(backend, 'recall_session', spying_session)
     real_keyword = recall_mod.keyword_search
 
-    def spying_keyword(pool, query, limit, counts):
+    def spying_keyword(
+            pool: Any, query: str, limit: int, counts: Any) -> Any:
         calls['keyword_k'] = limit
         return real_keyword(pool, query, limit, counts)
 
@@ -419,7 +432,6 @@ def test_the_wizard_prints_no_surface_note(monkeypatch, tmp_path, capsys):
         set` rejects and a doctor check that does not exist.
     Oracle: the wizard's captured output.
     """
-    from memman.setup import wizard
     monkeypatch.setattr('sys.stdin.isatty', lambda: True)
 
     wizard.run_wizard(str(tmp_path / 'memman'), backend='sqlite')
@@ -435,8 +447,6 @@ def test_a_maintenance_pass_opens_no_untouched_store(mm_runner, monkeypatch):
     Oracle: a spy on `open_backend` across a pass with no touched
         store, over two stores on disk.
     """
-    from memman.maintenance import run_maintenance
-    from memman.store import factory
     _, data_dir = mm_runner
     _remember(mm_runner, 'first store row')
     assert invoke(mm_runner, [
@@ -444,7 +454,7 @@ def test_a_maintenance_pass_opens_no_untouched_store(mm_runner, monkeypatch):
     opened = []
     real_open = factory.open_backend
 
-    def spying_open(store, *args, **kwargs):
+    def spying_open(store: str, *args: Any, **kwargs: Any) -> Any:
         opened.append(store)
         return real_open(store, *args, **kwargs)
 
@@ -472,9 +482,6 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
         `enrich_attempted_at` set by the attempt, `enriched_at` left
         null.
     """
-    from memman.pipeline import enrich
-    from memman.store.db import open_db
-    from memman.store.node import insert_insight
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
     data_dir = str(tmp_path / 'memman')
     store_path = tmp_path / 'memman' / 'data' / 'default'
@@ -482,7 +489,7 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
     insert_insight(db, make_insight(id='fail-1', content='a row to rebuild'))
     db.close()
 
-    def failing_enrich(insight, client):
+    def failing_enrich(insight: Any, client: Any) -> NoReturn:
         raise RuntimeError('enrichment down')
 
     monkeypatch.setattr(enrich, 'enrich_with_llm', failing_enrich)

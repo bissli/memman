@@ -1,7 +1,9 @@
-"""CLI integration for `memman embed swap`."""
+"""CLI integration for `memman embed swap`.
+"""
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -10,6 +12,7 @@ from memman.cli import cli
 from memman.embed import PROVIDERS
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
+from memman.setup import scheduler as sched_mod
 from memman.store.db import open_db
 from memman.store.sqlite import SqliteBackend
 
@@ -61,8 +64,8 @@ def _seed(backend: SqliteBackend, n: int) -> None:
 
 @pytest.fixture
 def _scheduler_stopped(monkeypatch):
-    """Force scheduler state to STOPPED so swap CLI accepts the run."""
-    from memman.setup import scheduler as sched_mod
+    """Force scheduler state to STOPPED so the swap CLI accepts the run.
+    """
     monkeypatch.setattr(
         sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
 
@@ -92,7 +95,12 @@ def cli_env(
 
 
 def test_swap_command_completes(cli_env):
-    """Memman embed swap --to MODEL --provider PROV switches fingerprint.
+    """`embed swap --to MODEL --provider PROV` switches the fingerprint.
+
+    Mutation: the command dropping `--provider` or not writing the
+        target fingerprint, leaving the store on voyage.
+    Oracle: the JSON body's `state` and the target's hand-set model and
+        384 dimension.
     """
     runner = CliRunner()
     result = runner.invoke(
@@ -113,8 +121,12 @@ def test_swap_command_completes(cli_env):
 
 def test_swap_abort_clears_inflight(cli_env):
     """--abort drops embedding_pending and clears swap meta.
+
+    Mutation: `--abort` reporting success without calling `abort_swap`,
+        leaving `embed_swap_state` set.
+    Oracle: the reopened store's `embed_swap_state` meta is empty.
     """
-    db = open_db(str(__import__('pathlib').Path(cli_env) / 'data' / 'main'))
+    db = open_db(str(Path(cli_env) / 'data' / 'main'))
     backend = SqliteBackend(db)
     backend.swap_prepare(384)
     backend.meta.set('embed_swap_state', 'backfilling')
@@ -132,7 +144,7 @@ def test_swap_abort_clears_inflight(cli_env):
     body = json.loads(result.output)
     assert body['state'] == 'aborted'
 
-    db = open_db(str(__import__('pathlib').Path(cli_env) / 'data' / 'main'))
+    db = open_db(str(Path(cli_env) / 'data' / 'main'))
     backend = SqliteBackend(db)
     try:
         assert (backend.meta.get('embed_swap_state') or '') == ''
@@ -141,7 +153,12 @@ def test_swap_abort_clears_inflight(cli_env):
 
 
 def test_swap_rejects_resume_and_abort(cli_env):
-    """--resume and --abort are mutually exclusive."""
+    """--resume and --abort are mutually exclusive.
+
+    Mutation: dropping the `abort and resume` guard, so the command
+        aborts and resumes together.
+    Oracle: nonzero exit with `mutually exclusive` in the output.
+    """
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -152,7 +169,12 @@ def test_swap_rejects_resume_and_abort(cli_env):
 
 
 def test_swap_resume_without_inflight_errors(cli_env):
-    """--resume errors when no swap is in progress."""
+    """--resume errors when no swap is in progress.
+
+    Mutation: `--resume` starting a fresh swap or exiting 0 when
+        `read_progress` reports no state.
+    Oracle: nonzero exit with `no in-flight swap` in the output.
+    """
     runner = CliRunner()
     result = runner.invoke(
         cli,

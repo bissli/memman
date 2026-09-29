@@ -13,31 +13,67 @@ import math
 import os
 import pathlib
 import re
+import shutil
+import signal
+import socket
 import sqlite3
+import subprocess
 import sys
+import tarfile
+import tempfile
+import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from datetime import datetime, timedelta, timezone
 from importlib.resources import files as pkg_files
-from typing import Any, Self
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import quote
 
 import click
 import memman
 from memman import config
+from memman.drain_lock import DrainLockBusy, acquire, release
+from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
+from memman.embed import fingerprint, get_client
+from memman.embed import registry as _ec_registry
+from memman.embed.fingerprint import Fingerprint, write_fingerprint
+from memman.exceptions import ConfigError, EmbedCredentialError
+from memman.exceptions import EmbedFingerprintError
+from memman.migrate import MigrateError, SchemaState
+from memman.migrate import _verify_destination_counts, held_drain_lock
+from memman.queue import STATUS_FAILED, claim, enqueue, find_pending
+from memman.queue import find_pending_replace, finish_worker_run, get_row
+from memman.queue import last_worker_run, list_rows, mark_done, mark_failed
+from memman.queue import mark_stale_on_resume, purge_done, purge_stale
+from memman.queue import queue_db, queue_db_path, retry_row, retry_stale
+from memman.queue import start_worker_run
+from memman.queue import stats as queue_stats
+from memman.setup.archive import archive_postgres_schema
 from memman.store import factory
-from memman.store.db import default_data_dir, open_db, portable_store_name
-from memman.store.db import read_active, store_dir, store_exists
-from memman.store.db import valid_store_name, write_active
+from memman.store.db import default_data_dir, list_local_store_dirs, open_db
+from memman.store.db import open_read_only, portable_store_name, read_active
+from memman.store.db import store_dir, store_exists, valid_store_name
+from memman.store.db import write_active
 from memman.store.errors import BackendError
+from memman.store.errors import ConfigError as StoreConfigError
 from memman.store.factory import known_backends, list_stores
+from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
+from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
+from memman.store.model import insight_to_delta_dict, insight_to_full_dict
+from memman.store.model import insight_to_recall_line
+from memman.store.node import count_active_insights, get_stats
+from memman.store.node import iter_for_reembed
+from memman.store.sqlite import SqliteBackend, SqliteMigrator
+from tqdm import tqdm
+
+if TYPE_CHECKING:
+    from memman.embed import EmbeddingProvider
+    from memman.llm.client import MemmanLLMClient
+    from memman.queue import QueueRow
+    from memman.store.backend import Backend
 
 _BACKEND_CHOICES = sorted(known_backends())
-
-from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
-from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
-from memman.store.model import insight_to_full_dict, insight_to_recall_line
-from memman.store.sqlite import open_ro_db
-from tqdm import tqdm
 
 logger = logging.getLogger('memman')
 
@@ -94,15 +130,8 @@ def _line_locator_refusal_message(content: str) -> str | None:
         The refusal quoting the first `path.ext:N`, `path.ext-N` or
         `path.ext ~N` locator, else the first `line N` or `lines N`
         phrase, else the first bare `:N` or `L123`; None when `content`
-        holds none of them.
-
-    Notes
-    -----
-    - A line number is a snapshot of the file at write time and goes
-      stale on the next edit. The text is refused, never rewritten,
-      so the stored row is always the agent's own words.
-    - A bare `:N` also refuses a port written without its host, such
-      as `:9222`; `localhost:9222` passes.
+        holds none of them. A bare `:N` also refuses a port written
+        without its host, such as `:9222`; `localhost:9222` passes.
     """
     match = (_FILE_LINE_RE.search(content)
              or _LINE_WORD_RE.search(content)
@@ -129,12 +158,8 @@ def _author_refusal_message(content: str) -> str | None:
         The refusal message when the first word of `content`, past any
         leading whitespace or punctuation, is the explicitly set
         `MEMMAN_AUTHOR`, compared case-insensitively; None otherwise.
-
-    Notes
-    -----
-    - Only an explicit `MEMMAN_AUTHOR` refuses. The `getpass.getuser()`
-      fallback never does, so an OS login such as `ubuntu` cannot
-      refuse text about that system.
+        The `getpass.getuser()` fallback never refuses, so an OS login
+        such as `ubuntu` cannot refuse text about that system.
     """
     author = os.environ.get(config.AUTHOR, '')
     if not author:
@@ -167,14 +192,8 @@ def _content_refusal_message(
     str or None
         The refusal of the first check `content` fails, in the order
         size, line number, author, line break, leading label; None
-        when it passes all five.
-
-    Notes
-    -----
-    - A memory is one thought written as one paragraph that opens on
-      its subject. Every check refuses and none rewrites, so the
-      stored row is always the agent's own words.
-    - The size cap counts UTF-8 bytes, not characters.
+        when it passes all five. The size cap counts UTF-8 bytes. No
+        check rewrites, so the stored row is the agent's own words.
     """
     content_bytes = len(content.encode('utf-8'))
     if content_bytes > _MAX_CONTENT_BYTES:
@@ -210,23 +229,26 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     the env file exists). The literal `'WARNING'` fall-through must
     equal `INSTALL_DEFAULTS[LOG_LEVEL]`; a unit test enforces that.
 
+    Parameters
+    ----------
+    data_dir : str
+        Base data directory. Under the worker, `logs/memman.log` lives
+        here.
+    verbose : bool
+        INFO level. Overridden by `debug`.
+    debug : bool
+        DEBUG level.
+
     Notes
     -----
-    - Levels are PER HANDLER, not on the logger alone. The stream
-      handler carries the configured level, so what an interactive
-      caller sees is unchanged. Under the worker the file handler
-      takes DEBUG and the logger is opened to DEBUG to feed it, which
-      is what preserves a stack the stream must never print.
-    - Raising the CLI seam to `logger.exception` would be the wrong
-      way to keep that stack: the stream handler is attached
-      unconditionally, so an ERROR-level record prints its traceback
-      to interactive users and undoes the clean one-line exit.
-    - Worker DEBUG volume is bounded by rotation, not by judgement:
-      `_WORKER_LOG_MAX_BYTES` x (`_WORKER_LOG_BACKUPS` + 1) caps
-      `logs/memman.log` at 20 MB -- the live file plus three backups.
-      The budget is shared with routine drain DEBUG traffic, since the
-      logger opens the whole `memman` tree, so a stack can rotate away
-      while the pointer naming it sits in the unrotated `enrich.err`.
+    - Levels are set per handler. The stream handler carries the
+      configured level, so an interactive caller sees no change. Under
+      the worker the file handler takes DEBUG and the logger opens to
+      DEBUG to feed it, which keeps a stack the stream never prints.
+    - Rotation bounds the worker log at `_WORKER_LOG_MAX_BYTES` x
+      (`_WORKER_LOG_BACKUPS` + 1). Routine drain DEBUG traffic shares
+      that budget, so a stack can rotate away while the pointer naming
+      it sits in the unrotated `enrich.err`.
     """
     if debug:
         level = logging.DEBUG
@@ -282,9 +304,9 @@ def _json_out(obj: object) -> None:
 def _require_started(action: str) -> None:
     """Reject the current CLI invocation when the scheduler is stopped.
 
-    Single gate for write-producing commands. When the scheduler is
-    stopped, memman is recall-only - every write returns exit 1 with a
-    fixed message that points the operator at `memman scheduler start`.
+    When the scheduler is stopped, memman is recall-only: a gated
+    command exits 1 with a fixed message that points the operator at
+    `memman scheduler start`.
     """
     from memman.setup.scheduler import STATE_STOPPED, read_state
     if read_state() == STATE_STOPPED:
@@ -296,9 +318,8 @@ def _require_started(action: str) -> None:
 def _require_stopped(action: str) -> None:
     """Reject the current CLI invocation when the scheduler is started.
 
-    Inverse of `_require_started`. Used by `memman embed reembed`,
-    which cannot run while the worker may be claiming queued
-    `remember` rows mid-sweep.
+    Inverse of `_require_started`, for a command that cannot run while
+    the worker may be claiming queued `remember` rows mid-sweep.
     """
     from memman.setup.scheduler import STATE_STOPPED, read_state
     if read_state() != STATE_STOPPED:
@@ -308,7 +329,8 @@ def _require_stopped(action: str) -> None:
 
 
 def _resolve_store_name(data_dir: str, store_flag: str) -> str:
-    """Resolve effective store name."""
+    """Store name from the flag, else `MEMMAN_STORE`, else the active one.
+    """
     if store_flag:
         return store_flag
     env = os.environ.get(config.STORE, '')
@@ -337,7 +359,7 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     if default_kind == 'postgres':
         default_dsn = file_values.get(config.DEFAULT_PG_DSN)
         if default_dsn:
-            updates[config.env_key_for('postgres', 'DSN', store_name)] = default_dsn
+            updates[config.POSTGRES_DSN_FOR(store_name)] = default_dsn
     _write_env_keys_with_flock(updates, data_dir=data_dir)
 
 
@@ -347,7 +369,6 @@ def _get_llm_client_or_fail() -> 'MemmanLLMClient':
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
     """
-    from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
     try:
         return get_llm_client()
@@ -357,7 +378,7 @@ def _get_llm_client_or_fail() -> 'MemmanLLMClient':
 
 def _active_backend(
         ctx: click.Context, *,
-        unchecked: bool = False) -> 'Backend':
+        unchecked: bool = False) -> AbstractContextManager['Backend']:
     """Click adapter around `memman.session.active_store`.
 
     Resolves data_dir and the active store name from the click context
@@ -378,7 +399,8 @@ def _active_backend(
 
 
 def _parse_since(since: str) -> str:
-    """Parse a relative time string (e.g. '7d', '24h') to ISO timestamp."""
+    """Parse a relative time string (e.g. '7d', '24h') to ISO timestamp.
+    """
     m = re.match(r'^(\d+)([dhm])$', since)
     if not m:
         raise click.ClickException(
@@ -397,40 +419,40 @@ class MemmanGroup(click.Group):
     -----
     - One `invoke` override covers the whole command tree: a group
       runs its subcommands inside its own `invoke`, so a
-      `BackendError` raised at any depth passes through here. The
-      alternative, a handler per command, would repeat itself at
-      every command that opens a store or the queue.
-    - The caught type is `BackendError` AND its subclasses, so
-      `store.errors.ConfigError` comes here too. Its message is
-      user-facing, but a constraint violation is bug-shaped and now
-      exits as one line like any other; `--debug` is what recovers
-      its stack.
-    - `session.active_store` keeps its own earlier catch, so a
-      read-write store open never reaches here. This seam is what
-      covers the paths that bypass it: the queue, the read-only
-      opens, and every mid-command failure the Postgres backend
-      translates.
-    - `sqlite3.Error` is caught alongside, because the SQLite backend
-      translates no statement failure of its own: `open_db` translates
-      the OPEN, and nothing translates `database is locked` from a
-      query. Without this arm the same condition exits as one clean
-      line on Postgres and as a raw traceback on SQLite.
-    - Translating HERE rather than in `DB._query` / `DB._exec` is what
-      keeps the fifteen callers that branch on a driver type intact
-      (`queue.claim`'s stale-claim reclaim, `recall`'s bookkeeping
-      skip). Their handlers sit deeper, so they run first and this
-      seam never sees the error -- the same ordering the Postgres
-      backend gets by translating at the connection scope instead of
-      at each statement.
+      `BackendError` raised at any depth passes through here.
+    - The caught type is `BackendError` and its subclasses, so
+      `store.errors.ConfigError` comes here too. A constraint
+      violation exits as one line like any other. `--debug` recovers
+      the stack of any of them.
+    - `session.active_store` keeps its own earlier catch. This seam
+      covers the queue, the read-only opens, and every mid-command
+      failure the Postgres backend translates.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
-        """Run the subcommand, reporting a backend failure as a message."""
+        """Run the subcommand, reporting a backend failure as a message.
+        """
+        # Notes:
+        # - Catching here keeps the callers that branch on a driver
+        #   type intact (`queue.claim`'s stale-claim reclaim,
+        #   `recall`'s bookkeeping skip). Their handlers sit deeper and
+        #   run first, which translation in `DB._query` / `DB._exec`
+        #   would preempt.
+        # - The `exc_info=True` calls stay in the arms: outside a
+        #   lexical handler the formatter reads them as dead and
+        #   strips the keyword.
+        # - `logger.exception` is the wrong level for these arms. The
+        #   stream handler is always attached, so an ERROR record
+        #   prints its traceback to interactive users and undoes the
+        #   one-line exit.
         try:
             return super().invoke(ctx)
         except BackendError as exc:
             logger.debug('backend error reached the CLI seam', exc_info=True)
             raise click.ClickException(self._name_the_stack(str(exc))) from exc
+        # The SQLite backend translates no statement failure such as
+        # `database is locked`, so without this arm it exits as a raw
+        # traceback where Postgres exits as one line.
         except sqlite3.Error as exc:
             logger.debug('sqlite error reached the CLI seam', exc_info=True)
             raise click.ClickException(
@@ -454,39 +476,25 @@ class MemmanGroup(click.Group):
 
         Notes
         -----
-        - The pointer rides the MESSAGE rather than a log record of its
-          own. A record would sit at the mercy of the stream handler's
-          level, and `MEMMAN_LOG_LEVEL=ERROR` is an installable value
-          that would drop it -- restoring the very symptom of one line
-          and no route to the stack. Click prints this message through
-          its own writer, so no level can suppress it.
-        - The test is an ATTACHED HANDLER, never `is_worker()`:
-          `scheduler serve` sets the worker flag inside the command,
-          long after the root callback configured logging, so the flag
-          can read true while no file holds any stack.
-        - The worker's stderr is a systemd `append:` redirect that
-          nothing rotates, so the stack cannot go there without growing
-          `enrich.err` forever. It goes to the rotated
-          `logs/memman.log`, which `memman log worker --stack` reads.
-        - The suggested command carries `--data-dir` whenever the
-          writer's data dir is not the default, and carries it BEFORE
-          the subcommand, which is the only position Click accepts for
-          a group option. The worker's `MEMMAN_DATA_DIR` comes from the
-          unit or the launchd wrapper and never reaches the operator's
-          shell, so a bare command would resolve `~/.memman` and tail
-          a different install's log. The handler writes
-          `<data_dir>/logs/memman.log`, so its own path supplies the
-          value.
-        - The `exc_info=True` calls stay in the `except` arms above
-          rather than moving in here: outside a lexical handler the
-          formatter reads them as dead and STRIPS the keyword, which
-          silently discards the only copy of the stack.
+        - The pointer rides the message instead of a log record, so no
+          log level (`MEMMAN_LOG_LEVEL=ERROR`) can suppress it.
+        - The worker's stack goes to the rotated `logs/memman.log`,
+          which `memman log worker --stack` reads. Its stderr is an
+          unrotated systemd `append:` redirect.
         """
+        # An attached handler is the test, since `scheduler serve` sets
+        # the worker flag after the root callback configured logging,
+        # so `is_worker()` can read true while no file holds a stack.
         for handler in logger.handlers:
             if (isinstance(handler, logging.handlers.RotatingFileHandler)
                     and getattr(handler, '_memman', False)):
                 stack_file = pathlib.Path(handler.baseFilename)
                 writer_data_dir = str(stack_file.parent.parent)
+                # The command carries `--data-dir` before the
+                # subcommand, the only position Click accepts. The
+                # worker's `MEMMAN_DATA_DIR` never reaches the
+                # operator's shell, so a bare command would tail
+                # another install's log.
                 pin = ('' if writer_data_dir == default_data_dir()
                        else f' --data-dir {writer_data_dir}')
                 return (f'{user_message} (full traceback in'
@@ -497,7 +505,8 @@ class MemmanGroup(click.Group):
 
 @click.group(cls=MemmanGroup)
 @click.version_option(version=memman.__version__, prog_name='memman')
-@click.option('--data-dir', default=None, help='Base data directory (env: MEMMAN_DATA_DIR)')
+@click.option('--data-dir', default=None,
+              help='Base data directory (env: MEMMAN_DATA_DIR)')
 @click.option('--store', 'store_name', default='', help='Named memory store')
 @click.option('--verbose', '-v', is_flag=True, default=False,
               help='INFO-level logging to stderr')
@@ -506,7 +515,8 @@ class MemmanGroup(click.Group):
 @click.pass_context
 def cli(ctx: click.Context, data_dir: str | None, store_name: str,
         verbose: bool, debug: bool) -> None:
-    """Persistent memory store for LLM agents."""
+    """Persistent memory store for LLM agents.
+    """
     if data_dir is None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
     else:
@@ -522,7 +532,7 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['debug'] = debug
 
 
-def claude_callable(cmd):
+def claude_callable(cmd: click.Command) -> click.Command:
     """Mark a Click command as safe for Claude Code auto-allow.
 
     `memman install` walks the CLI tree and emits a `permissions.allow`
@@ -539,7 +549,7 @@ def list_claude_permissions() -> list[str]:
 
     Order is stable: alphabetical by full dotted path.
     """
-    def walk(group, prefix):
+    def walk(group: click.Group, prefix: tuple[str, ...]) -> list[str]:
         out: list[str] = []
         for name, cmd in group.commands.items():
             path = (*prefix, name)
@@ -553,35 +563,41 @@ def list_claude_permissions() -> list[str]:
 
 @cli.group(name='embed')
 def embed_grp() -> None:
-    """Embed-provider operations: status, re-embed on swap."""
+    """Embed-provider operations: status, re-embed on swap.
+    """
 
 
 @cli.group(no_args_is_help=True)
 def scheduler() -> None:
-    """Async write pipeline: scheduler state, queue, worker logs."""
+    """Async write pipeline: scheduler state, queue, worker logs.
+    """
 
 
 @scheduler.group('queue', invoke_without_command=True)
 @click.pass_context
 def queue(ctx: click.Context) -> None:
-    """Inspect and manage the deferred-write queue."""
+    """Inspect and manage the deferred-write queue.
+    """
     if ctx.invoked_subcommand is None:
         ctx.invoke(queue_list)
 
 
 @cli.group()
 def insights() -> None:
-    """Operations on stored insights (show, review)."""
+    """Operations on stored insights (show, review).
+    """
 
 
 @cli.group()
 def log() -> None:
-    """View memman logs (operation audit + worker output)."""
+    """View memman logs (operation audit + worker output).
+    """
 
 
 @cli.group(name='config')
 def config_cmd() -> None:
-    """Inspect and modify persisted memman settings."""
+    """Inspect and modify persisted memman settings.
+    """
 
 
 @config_cmd.command('set')
@@ -618,15 +634,9 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
             f'{key!r} is not accepted under the per-store routing'
             f' model; {bare_canonicals[key]}')
 
-    accepted = key in config.INSTALLABLE_KEYS
-    if not accepted:
-        for prefix, _ in config.PER_STORE_KEY_SPECS:
-            if not key.startswith(prefix):
-                continue
-            if not valid_store_name(key[len(prefix):]):
-                break
-            accepted = True
-            break
+    accepted = key in config.INSTALLABLE_KEYS or any(
+        key.startswith(prefix) and valid_store_name(key[len(prefix):])
+        for prefix, _ in config.PER_STORE_KEY_SPECS)
     if not accepted:
         shapes = ', '.join(p + '<store>'
                            for p, _ in config.PER_STORE_KEY_SPECS)
@@ -682,7 +692,8 @@ def config_set_pg_dsn(
         auth = f'{auth}:{quote(password, safe="")}'
     dsn = f'postgresql://{auth}@{host}:{port}/{quote(dbname, safe="")}'
 
-    key = config.DEFAULT_PG_DSN if is_default else config.env_key_for('postgres', 'DSN', store)
+    key = (config.DEFAULT_PG_DSN if is_default
+           else config.POSTGRES_DSN_FOR(store))
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: dsn}, data_dir=data_dir)
     config.reset_file_cache()
@@ -705,10 +716,11 @@ def config_get(ctx: click.Context, key: str) -> None:
     value = parsed.get(key)
     if value is None or value == '':
         raise click.ClickException(f'{key} is not set')
-    if 'POSTGRES_DSN' in key or 'API_KEY' in key:
+    if 'POSTGRES_DSN' in key:
         from memman.trace import redact_dsn
-        click.echo(redact_dsn(value) if 'POSTGRES_DSN' in key
-                   else '***REDACTED***')
+        click.echo(redact_dsn(value))
+    elif 'API_KEY' in key:
+        click.echo('***REDACTED***')
     else:
         click.echo(value)
 
@@ -716,7 +728,8 @@ def config_get(ctx: click.Context, key: str) -> None:
 @config_cmd.command('show')
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
-    """Dump effective config: env vars + on-disk files + scheduler state."""
+    """Dump effective config: env vars + on-disk files + scheduler state.
+    """
     effective = config.enumerate_effective_config()
     data_dir = ctx.obj['data_dir']
     parsed = config.parse_env_file(config.env_file_path(data_dir))
@@ -807,7 +820,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
@@ -876,7 +888,8 @@ def _request_stop() -> None:
 
 
 def _stop_requested() -> bool:
-    """Return whether a stop has been signaled."""
+    """Return whether a stop has been signaled.
+    """
     return _STOP_REQUESTED
 
 
@@ -889,17 +902,6 @@ def _clear_stop() -> None:
 
 _LAST_HEARTBEAT_AT: dict[str, float] = {}
 HEARTBEAT_MIN_INTERVAL_SECONDS = 60
-
-
-def _reset_heartbeat_state() -> None:
-    """Test-only: clear the heartbeat tracking dict.
-
-    `_LAST_HEARTBEAT_AT` is module-level. In-process CliRunner tests
-    share it across test invocations, which can cause cross-test
-    contamination if data_dir paths are reused. Tests reset between
-    invocations via an autouse conftest fixture.
-    """
-    _LAST_HEARTBEAT_AT.clear()
 
 
 @scheduler.command('drain', hidden=True)
@@ -929,20 +931,21 @@ def scheduler_drain(ctx: click.Context, limit: int,
 def _maybe_fire_backup(
         data_dir: str, now: datetime,
         settle: Callable[[], None] | None = None) -> None:
-    """Run a backup in-process when the cron matches this minute (serve only).
+    """Run a backup in-process when the cron matches this minute.
 
-    Serve-mode only: on systemd/launchd hosts the native backup timer
-    owns scheduled backups, so this defers to it (preventing a
-    double-fire if a serve loop also runs there). Once-per-minute and
-    restart-safe via ~/.memman/backup.state, which is stamped only
-    after a successful run so a transient failure retries on the next
-    iteration rather than being suppressed for the whole minute. When
-    firing, `settle` (if given) drains the queue to empty so the
-    snapshot captures a settled store; the bundle also includes
-    queue.db, so residual pending writes are preserved regardless. The
-    backup runs inline (build_bundle is local-disk-bound; cloud sync of
-    the target is async). No drain.lock is taken -- the snapshot is
-    online.
+    Serve mode only. On systemd/launchd hosts the native backup timer
+    owns scheduled backups, so this defers to it and cannot double
+    fire.
+
+    Parameters
+    ----------
+    data_dir : str
+        Base data directory to back up.
+    now : datetime
+        Current time; the cron is matched against its minute.
+    settle : Callable[[], None], optional
+        Drains the queue to empty before the backup, so the snapshot
+        captures a settled store.
     """
     from memman.setup.scheduler import SCHEDULER_KIND_SERVE, detect_scheduler
     from memman.setup.scheduler import read_backup_state, write_backup_state
@@ -963,6 +966,15 @@ def _maybe_fire_backup(
     if settle is not None:
         settle()
     from memman.backup import run_backup
+
+    # Notes:
+    # - No `drain.lock` is taken: the snapshot is online, and the bundle
+    #   includes `queue.db`, so pending writes are preserved without
+    #   `settle`.
+    # - `backup.state` is stamped only after a successful run, so a
+    #   transient failure retries on the next iteration.
+    # - `build_bundle` is local-disk-bound and cloud sync of the target
+    #   is async, so the run stays inline.
     try:
         run_backup(data_dir)
         write_backup_state(minute_key)
@@ -991,14 +1003,7 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
       2. `MEMMAN_INTERVAL` from the env file
       3. 60 (the documented default)
     """
-    import signal
-    import socket
-    import sys as _sys
-    import time as _time
-
-    from memman import __version__ as _memman_version
     from memman import trace
-    from memman.queue import mark_stale_on_resume, queue_db
     from memman.setup.scheduler import STATE_STOPPED, clear_serve_interval
     from memman.setup.scheduler import read_state, write_serve_interval
 
@@ -1020,8 +1025,7 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
     # without a second pass `serve` runs with no worker file handler and
     # drops every stack it was supposed to keep.
     _configure_logging(
-        ctx.obj['data_dir'], ctx.obj.get('verbose', False),
-        ctx.obj.get('debug', False))
+        ctx.obj['data_dir'], ctx.obj['verbose'], ctx.obj['debug'])
 
     def _handle_stop(signum: int, frame: object) -> None:
         logger.info(
@@ -1045,15 +1049,16 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
             'scheduler_serve_start',
             pid=os.getpid(),
             hostname=socket.gethostname(),
-            python=_sys.version.split()[0],
-            memman_version=_memman_version,
+            python=sys.version.split()[0],
+            memman_version=memman.__version__,
             interval=interval,
             once=once)
 
         per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
 
         def _settle_queue() -> None:
-            """Drain the queue to empty before a backup (bounded)."""
+            """Drain the queue to empty before a backup (bounded).
+            """
             for _ in range(50):
                 drained = _drain_queue(
                     ctx, limit=100, timeout=per_drain_timeout,
@@ -1078,10 +1083,10 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
                 while slept < interval and not _stop_requested():
                     if read_state() == STATE_STOPPED:
                         break
-                    _time.sleep(min(1.0, interval - slept))
+                    time.sleep(min(1.0, interval - slept))
                     slept += 1.0
             elif result and result.get('claimed', 0) == 0:
-                _time.sleep(0.1)
+                time.sleep(0.1)
 
         trace.event('scheduler_serve_stop', pid=os.getpid())
     finally:
@@ -1117,22 +1122,13 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         `{claimed, processed, failed}`, so a caller can detect an
         empty drain. None when another drain already holds the lock.
     """
-    import socket
-    import sys as _sys
-    import time as _time
-    from contextlib import ExitStack
-
-    from memman import __version__ as _memman_version
     from memman import trace
-    from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.llm import usage as llm_usage
-    from memman.queue import claim, finish_worker_run, mark_done, mark_failed
-    from memman.queue import queue_db, queue_db_path, start_worker_run, stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
 
     data_dir_val = ctx.obj['data_dir']
     worker_pid = os.getpid()
-    deadline = _time.monotonic() + timeout
+    deadline = time.monotonic() + timeout
     store_list = [s.strip() for s in stores_filter.split(',') if s.strip()]
 
     trace.setup()
@@ -1140,8 +1136,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'scheduler_fired',
         pid=worker_pid,
         hostname=socket.gethostname(),
-        python=_sys.version.split()[0],
-        memman_version=_memman_version,
+        python=sys.version.split()[0],
+        memman_version=memman.__version__,
         env=config.enumerate_effective_config())
 
     try:
@@ -1178,7 +1174,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         run_error: str | None = None
 
         last_hb = _LAST_HEARTBEAT_AT.get(data_dir_val, 0.0)
-        record_run = (_time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
+        record_run = (time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
         run_id = start_worker_run(conn, worker_pid) if record_run else None
         # Snapshot-and-delta, never reset: the ledger is process-wide
         # and row-level deltas below must not clobber the drain total.
@@ -1194,7 +1190,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 logger.info('drain: stop requested, exiting loop')
                 trace.event('drain_stop_requested')
                 break
-            if _time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 logger.info(f'enrich: timeout after {timeout}s')
                 trace.event('drain_timeout', timeout=timeout)
                 break
@@ -1212,10 +1208,10 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 content_len=len(row.content),
                 category=row.category)
 
-            ctx = store_contexts.get(row.store)
-            if ctx is None:
+            store_ctx = store_contexts.get(row.store)
+            if store_ctx is None:
                 try:
-                    ctx = stack.enter_context(
+                    store_ctx = stack.enter_context(
                         _StoreContext(row.store, data_dir_val))
                 except Exception as exc:
                     mark_failed(
@@ -1231,19 +1227,19 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     logger.exception(
                         f'enrich row {row.id} failed during store open')
                     continue
-                store_contexts[row.store] = ctx
+                store_contexts[row.store] = store_ctx
                 if record_run:
-                    ctx.begin_drain_run()
+                    store_ctx.begin_drain_run()
 
             row_usage_snap = llm_usage.snapshot()
             try:
-                row_t0 = _time.monotonic()
-                _process_queue_row(row, ctx)
-                row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
+                row_t0 = time.monotonic()
+                _process_queue_row(row, store_ctx)
+                row_elapsed_ms = int((time.monotonic() - row_t0) * 1000)
                 mark_done(conn, row.id)
                 processed += 1
                 touched_stores.add(row.store)
-                ctx.beat_drain_run()
+                store_ctx.beat_drain_run()
                 trace.event(
                     'queue_done',
                     row_id=row.id,
@@ -1266,14 +1262,13 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     error_message=str(exc)[:500],
                     llm_usage=llm_usage.delta(
                         row_usage_snap, llm_usage.snapshot()))
-                from memman.exceptions import EmbedCredentialError
                 if isinstance(exc, EmbedCredentialError):
                     trace.event(
                         'embedder_credential_missing',
                         row_id=row.id,
                         store=row.store,
-                        provider=ctx.ec.name,
-                        model=ctx.ec.model,
+                        provider=store_ctx.ec.name,
+                        model=store_ctx.ec.model,
                         reason=str(exc)[:500])
                 if verbose:
                     click.echo(
@@ -1290,7 +1285,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 conn, touched_stores, store_contexts, deadline)
         except Exception:
             logger.exception('drain maintenance phase failed')
-        # Lazy: the module loads httpx, which `import memman.cli` does not.
         import httpx
         from memman.llm import openrouter_models
         try:
@@ -1306,10 +1300,10 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 finish_worker_run(
                     conn, run_id, claimed, processed, failed,
                     error=run_error)
-                _LAST_HEARTBEAT_AT[data_dir_val] = _time.monotonic()
+                _LAST_HEARTBEAT_AT[data_dir_val] = time.monotonic()
             except Exception:
                 logger.exception('failed to stamp worker_runs finish row')
-        s = stats(conn)
+        remaining = queue_stats(conn)
         stack.close()
         release(lock_fd)
 
@@ -1319,11 +1313,11 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'drain_end',
         processed=processed,
         failed=failed,
-        remaining=s)
+        remaining=remaining)
     _json_out({
         'processed': processed,
         'failed': failed,
-        'remaining': s,
+        'remaining': remaining,
         'llm_usage': drain_usage,
         })
     return {'claimed': claimed, 'processed': processed, 'failed': failed}
@@ -1339,27 +1333,37 @@ class _StoreContext:
     """
 
     def __init__(self, store_name: str, data_dir: str) -> None:
-        from memman.embed import fingerprint as _fp_mod
-        from memman.exceptions import EmbedFingerprintError
-        from memman.store.factory import open_backend
+        """Open the store and bind its embed client.
 
+        Parameters
+        ----------
+        store_name : str
+            Store to open.
+        data_dir : str
+            Data directory holding the store.
+
+        Raises
+        ------
+        EmbedFingerprintError
+            The store holds data but has no embed fingerprint.
+        """
         self.store_name = store_name
         self.data_dir = data_dir
-        from memman.embed import get_client
         _ensure_store_backend_key(store_name, data_dir)
-        self.backend = open_backend(store_name, data_dir)
-        _fp_mod.seed_if_fresh(self.backend, get_client())
-        stored = _fp_mod.stored_fingerprint(self.backend)
+        self.backend = factory.open_backend(store_name, data_dir)
+        fingerprint.seed_if_fresh(self.backend, get_client())
+        stored = fingerprint.stored_fingerprint(self.backend)
         if stored is None:
             raise EmbedFingerprintError(
                 f"store {store_name!r} has no embed fingerprint and"
                 " contains data; run 'memman embed reembed' to converge.")
-        self.ec = _fp_mod.bound_embedder(self.backend)
+        self.ec = fingerprint.bound_embedder(self.backend)
         self._stored_fp = stored
         self._run_id: int | None = None
 
     def begin_drain_run(self) -> None:
-        """Open a per-store drain run row (no-op on SQLite)."""
+        """Open a per-store drain run row (no-op on SQLite).
+        """
         if self._run_id is not None:
             return
         try:
@@ -1368,10 +1372,10 @@ class _StoreContext:
             logger.exception(
                 f'start_run failed for store {self.store_name!r};'
                 ' continuing without heartbeat')
-            self._run_id = None
 
     def beat_drain_run(self) -> None:
-        """Advance the per-store drain heartbeat (no-op on SQLite)."""
+        """Advance the per-store drain heartbeat (no-op on SQLite).
+        """
         if self._run_id is None:
             return
         try:
@@ -1382,17 +1386,18 @@ class _StoreContext:
                 ' continuing without heartbeat')
 
     def assert_fingerprint_unchanged(self) -> None:
-        """Raise EmbedFingerprintError if the store's stored fingerprint
-        diverged from the value captured at context construction.
+        """Check the stored fingerprint against the one captured at init.
 
-        Per-row heartbeat: a swap that completes mid-drain would
-        otherwise let the cached `ec` write vectors of the wrong dim.
-        Callers must invoke this before every embed call inside a
-        long-running drain loop.
+        A swap that completes mid-drain would otherwise let the cached
+        `ec` write vectors of the wrong dim, so a drain loop calls this
+        before every embed call.
+
+        Raises
+        ------
+        EmbedFingerprintError
+            The stored fingerprint differs from the captured one.
         """
-        from memman.embed import fingerprint as _fp_mod
-        from memman.exceptions import EmbedFingerprintError
-        current = _fp_mod.stored_fingerprint(self.backend)
+        current = fingerprint.stored_fingerprint(self.backend)
         if current != self._stored_fp:
             raise EmbedFingerprintError(
                 f'store {self.store_name!r} fingerprint changed during'
@@ -1404,7 +1409,8 @@ class _StoreContext:
                 ' row released for retry.')
 
     def close(self) -> None:
-        """Close the active Backend's underlying connection."""
+        """Close the active Backend's underlying connection.
+        """
         if self._run_id is not None:
             try:
                 self.backend.finish_run(self._run_id)
@@ -1421,40 +1427,52 @@ class _StoreContext:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+            self, exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None) -> None:
         self.close()
 
 
 def _process_queue_row(
-        row: 'memman.queue.QueueRow',
+        row: 'QueueRow',
         ctx: _StoreContext) -> None:
     """Run the full remember pipeline on a claimed queue row.
 
     Crash-recovery idempotency is enforced unconditionally via
     `row.queue_uuid`.
 
-    Hoisted state (the backend and the embed client) comes from `ctx`.
+    Parameters
+    ----------
+    row : QueueRow
+        Claimed queue row to write.
+    ctx : _StoreContext
+        Hoisted state for the row's store: the backend and the embed
+        client.
+
+    Raises
+    ------
+    EmbedFingerprintError
+        The store's fingerprint changed since `ctx` was built.
     """
-    from memman import trace as _trace
+    from memman import trace
 
     ctx.assert_fingerprint_unchanged()
 
-    category = row.category
-
     backend = ctx.backend
 
-    _trace.event(
+    trace.event(
         'process_row',
         row_id=row.id,
         store=row.store,
         data_dir=ctx.data_dir,
-        category=category)
+        category=row.category)
 
     if backend.nodes.has_row_with_queue_uuid(row.queue_uuid):
         logger.info(
             f'queue row {row.id} already committed to store'
             f' {row.store!r}; skipping re-processing')
-        _trace.event(
+        trace.event(
             'process_row_skipped',
             row_id=row.id,
             reason='already_committed')
@@ -1465,10 +1483,9 @@ def _process_queue_row(
     redirected_from = ''
     if replaced_id:
         # Notes:
-        # - The target may have been replaced between enqueue and
-        #   claim, by an earlier queued replace. The
-        #   replace follows the chain to its current head, so the
-        #   topic ends with one current row instead of two.
+        # - An earlier queued replace may have replaced the target
+        #   between enqueue and claim. Following the chain to its
+        #   current head leaves the topic with one current row.
         # - A forgotten or missing head passes the original id
         #   through, and `_apply_plan` degrades to a named add.
         old = backend.nodes.get_include_deleted(replaced_id)
@@ -1488,7 +1505,7 @@ def _process_queue_row(
     # makes the idempotency check above a silent no-op.
     insight = Insight(
         id=row.queue_uuid, content=row.content,
-        category=category,
+        category=row.category,
         created_at=now, updated_at=now,
         queue_uuid=row.queue_uuid, author=row.author)
 
@@ -1543,9 +1560,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
     memman recall "retry cap" --limit 5
     memman recall "retry" --basic
     """  # noqa: D301, D410, D411
-    # Deferred: the embed and search stack would load on every other
-    # command's startup.
-    from memman.embed.fingerprint import bound_embedder
     from memman.search.recall import run_recall
     keyword_str = ' '.join(keyword)
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
@@ -1568,7 +1582,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
                 click.echo(insight_to_recall_line(ins, None))
             return
 
-        ec = bound_embedder(backend)
+        ec = fingerprint.bound_embedder(backend)
         query_vec = None
         try:
             query_vec = ec.embed(keyword_str)
@@ -1632,8 +1646,6 @@ def _resolve_queued_or_stored(
         When the prefix matches two queued writes, two stored rows, or
         a queued write and a different stored row.
     """
-    from memman.queue import find_pending, queue_db
-
     # A write leaves the queue only after it lands, so reading the
     # queue first finds a write that lands mid-command in one place or
     # the other.
@@ -1660,7 +1672,6 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
     row is refused with the reason, and so is a current row that
     replaced another, with the `replace` that corrects it.
     """
-    from memman.store.model import insight_to_delta_dict
     with backend.transaction():
         before_ins = backend.nodes.get_include_deleted(id)
         if before_ins is None:
@@ -1786,8 +1797,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    from memman.queue import enqueue, find_pending_replace, queue_db
-
     with _active_backend(ctx) as backend:
         queued, old = _resolve_queued_or_stored(
             backend, data_dir_val, name, id)
@@ -1846,11 +1855,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 @click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
 def queue_list(ctx: click.Context, limit: int) -> None:
-    """List recent queue rows."""
-    from memman.queue import list_rows, queue_db, stats
+    """List recent queue rows.
+    """
     with queue_db(ctx.obj['data_dir']) as conn:
         _json_out({
-            'stats': stats(conn),
+            'stats': queue_stats(conn),
             'rows': list_rows(conn, limit=limit),
             })
 
@@ -1859,11 +1868,11 @@ def queue_list(ctx: click.Context, limit: int) -> None:
 @click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
 def queue_failed(ctx: click.Context, limit: int) -> None:
-    """List failed queue rows."""
-    from memman.queue import STATUS_FAILED, list_rows, queue_db, stats
+    """List failed queue rows.
+    """
     with queue_db(ctx.obj['data_dir']) as conn:
         _json_out({
-            'stats': stats(conn),
+            'stats': queue_stats(conn),
             'rows': list_rows(conn, status=STATUS_FAILED, limit=limit),
             })
 
@@ -1872,8 +1881,8 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
 @click.argument('row_id', type=int)
 @click.pass_context
 def queue_show(ctx: click.Context, row_id: int) -> None:
-    """Print the full content of a queue row."""
-    from memman.queue import get_row, queue_db
+    """Print the full content of a queue row.
+    """
     with queue_db(ctx.obj['data_dir']) as conn:
         row = get_row(conn, row_id)
         if row is None:
@@ -1890,8 +1899,8 @@ def queue_retry(
         ctx: click.Context,
         row_id: int | None,
         all_stale: bool) -> None:
-    """Re-queue a failed row by id, or every stale row with --all-stale."""
-    from memman.queue import queue_db, retry_row, retry_stale
+    """Re-queue a failed row by id, or every stale row with --all-stale.
+    """
     if all_stale and row_id is not None:
         raise click.ClickException(
             'pass either ROW_ID or --all-stale, not both')
@@ -1936,7 +1945,6 @@ def queue_purge(ctx: click.Context, done: bool, stale: bool) -> None:
     if not chosen:
         raise click.ClickException(
             'pass --done or --stale to confirm deletion')
-    from memman.queue import purge_done, purge_stale, queue_db
     with queue_db(ctx.obj['data_dir']) as conn:
         if done:
             deleted = purge_done(conn)
@@ -1953,7 +1961,6 @@ def scheduler_status(ctx: click.Context, text_output: bool) -> None:
     """Show scheduler install state, interval, next run, log paths,
     and the most recent worker-drain summary from worker_runs.
     """
-    from memman.queue import last_worker_run, queue_db
     from memman.setup.scheduler import status
     result = status()
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
@@ -1994,7 +2001,6 @@ def scheduler_start(ctx: click.Context, text_output: bool) -> None:
     Idempotent. Sweeps long-stalled queue rows to `stale` so they can
     be retried with `scheduler queue retry --all-stale`.
     """
-    from memman.queue import mark_stale_on_resume, queue_db
     from memman.setup.scheduler import start
     try:
         result = start()
@@ -2077,7 +2083,6 @@ def scheduler_install(ctx: click.Context, interval: int | None,
     agent-integration setup (hooks, skill, scheduler), use
     `memman install`.
     """
-    from memman.exceptions import ConfigError
     from memman.setup.claude import _reject_flag_file_conflicts
     from memman.setup.scheduler import DEFAULT_INTERVAL_SECONDS
     from memman.setup.scheduler import _write_env_keys, install
@@ -2093,7 +2098,6 @@ def scheduler_install(ctx: click.Context, interval: int | None,
         endpoint_seed[config.EMBED_PROVIDER] = embed_provider
     if endpoint_seed:
         _write_env_keys(endpoint_seed, data_dir=data_dir)
-        config.reset_file_cache()
 
     try:
         knobs = config.collect_install_knobs(data_dir)
@@ -2133,14 +2137,15 @@ def scheduler_uninstall(ctx: click.Context) -> None:
                     ' non-negative value allowed for serve mode.'))
 @click.pass_context
 def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
-    """Show or set the scheduler interval."""
+    """Show or set the scheduler interval.
+    """
     from memman.setup.scheduler import change_interval, status
     if seconds is None:
-        s = status()
+        current = status()
         _json_out({
-            'platform': s['platform'],
-            'interval_seconds': s['interval_seconds'],
-            'installed': s['installed'],
+            'platform': current['platform'],
+            'interval_seconds': current['interval_seconds'],
+            'installed': current['installed'],
             })
         return
     try:
@@ -2164,9 +2169,7 @@ def scheduler_trigger() -> None:
     from memman.setup.scheduler import trigger
     try:
         result = trigger()
-    except FileNotFoundError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except RuntimeError as exc:
+    except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
 
@@ -2186,7 +2189,8 @@ def scheduler_debug() -> None:
 
 @scheduler_debug.command('on')
 def scheduler_debug_on() -> None:
-    """Enable persistent debug traces."""
+    """Enable persistent debug traces.
+    """
     from memman.setup.scheduler import set_debug
     actions = set_debug(True)
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
@@ -2200,7 +2204,8 @@ def scheduler_debug_on() -> None:
 
 @scheduler_debug.command('off')
 def scheduler_debug_off() -> None:
-    """Disable persistent debug traces; existing debug.log files are kept."""
+    """Disable persistent debug traces; existing debug.log files are kept.
+    """
     from memman.setup.scheduler import set_debug
     actions = set_debug(False)
     _json_out({'debug': False, 'actions': actions})
@@ -2208,7 +2213,8 @@ def scheduler_debug_off() -> None:
 
 @scheduler_debug.command('status')
 def scheduler_debug_status() -> None:
-    """Show whether persistent debug traces are enabled."""
+    """Show whether persistent debug traces are enabled.
+    """
     from memman.setup.scheduler import get_debug
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
     debug_log = logs_dir / 'debug.log'
@@ -2222,7 +2228,8 @@ def scheduler_debug_status() -> None:
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def store(ctx: click.Context) -> None:
-    """Manage named memory stores."""
+    """Manage named memory stores.
+    """
     if ctx.invoked_subcommand is None:
         ctx.invoke(store_list)
 
@@ -2230,7 +2237,8 @@ def store(ctx: click.Context) -> None:
 @store.command('list')
 @click.pass_context
 def store_list(ctx: click.Context) -> None:
-    """List all stores as JSON (stores[], active)."""
+    """List all stores as JSON (stores[], active).
+    """
     data_dir = ctx.obj['data_dir']
     stores = list_stores(data_dir)
     active = _resolve_store_name(data_dir, ctx.obj['store']) if stores else None
@@ -2241,7 +2249,8 @@ def store_list(ctx: click.Context) -> None:
 @click.argument('name')
 @click.pass_context
 def store_create(ctx: click.Context, name: str) -> None:
-    """Create a new store."""
+    """Create a new store.
+    """
     data_dir = ctx.obj['data_dir']
     if not valid_store_name(name):
         raise click.ClickException(
@@ -2259,7 +2268,8 @@ def store_create(ctx: click.Context, name: str) -> None:
 @click.argument('name')
 @click.pass_context
 def store_use(ctx: click.Context, name: str) -> None:
-    """Switch the active store."""
+    """Switch the active store.
+    """
     data_dir = ctx.obj['data_dir']
     if name not in factory.list_stores(data_dir):
         raise click.ClickException(
@@ -2296,21 +2306,18 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
             f'Drop store "{name}" (and all of its data)?',
             abort=True)
     # Notes:
-    # - A backend refusing the drop is an operator-facing failure,
-    #   not a bug: an unreachable Postgres, or a store name the
-    #   backend will not accept as an identifier.
-    # - Raising here leaves the env keys in place on purpose. The
-    #   store still exists, and dropping its routing would send the
-    #   next read to the default backend instead of the one holding
-    #   the data.
+    # - A backend refusing the drop (an unreachable Postgres, or a
+    #   name it will not accept as an identifier) is an operator
+    #   failure.
+    # - Raising leaves the env keys in place on purpose. The store
+    #   still exists, and dropping its routing would send the next
+    #   read to the default backend instead of the one holding the
+    #   data.
     try:
         factory.drop_store(name, data_dir)
     except BackendError as exc:
         raise click.ClickException(
             f'could not remove store {name!r}: {exc}')
-    # Lazy import: memman.setup.scheduler adds interpreter startup
-    # cost that every CLI call would pay -- including the per-prompt
-    # recall hook -- for a cold-path command.
     from memman.setup.scheduler import _write_env_keys_with_flock
     per_store_keys = {
         f'{prefix}{name}' for prefix, _ in config.PER_STORE_KEY_SPECS}
@@ -2343,7 +2350,8 @@ def backup(ctx: click.Context) -> None:
 @click.argument('target', required=False)
 @click.pass_context
 def backup_run(ctx: click.Context, target: str | None) -> None:
-    """Build one backup bundle now (TARGET or MEMMAN_BACKUP_TARGET)."""
+    """Build one backup bundle now (TARGET or MEMMAN_BACKUP_TARGET).
+    """
     data_dir = ctx.obj['data_dir']
     target = target or config.get(config.BACKUP_TARGET)
     if not target:
@@ -2401,18 +2409,18 @@ def backup_schedule(ctx: click.Context, cron: str, target: str,
 
 
 @backup.command('unschedule')
-@click.pass_context
-def backup_unschedule(ctx: click.Context) -> None:
-    """Remove the scheduled backup trigger (keeps the env config)."""
-    data_dir = ctx.obj['data_dir']
+def backup_unschedule() -> None:
+    """Remove the scheduled backup trigger (keeps the env config).
+    """
     from memman.setup.scheduler import uninstall_backup
-    _json_out({'action': 'unscheduled', **uninstall_backup(data_dir)})
+    _json_out({'action': 'unscheduled', **uninstall_backup()})
 
 
 @backup.command('list')
 @click.argument('target', required=False)
 def backup_list(target: str | None) -> None:
-    """List bundles at TARGET (or MEMMAN_BACKUP_TARGET) from sidecars."""
+    """List bundles at TARGET (or MEMMAN_BACKUP_TARGET) from sidecars.
+    """
     target = target or config.get(config.BACKUP_TARGET)
     if not target:
         raise click.ClickException(
@@ -2442,7 +2450,8 @@ def backup_list(target: str | None) -> None:
 
 @backup.command('status')
 def backup_status() -> None:
-    """Report backup config, schedule, last fire, and latest bundle."""
+    """Report backup config, schedule, last fire, and latest bundle.
+    """
     from memman.setup import scheduler as sched
 
     cron = config.get(config.BACKUP_CRON)
@@ -2468,7 +2477,6 @@ def backup_status() -> None:
                  / sched.SYSTEMD_BACKUP_TIMER_NAME)
         out['installed'] = timer.exists()
         if out['installed']:
-            import subprocess
             try:
                 shown = subprocess.run(
                     ['systemctl', '--user', 'show',
@@ -2504,13 +2512,8 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
     on this host (the DSN is a secret and is not in the bundle); a
     store with no DSN is skipped and reported.
     """
-    import shutil
-    import tarfile
-
     data_dir = ctx.obj['data_dir']
     from memman.backup import restore
-    from memman.exceptions import EmbedFingerprintError
-    from memman.migrate import MigrateError, held_drain_lock
 
     needs_pg = False
     try:
@@ -2547,7 +2550,8 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
 @backup.command('worker', hidden=True)
 @click.pass_context
 def backup_worker(ctx: click.Context) -> None:
-    """Hidden: run one backup now. The scheduler unit's ExecStart target."""
+    """Hidden: run one backup now. The scheduler unit's ExecStart target.
+    """
     from memman.backup import run_backup
     try:
         run_backup(ctx.obj['data_dir'])
@@ -2559,9 +2563,8 @@ def backup_worker(ctx: click.Context) -> None:
 @cli.command()
 @click.pass_context
 def status(ctx: click.Context) -> None:
-    """Show database statistics."""
-    from memman.store.factory import list_stores, resolve_store_backend
-
+    """Show database statistics.
+    """
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
     with _active_backend(ctx) as backend:
@@ -2657,7 +2660,8 @@ def _doctor_text_report(result: dict) -> None:
 @click.pass_context
 def log_list(ctx: click.Context, limit: int, since: str,
              stats: bool, text_output: bool) -> None:
-    """Show the operation audit log (default JSON; --text for human view)."""
+    """Show the operation audit log (default JSON; --text for human view).
+    """
     since_ts = ''
     if since:
         since_ts = _parse_since(since)
@@ -3070,20 +3074,10 @@ def migrate(
     drain.lock is held throughout so a scheduler-fired drain cannot
     race the migration.
     """
-    import shutil
-
-    from memman import config
-    from memman.migrate import MigrateError, SchemaState
-    from memman.migrate import _verify_destination_counts, held_drain_lock
     from memman.migrate import inspect_target_schemas, preflight
     from memman.setup.scheduler import _write_env_keys
-    from memman.store.db import list_local_store_dirs, store_dir
-    from memman.store.errors import ConfigError
-    from memman.store.factory import list_stores, resolve_store_backend
-    from memman.store.factory import resolve_store_pg_dsn
     from memman.store.postgres import PostgresMigrator, _connection
     from memman.store.postgres import _store_schema, drop_postgres_store
-    from memman.store.sqlite import SqliteMigrator
     from memman.trace import redact_dsn
 
     data_dir = ctx.obj['data_dir']
@@ -3113,9 +3107,8 @@ def migrate(
             stores_all = list_local_store_dirs(data_dir)
     else:
         # Notes:
-        # - Check existence before the naming guard below. Without
-        #   it an unknown name falls through to that guard, which
-        #   then describes a store that is not there.
+        # - Existence is checked before the naming guard below, which
+        #   would otherwise describe a store that is not there.
         # - Only a sqlite-routed store is judged here, from the
         #   filesystem. Deciding a postgres-routed one needs the
         #   server, and during an outage that reports a live store as
@@ -3148,36 +3141,34 @@ def migrate(
         return
 
     # Notes:
-    # - Both directions touch a postgres schema, so both need the
-    #   name to be one. Guarding only `--to postgres` leaves the
-    #   same ConfigError escaping `except MigrateError` on the way
-    #   back, after the plan prints and the drain lock is held.
+    # - Both directions touch a postgres schema, so both need a name
+    #   that fits one. Guarding only `--to postgres` lets the same
+    #   ConfigError escape `except MigrateError` on the way back,
+    #   after the plan prints and the drain lock is held.
     # - Store names reach here unchecked: `list_local_store_dirs`
     #   scans the filesystem, and a postgres route can be hand
     #   written into the env file.
-    # - `_store_schema` is the oracle rather than a second regex, so
-    #   this gate agrees with the call that raised.
-    # - Runs before the DSN lookup so a naming fault never depends
-    #   on a reachable server.
+    # - `_store_schema` is the oracle, so this gate agrees with the
+    #   call that raised.
+    # - Runs before the DSN lookup, so a naming fault needs no
+    #   reachable server.
     unhostable: list[tuple[str, str]] = []
     for s in list(todo):
         try:
             _store_schema(s)
-        except ConfigError as exc:
+        except StoreConfigError as exc:
             unhostable.append((s, str(exc)))
             todo.remove(s)
 
     # Notes:
-    # - `_store_schema` refuses on character class AND on length, so
-    #   the remedy quotes its message rather than asserting a reason.
-    #   Hardcoding the character-class text told the owner of a
-    #   60-character name that it failed a pattern it matches.
+    # - `_store_schema` refuses on character class and on length, so
+    #   the remedy quotes its message. A hardcoded character-class
+    #   reason would misdescribe a name refused only for length.
     # - The rewrite is not injective and does not shorten, so it can
     #   return the name just refused, or one already claimed by
-    #   another store in this run. Say so instead of naming it.
-    # - `known` comes from the filesystem and this run, never from
-    #   `list_stores`: that reaches the server, and the whole point
-    #   of this gate is to work without one.
+    #   another store in this run. The remedy says so.
+    # - `known` comes from the filesystem and this run. `list_stores`
+    #   reaches the server, and this gate must work without one.
     known = set(list_local_store_dirs(data_dir)) | set(stores_all)
     taken: set[str] = set()
 
@@ -3217,12 +3208,12 @@ def migrate(
                     ' --default`, or migrate one store at a time with'
                     ' --store NAME.')
         else:
-            dsn = (config.get(config.env_key_for('postgres', 'DSN', todo[0]))
+            dsn = (config.get(config.POSTGRES_DSN_FOR(todo[0]))
                    or config.get(config.DEFAULT_PG_DSN))
             if not dsn:
                 raise click.UsageError(
                     f'no DSN for store {todo[0]!r}: set'
-                    f' {config.env_key_for("postgres", "DSN", todo[0])} or'
+                    f' {config.POSTGRES_DSN_FOR(todo[0])} or'
                     f' {config.DEFAULT_PG_DSN} (run `memman config'
                     f' set-pg-dsn --store {todo[0]}` or `--default`).')
 
@@ -3259,13 +3250,6 @@ def migrate(
             click.echo(
                 f'WARNING: {len(populated)} store(s) will be'
                 f' destructively overwritten.')
-        if not dry_run:
-            click.echo('')
-            click.echo(
-                'After successful migrate,'
-                ' MEMMAN_BACKEND_<store>=postgres'
-                ' and MEMMAN_POSTGRES_DSN_<store>=<dsn> will be written to'
-                ' the env file for each migrated store.')
 
         if dry_run:
             src_migrator = SqliteMigrator(data_dir)
@@ -3278,25 +3262,29 @@ def migrate(
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (dry-run)')
                 # Notes:
-                # - All three types are reachable. `apply` and
-                #   `_verify_destination_counts` reach the Postgres
-                #   connection scope and raise `BackendError`, while
-                #   `SqliteMigrator.gather` runs its selects unwrapped
-                #   -- `_connect_ro` translates only the connect and
-                #   the `pragma schema_version` probe -- so a store
-                #   that opens and then fails mid-read raises a bare
-                #   `sqlite3.Error`. Miss either and the store name is
-                #   lost, and `--all` cannot say which store failed.
+                # - `apply` and `_verify_destination_counts` raise
+                #   `BackendError` from the Postgres connection scope.
+                # - `SqliteMigrator.gather` runs its selects unwrapped
+                #   (`_connect_ro` translates only the connect and the
+                #   `pragma schema_version` probe), so a store that
+                #   fails mid-read raises a bare `sqlite3.Error`.
+                # - Missing either type loses the store name, and
+                #   `--all` cannot say which store failed.
                 except (MigrateError, BackendError, sqlite3.Error) as exc:
                     raise click.ClickException(f'{s}: {exc}')
-            # Without this a run that skipped stores looked like a
-            # clean full plan, while the all-skipped branch printed a
-            # count.
+            # A plan that skipped stores must say so, as the
+            # all-skipped branch does.
             if migrate_all and skipped:
                 click.echo(
                     f'planned={len(todo)} skipped={len(skipped)}')
             return
 
+        click.echo('')
+        click.echo(
+            'After successful migrate,'
+            ' MEMMAN_BACKEND_<store>=postgres'
+            ' and MEMMAN_POSTGRES_DSN_<store>=<dsn> will be written to'
+            ' the env file for each migrated store.')
         if not yes:
             click.echo('')
             click.confirm('Proceed?', default=False, abort=True)
@@ -3304,7 +3292,7 @@ def migrate(
         try:
             with held_drain_lock(data_dir):
                 src_migrator = SqliteMigrator(data_dir)
-                tgt_migrator = PostgresMigrator(data_dir, dsn=dsn)
+                tgt_migrator = PostgresMigrator(dsn=dsn)
                 tgt_migrator.preflight_target(todo[0])
                 for s in todo:
                     try:
@@ -3329,7 +3317,7 @@ def migrate(
                             f' meta={len(payload.meta)} (verified)')
                         _write_env_keys({
                             config.BACKEND_FOR(s): 'postgres',
-                            config.env_key_for('postgres', 'DSN', s): dsn,
+                            config.POSTGRES_DSN_FOR(s): dsn,
                             }, data_dir=data_dir)
                         click.echo(
                             f'  Wrote {config.BACKEND_FOR(s)}=postgres'
@@ -3375,7 +3363,7 @@ def migrate(
         if not dsn:
             raise click.UsageError(
                 f'no postgres DSN for store {s!r}: set'
-                f' {config.env_key_for("postgres", "DSN", s)} or'
+                f' {config.POSTGRES_DSN_FOR(s)} or'
                 f' {config.DEFAULT_PG_DSN}.')
         store_dsns[s] = dsn
 
@@ -3409,10 +3397,6 @@ def migrate(
         click.echo('')
         click.confirm('Proceed?', default=False, abort=True)
 
-    import tempfile
-
-    from memman.setup.archive import archive_postgres_schema
-
     try:
         with held_drain_lock(data_dir):
             for s in todo:
@@ -3423,7 +3407,7 @@ def migrate(
                 (scratch / 'data').mkdir()
                 produced = scratch / 'data' / s
                 try:
-                    src_migrator = PostgresMigrator(data_dir, dsn=dsn)
+                    src_migrator = PostgresMigrator(dsn=dsn)
                     src_migrator.preflight_source(s)
                     payload = src_migrator.gather(s)
                     tgt_migrator = SqliteMigrator(str(scratch))
@@ -3434,14 +3418,13 @@ def migrate(
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (verified)')
                 # Notes:
-                # - BackendError joins MigrateError here so a backend
-                #   rejecting the store still removes the scratch
-                #   dir; escaping this handler stranded a
-                #   `migrate-*` directory in the data dir. It
-                #   subsumes the ConfigError this once named, and
-                #   also covers the bare BackendError that
-                #   `gather` / `apply` / `_verify_destination_counts`
-                #   raise from the Postgres connection scope.
+                # - A backend rejecting the store still removes the
+                #   scratch dir: an escape would strand a `migrate-*`
+                #   directory in the data dir.
+                # - BackendError covers ConfigError and the bare
+                #   BackendError that `gather` / `apply` /
+                #   `_verify_destination_counts` raise from the
+                #   Postgres connection scope.
                 except (MigrateError, BackendError,
                         sqlite3.Error) as exc:
                     shutil.rmtree(scratch, ignore_errors=True)
@@ -3463,12 +3446,12 @@ def migrate(
 
                 _write_env_keys(
                     {config.BACKEND_FOR(s): 'sqlite'},
-                    removes={config.env_key_for('postgres', 'DSN', s)},
+                    removes={config.POSTGRES_DSN_FOR(s)},
                     data_dir=data_dir)
                 click.echo(
                     f'  Wrote {config.BACKEND_FOR(s)}=sqlite to'
                     f' {data_dir}/env (removed'
-                    f' {config.env_key_for("postgres", "DSN", s)}).')
+                    f' {config.POSTGRES_DSN_FOR(s)}).')
 
                 try:
                     drop_postgres_store(s, dsn)
@@ -3521,12 +3504,10 @@ def prime() -> None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
         env_store = os.environ.get(config.STORE, '').strip()
         name = env_store or read_active(data_dir)
-        from memman.store.factory import resolve_store_backend
         backend_name = resolve_store_backend(name, data_dir)
         if backend_name == 'sqlite':
-            from memman.store.node import get_stats
             if store_exists(data_dir, name):
-                with open_ro_db(store_dir(data_dir, name)) as db:
+                with open_read_only(store_dir(data_dir, name)) as db:
                     stats = get_stats(db)
                 status_line = (f"[memman] Memory active "
                                f"({stats['total_insights']} insights).")
@@ -3541,7 +3522,6 @@ def prime() -> None:
     except Exception as exc:
         logger.debug('prime status fallback: %s', exc)
     click.echo(status_line)
-    # Lazy: the module loads httpx, which `import memman.cli` does not.
     from memman.llm import openrouter_models
     notice = openrouter_models.read_model_notice(
         os.environ.get(config.DATA_DIR, default_data_dir()))
@@ -3580,7 +3560,6 @@ def _enrich_stale_only(
     predicate + reset run inside a single `reembed_lock('rebuild')`
     window so a concurrent wholesale rebuild cannot race.
     """
-    from memman.embed.fingerprint import bound_embedder
     from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
     from memman.pipeline.remember import compute_prompt_version
 
@@ -3592,9 +3571,9 @@ def _enrich_stale_only(
     except Exception as exc:
         raise click.ClickException(
             f'cannot resolve active prompt version: {exc}')
-    # Reported, never compared: `active_pv` already folds this model
-    # in, so the payload names it only so a reader can tell WHICH
-    # input drifted without un-folding the hash.
+    # `active_pv` already folds this model in. The payload names it so
+    # a reader can tell which input drifted without un-folding the
+    # hash.
     try:
         enrich_model: str | None = config.require(
             config.LLM_MODEL)
@@ -3631,7 +3610,7 @@ def _enrich_stale_only(
                 return
 
             llm_client = _get_llm_client_or_fail()
-            ec = bound_embedder(backend)
+            ec = fingerprint.bound_embedder(backend)
 
             processed = 0
 
@@ -3709,7 +3688,8 @@ def _enrich_stale_only(
 @click.pass_context
 def enrich(ctx: click.Context, dry_run: bool,
            progress_jsonl: bool, stale_only: bool) -> None:
-    """Re-enrich all insights through the full LLM pipeline."""
+    """Re-enrich all insights through the full LLM pipeline.
+    """
     if stale_only:
         _enrich_stale_only(
             ctx, dry_run=dry_run, progress_jsonl=progress_jsonl)
@@ -3717,12 +3697,11 @@ def enrich(ctx: click.Context, dry_run: bool,
 
     if not dry_run:
         _require_stopped('rebuild')
-    from memman.embed.fingerprint import bound_embedder
     from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
 
     with _active_backend(ctx) as backend:
         llm_client = _get_llm_client_or_fail()
-        ec = bound_embedder(backend)
+        ec = fingerprint.bound_embedder(backend)
 
         all_ids = backend.nodes.get_active_ids()
         total_count = len(all_ids)
@@ -3802,12 +3781,10 @@ def embed_status(ctx: click.Context) -> None:
     fingerprint is the source of truth -- there is no env-active
     fingerprint to compare against.
     """
-    from memman.embed import registry as _ec_registry
-    from memman.embed.fingerprint import stored_fingerprint
     from memman.embed.swap import read_progress
 
     with _active_backend(ctx, unchecked=True) as backend:
-        stored = stored_fingerprint(backend)
+        stored = fingerprint.stored_fingerprint(backend)
         progress = read_progress(backend)
 
     out: dict = {
@@ -3839,29 +3816,40 @@ def embed_status(ctx: click.Context) -> None:
 _REEMBED_BATCH = 50
 
 
-def _count_active_rows(sdir: str) -> int:
-    """Return the count of non-deleted insights in the given store.
-    """
-    from memman.store.node import count_active_insights
-
-    with open_ro_db(sdir) as db:
-        return count_active_insights(db)
-
-
 def _reembed_one_store(
         sdir: str, ec: 'EmbeddingProvider', target: 'Fingerprint',
-        dry_run: bool, bar: 'tqdm | None' = None) -> dict:
+        dry_run: bool, bar: 'tqdm') -> dict:
     """Re-embed a single store with the active client.
 
-    Walk all active insights, comparing each to `target`. Skip rows
-    that already match; re-embed rows that differ. Per-row blob +
-    cursor advance is one transaction; the final fingerprint write +
-    cursor reset + state=idle is another.
-    """
-    from memman.embed.fingerprint import write_fingerprint
-    from memman.store.node import iter_for_reembed
-    from memman.store.sqlite import SqliteBackend
+    Walks all active insights, comparing each to `target`. Rows that
+    already match are skipped. The per-row blob write and cursor
+    advance is one transaction. The final fingerprint write, cursor
+    reset and state=idle is another.
 
+    Parameters
+    ----------
+    sdir : str
+        Store directory; its name is the store name.
+    ec : EmbeddingProvider
+        Client that produces the new vectors.
+    target : Fingerprint
+        Fingerprint each row is compared against.
+    dry_run : bool
+        Count rows to re-embed without writing.
+    bar : tqdm
+        Progress bar to advance per row.
+
+    Returns
+    -------
+    dict
+        Keys `store`, `scanned`, and `reembedded`. A dry run returns
+        `would_reembed` in place of `reembedded`.
+
+    Raises
+    ------
+    click.ClickException
+        Another reembed holds the store's lock.
+    """
     store_name = pathlib.Path(sdir).name
     with open_db(sdir) as db:
         backend = SqliteBackend(db)
@@ -3882,8 +3870,7 @@ def _reembed_one_store(
                     backend.meta.set('embed_reembed_cursor', '')
                 cursor = ''
 
-            if bar is not None:
-                bar.set_description(f'reembed {store_name}')
+            bar.set_description(f'reembed {store_name}')
 
             while True:
                 rows = iter_for_reembed(db, cursor, _REEMBED_BATCH)
@@ -3905,13 +3892,11 @@ def _reembed_one_store(
                             backend.meta.set(
                                 'embed_reembed_cursor', row_id)
                         reembedded += 1
-                    else:
-                        if not dry_run:
-                            backend.meta.set(
-                                'embed_reembed_cursor', row_id)
+                    elif not dry_run:
+                        backend.meta.set(
+                            'embed_reembed_cursor', row_id)
                     cursor = row_id
-                    if bar is not None:
-                        bar.update(1)
+                    bar.update(1)
 
             if dry_run:
                 return {
@@ -3959,11 +3944,6 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     A crash mid-sweep leaves state='in_progress'; re-running picks
     up from the cursor.
     """
-    from memman.embed import get_client
-    from memman.embed.fingerprint import Fingerprint
-    from memman.store.db import list_local_store_dirs, store_dir
-    from memman.store.factory import resolve_store_backend
-
     data_dir = ctx.obj['data_dir']
     active_name = _resolve_store_name(data_dir, ctx.obj['store'])
     if resolve_store_backend(active_name, data_dir) != 'sqlite':
@@ -3983,8 +3963,10 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
         n for n in list_local_store_dirs(data_dir)
         if resolve_store_backend(n, data_dir) == 'sqlite']
 
-    grand_total = sum(
-        _count_active_rows(store_dir(data_dir, name)) for name in names)
+    grand_total = 0
+    for name in names:
+        with open_read_only(store_dir(data_dir, name)) as db:
+            grand_total += count_active_insights(db)
     bar = tqdm(
         total=grand_total, desc='reembed', unit='row',
         file=sys.stderr, dynamic_ncols=True,
@@ -4064,13 +4046,7 @@ def embed_swap(
     batch size; `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 =
     unlimited) caps the Postgres HNSW build.
     """
-    from memman.embed import registry as _ec_registry
-    from memman.embed.fingerprint import Fingerprint, stored_fingerprint
-    from memman.embed.fingerprint import write_fingerprint
-    from memman.embed.swap import SwapPlan
-    from memman.embed.swap import abort_swap as _abort_swap
-    from memman.embed.swap import read_progress, run_swap
-    from memman.store.factory import open_backend
+    from memman.embed.swap import SwapPlan, abort_swap, read_progress, run_swap
 
     if abort and resume:
         raise click.ClickException(
@@ -4078,9 +4054,9 @@ def embed_swap(
 
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
-    with open_backend(name, data_dir) as backend:
+    with factory.open_backend(name, data_dir) as backend:
         if abort:
-            _abort_swap(backend)
+            abort_swap(backend)
             _json_out({'store': name, 'state': 'aborted'})
             return
 
@@ -4093,7 +4069,7 @@ def embed_swap(
             target_model = progress.target_model
             target_dim = progress.target_dim
         else:
-            if progress.state and progress.state not in {'', 'done'}:
+            if progress.state not in {'', 'done'}:
                 raise click.ClickException(
                     f'store {name!r} has an in-flight swap'
                     f' (state={progress.state}); use --resume or'
@@ -4101,10 +4077,8 @@ def embed_swap(
             if not to_model:
                 raise click.ClickException(
                     '--to <model> is required to start a new swap')
-            if not to_provider:
-                to_provider = (
-                    config.get(config.EMBED_PROVIDER) or 'voyage')
-            target_provider = to_provider
+            target_provider = (
+                to_provider or config.get(config.EMBED_PROVIDER) or 'voyage')
             target_model = to_model
             target_dim = 0
 
@@ -4132,41 +4106,28 @@ def embed_swap(
             progress = run_swap(backend, ec_new, plan)
 
         # Notes:
-        # - Everything below runs AFTER the one-way cutover, so a
+        # - Everything below runs after the one-way cutover, so a
         #   backend failure here must not read as a retryable swap.
         #   `run_swap` already wrote the fingerprint in one
-        #   transaction with its own state cleanup, which makes this
-        #   block a confirming re-read; the generic seam message
-        #   would describe it exactly as it describes a failure to
-        #   connect before any data moved.
-        # - Re-running the same swap IS safe, and that is worth
-        #   saying rather than leaving the operator to guess:
-        #   `run_swap` returns DONE at once when the stored
-        #   fingerprint already matches the target, so it re-embeds
-        #   nothing.
+        #   transaction with its own state cleanup, so this block is a
+        #   confirming re-read. The generic seam message would read
+        #   like a failure to connect before any data moved.
+        # - Re-running the same swap is safe: `run_swap` returns DONE
+        #   at once when the stored fingerprint already matches the
+        #   target, so it re-embeds nothing.
         try:
-            fp = stored_fingerprint(backend) or Fingerprint(
+            target_fp = Fingerprint(
                 provider=plan.target_provider,
                 model=plan.target_model,
                 dim=plan.target_dim)
+            fp = fingerprint.stored_fingerprint(backend) or target_fp
             if fp.provider != plan.target_provider:
-                write_fingerprint(
-                    backend,
-                    Fingerprint(
-                        provider=plan.target_provider,
-                        model=plan.target_model,
-                        dim=plan.target_dim))
-                fp = Fingerprint(
-                    provider=plan.target_provider,
-                    model=plan.target_model,
-                    dim=plan.target_dim)
-        # Notes:
-        # - BOTH types are reachable and neither is redundant: the
-        #   Postgres backend translates at its connection scope, while
-        #   the SQLite backend deliberately does not translate a
-        #   statement failure, so the same read raises `BackendError`
-        #   on one backend and `sqlite3.Error` on the other. Catching
-        #   only the first left this unfixed on the default backend.
+                write_fingerprint(backend, target_fp)
+                fp = target_fp
+        # Both types are reachable: the Postgres backend translates at
+        # its connection scope, while the SQLite backend translates no
+        # statement failure. The same read raises `BackendError` on
+        # one and `sqlite3.Error` on the other.
         except (BackendError, sqlite3.Error) as exc:
             raise click.ClickException(
                 f'store {name!r}: the vector cutover to'

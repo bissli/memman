@@ -1,9 +1,12 @@
-"""Tests for LLM-based insight enrichment."""
+"""Tests for LLM-based insight enrichment.
+"""
 
 import json
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+from memman.pipeline import enrich as enrich_mod
 from memman.pipeline.enrich import enrich_pending, enrich_with_llm
 from memman.store.node import insert_insight
 from tests.conftest import make_insight
@@ -12,19 +15,22 @@ OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 def _make_enrichment_response(summary='test summary') -> str:
-    """Build a mock LLM enrichment JSON response."""
+    """Build a mock LLM enrichment JSON response.
+    """
     return json.dumps({'summary': summary})
 
 
 def _content_containing(*names) -> str:
-    """Content that names each of `names`."""
+    """Content that names each of `names`.
+    """
     return 'cap body ' + ' '.join(names)
 
 
 def _read_enrichment_columns(db, insight_id: str) -> dict:
-    """Read enrichment columns directly from DB."""
+    """Read enrichment columns directly from DB.
+    """
     row = db._conn.execute(
-        'SELECT summary FROM insights WHERE id = ?',
+        'select summary from insights where id = ?',
         (insight_id,)).fetchone()
     if row is None:
         return {}
@@ -32,7 +38,8 @@ def _read_enrichment_columns(db, insight_id: str) -> dict:
 
 
 class TestEnrichWithLLM:
-    """LLM enrichment extraction with mocked client."""
+    """LLM enrichment extraction with mocked client.
+    """
 
     def test_happy_path(self):
         """Verify a valid LLM response returns its summary.
@@ -83,7 +90,12 @@ class TestEnrichWithLLM:
         assert set(result) == {'summary'}
 
     def test_llm_unavailable_returns_empty(self):
-        """ConnectionError from LLM returns empty dict, no crash."""
+        """A ConnectionError from the LLM returns {} without raising.
+
+        Mutation: removing the except around complete_parsed, so an unreachable
+            LLM crashes the drain.
+        Oracle: the literal empty dict, the documented failure return.
+        """
         insight = make_insight(
             id='ua-1', content='test content')
 
@@ -112,8 +124,12 @@ class TestEnrichWithLLM:
         assert result == {'summary': ''}
 
     def test_llm_failure_logged_at_warning(self, caplog):
-        """An LLM exception during enrichment is logged at WARNING."""
-        import logging
+        """An LLM exception during enrichment is logged at WARNING.
+
+        Mutation: logging the failed call at debug, hiding an unenriched row
+            from the default log.
+        Oracle: the levels of the records captured on the memman logger.
+        """
         insight = make_insight(id='warn-1', content='test content')
         mock_client = MagicMock()
         mock_client.complete.side_effect = ConnectionError('unreachable')
@@ -131,7 +147,6 @@ class TestEnrichWithLLM:
             row stamped enriched with no summary from the default log.
         Oracle: the captured record levels.
         """
-        import logging
         insight = make_insight(id='warn-2', content='test content')
         mock_client = MagicMock()
         mock_client.complete.return_value = 'not json at all'
@@ -152,8 +167,6 @@ class TestEnrichWithLLM:
         Oracle: the enrichment columns, which stay null, beside the
             processed count, which does not.
         """
-        from memman.pipeline import enrich as enrich_mod
-
         def _unavailable(*args, **kwargs):
             raise RuntimeError('no LLM credential')
 
@@ -169,7 +182,8 @@ class TestEnrichWithLLM:
 
 
 class TestReEmbed:
-    """Re-embedding a pending row's raw content."""
+    """Re-embedding a pending row's raw content.
+    """
 
     def test_reembed_embeds_the_raw_content(self, tmp_db, tmp_backend):
         """Verify enrich_pending embeds the row's content and nothing
@@ -247,7 +261,7 @@ class TestReEmbed:
             max_batch=1)
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at FROM insights WHERE id = ?',
+            'select enrich_attempted_at from insights where id = ?',
             ('ef-1',)).fetchone()
         assert row[0] is not None
 
@@ -256,7 +270,8 @@ class TestReEmbed:
 
 
 class TestEnrichmentPurity:
-    """enrich_with_llm should be pure (no DB writes)."""
+    """enrich_with_llm should be pure (no DB writes).
+    """
 
     def test_enrichment_does_not_write_db_directly(self, tmp_db):
         """Verify enrich_with_llm returns the summary without writing it.
@@ -277,7 +292,7 @@ class TestEnrichmentPurity:
 
         assert result == {'summary': 'test summary'}
         row = tmp_db._conn.execute(
-            'SELECT summary FROM insights WHERE id = ?',
+            'select summary from insights where id = ?',
             ('pw-1',)).fetchone()
         assert row[0] is None, (
             'enrich_with_llm should not write summary to DB')
@@ -303,7 +318,8 @@ class TestEnrichmentPurity:
 
 
 class _SequenceClient:
-    """Answer a scripted list of responses; raise once it is spent."""
+    """Answer a scripted list of responses; raise once it is spent.
+    """
 
     def __init__(self, responses):
         self.responses = list(responses)

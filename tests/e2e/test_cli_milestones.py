@@ -1,10 +1,9 @@
-"""End-to-end CLI milestone tests (subset against the queue API).
+"""End-to-end CLI tests for store ops, CRUD reads, search, and validation.
 
-These tests exercise end-to-end behavior the unit suite cannot: CLI
-subprocess + real env file + drain pipeline. They split across 4
-milestones (M0 store ops, M1 CRUD read paths, M3 search, M11
-validation) and are surgically gated on
-`requires_live_keys` only where drain is exercised.
+These tests cover behavior the unit suite cannot reach: a CLI
+subprocess, a real env file, and the drain pipeline. Groups are M0
+(store ops), M1 (CRUD read paths), M3 (search), and M11 (validation).
+`requires_live_keys` gates only the tests that drain.
 """
 
 import uuid
@@ -19,11 +18,7 @@ from .helpers import find_insight_by_recall, json_out, run_cli
 pytestmark = pytest.mark.e2e_cli
 
 
-# ---------------------------------------------------------------------
-# Module-scoped fixtures: HOME with env file seeded; data dirs that
-# pre-seed the embed_fingerprint to skip the seed_if_fresh Voyage
-# probe (except `store_dir`, which test_store_list_empty needs empty).
-# ---------------------------------------------------------------------
+# --- Module-scoped fixtures ---
 
 @pytest.fixture(scope='module')
 def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
@@ -77,30 +72,53 @@ def m3_dir(home_dir: Path) -> Path:
     return _data_dir(home_dir, 'm3')
 
 
-# ---------------------------------------------------------------------
-# M0: Store Management
-# ---------------------------------------------------------------------
+# --- M0: Store Management ---
 
 class TestM0Stores:
 
     def test_store_list_empty(self, home_dir: Path, store_dir: Path):
+        """Verify `store list` on a data dir with no stores prints none.
+
+        Mutation: listing a phantom store (such as `default`) that no
+            directory backs.
+        Oracle: the empty `stores` array in the JSON output.
+        """
         out = run_cli(['store', 'list'], home_dir, store_dir)
         assert_jq(json_out(out), 'stores', [], 'empty stores array')
 
     @pytest.mark.requires_live_keys
     def test_store_create_default(self, home_dir: Path, store_dir: Path,
                                   live_keys):
+        """Verify `store create default` reports the store as created.
+
+        Mutation: the create command returning another action, or
+            failing on a fresh data dir.
+        Oracle: the `created` action string in the JSON output.
+        """
         out = run_cli(['store', 'create', 'default'], home_dir, store_dir)
         assert_jq(json_out(out), 'action', 'created', 'created default')
 
     @pytest.mark.requires_live_keys
     def test_store_create_work(self, home_dir: Path, store_dir: Path,
                                live_keys):
+        """Verify `store create work` echoes the new store name.
+
+        Mutation: reporting the wrong store name in the output.
+        Oracle: the literal `work` in the `store` field.
+        """
         out = run_cli(['store', 'create', 'work'], home_dir, store_dir)
         assert_jq(json_out(out), 'store', 'work', 'created work')
 
-    def test_store_create_reject_duplicate(self, tmp_path_factory: pytest.TempPathFactory,
-                                           home_dir: Path):
+    def test_store_create_reject_duplicate(
+            self, tmp_path_factory: pytest.TempPathFactory,
+            home_dir: Path):
+        """Verify `store create` refuses a name that already exists.
+
+        Mutation: dropping the `name in list_stores` check, so a
+            second create overwrites or reuses the store.
+        Oracle: the `already exists` message for a store directory
+            pre-made on disk.
+        """
         data_dir = tmp_path_factory.mktemp('reject_dup')
         (data_dir / 'data' / 'work').mkdir(parents=True)
         out = run_cli(['store', 'create', 'work'], home_dir, data_dir,
@@ -110,6 +128,11 @@ class TestM0Stores:
 
     def test_store_create_reject_invalid_name(self, home_dir: Path,
                                               store_dir: Path):
+        """Verify `store create` refuses a name with a leading dot.
+
+        Mutation: dropping the `valid_store_name` check.
+        Oracle: the `invalid store name` message for `.bad`.
+        """
         out = run_cli(['store', 'create', '.bad'], home_dir, store_dir,
                       check=False)
         assert_contains(out.stdout + out.stderr, 'invalid store name',
@@ -118,6 +141,13 @@ class TestM0Stores:
     @pytest.mark.requires_live_keys
     def test_store_list_shows_created(self, home_dir: Path,
                                       store_dir: Path, live_keys):
+        """Verify `store list` includes every store created earlier.
+
+        Mutation: listing only the active store or dropping a
+            store directory from the listing.
+        Oracle: the `default` and `work` stores created by the
+            earlier tests.
+        """
         data = json_out(run_cli(['store', 'list'], home_dir, store_dir))
         assert 'default' in data['stores'], 'lists default'
         assert 'work' in data['stores'], 'lists work'
@@ -125,19 +155,40 @@ class TestM0Stores:
     @pytest.mark.requires_live_keys
     def test_store_use_switch_active(self, home_dir: Path,
                                      store_dir: Path, live_keys):
+        """Verify `store use` switches the active store.
+
+        Mutation: `store use` not persisting the choice, leaving
+            the prior store active.
+        Oracle: the `active` field of `store list` after switching
+            to `work`.
+        """
         run_cli(['store', 'use', 'work'], home_dir, store_dir)
         data = json_out(run_cli(['store', 'list'], home_dir, store_dir))
         assert_jq(data, 'active', 'work', 'work is active')
 
     def test_store_use_reject_nonexistent(self, home_dir: Path,
                                           store_dir: Path):
+        """Verify `store use` refuses a store that does not exist.
+
+        Mutation: dropping the `name in list_stores` check, so the
+            active pointer names a store with no directory.
+        Oracle: the `does not exist` message for `nonexistent`.
+        """
         out = run_cli(['store', 'use', 'nonexistent'], home_dir,
                       store_dir, check=False)
         assert_contains(out.stdout + out.stderr, 'does not exist',
                         'rejects missing')
 
-    def test_store_remove_reject_active(self, tmp_path_factory: pytest.TempPathFactory,
-                                        home_dir: Path):
+    def test_store_remove_reject_active(
+            self, tmp_path_factory: pytest.TempPathFactory,
+            home_dir: Path):
+        """Verify `store remove` refuses to remove the active store.
+
+        Mutation: dropping the `name == active` guard, which would
+            delete the store the next command reads.
+        Oracle: the `cannot remove the active store` message, with
+            the active file pre-written to name `work`.
+        """
         data_dir = tmp_path_factory.mktemp('reject_active')
         (data_dir / 'data' / 'work').mkdir(parents=True)
         (data_dir / 'active').write_text('work\n')
@@ -150,21 +201,32 @@ class TestM0Stores:
     @pytest.mark.requires_live_keys
     def test_store_remove_inactive(self, home_dir: Path,
                                    store_dir: Path, live_keys):
+        """Verify `store remove --yes` removes a non-active store.
+
+        Mutation: the remove command refusing or skipping a store
+            that is not active.
+        Oracle: the `removed` action string in the JSON output.
+        """
         run_cli(['store', 'create', 'temp'], home_dir, store_dir)
         out = run_cli(['store', 'remove', 'temp', '--yes'], home_dir,
                       store_dir)
         assert_jq(json_out(out), 'action', 'removed', 'removed temp')
 
 
-# ---------------------------------------------------------------------
-# M1: Basic CRUD read paths (write -> drain -> read)
-# ---------------------------------------------------------------------
+# --- M1: Basic CRUD read paths (write -> drain -> read) ---
 
 class TestM1CRUD:
 
     @pytest.mark.requires_live_keys
     def test_recall_keyword(self, home_dir: Path, m1_dir: Path,
                             live_keys):
+        """Verify a written insight comes back through keyword recall.
+
+        Mutation: the drain dropping the write, or recall not
+            matching on the unique token in the content.
+        Oracle: the `Qdrant` text of the insight written with a
+            unique token.
+        """
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
@@ -180,7 +242,7 @@ class TestM1CRUD:
     @pytest.mark.requires_live_keys
     def test_recall_no_match_still_answers_with_judgeable_rows(
             self, home_dir: Path, m1_dir: Path, live_keys):
-        """A no-match query still returns a page with score and category.
+        """Verify a no-match query still returns a page with score fields.
 
         Mutation: printing nothing for a no-match query, or dropping
             the score field from the page line - either leaves a
@@ -190,13 +252,6 @@ class TestM1CRUD:
             a store this test seeds itself; the recency anchor
             channel must still seed a line, and it must carry a
             parseable score.
-
-        Notes
-        -----
-        - Seeds its own row rather than relying on the class's
-            earlier tests. Recall prints nothing for a genuinely empty
-            store, so the recency claim needs at least one row to be
-            a claim at all.
         """
         unique = uuid.uuid4().hex[:8]
         run_cli(
@@ -219,6 +274,13 @@ class TestM1CRUD:
     @pytest.mark.requires_live_keys
     def test_status_statistics(self, home_dir: Path, m1_dir: Path,
                                live_keys):
+        """Verify `status` counts the insights written earlier.
+
+        Mutation: counting zero insights, or dropping the
+            per-category breakdown.
+        Oracle: at least one insight, and one in `preference`,
+            written by the earlier recall tests.
+        """
         data = json_out(run_cli(['status'], home_dir, m1_dir))
         assert_jq_gte(data, 'total_insights', 1, 'total >= 1 after writes')
         assert_jq_gte(data, 'by_category.preference', 1,
@@ -227,6 +289,13 @@ class TestM1CRUD:
     @pytest.mark.requires_live_keys
     def test_forget_soft_delete(self, home_dir: Path, m1_dir: Path,
                                 live_keys):
+        """Verify `forget` soft-deletes an insight and `status` counts it.
+
+        Mutation: forget reporting another status, or deleting the
+            row without raising `deleted_insights`.
+        Oracle: the `deleted` status and a deleted count of at
+            least 1.
+        """
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
@@ -242,15 +311,19 @@ class TestM1CRUD:
         assert_jq_gte(data, 'deleted_insights', 1, 'deleted count >= 1')
 
 
-# ---------------------------------------------------------------------
-# M3: Basic search (--basic recall)
-# ---------------------------------------------------------------------
+# --- M3: Basic search (--basic recall) ---
 
 class TestM3Search:
 
     @pytest.mark.requires_live_keys
     def test_recall_basic_token_only(self, home_dir: Path, m3_dir: Path,
                                      live_keys):
+        """Verify `recall --basic` finds an insight by a unique token.
+
+        Mutation: the basic path skipping the token match, or
+            returning a different row.
+        Oracle: the `Chose Qdrant` content written with the token.
+        """
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
@@ -277,14 +350,12 @@ class TestM3Search:
         assert out.stdout == '', 'empty page'
 
 
-# ---------------------------------------------------------------------
-# M11: CLI validation (no keys needed)
-# ---------------------------------------------------------------------
+# --- M11: CLI validation (no keys needed) ---
 
 class TestM11Reranking:
 
     def test_deleted_intent_flag_rejected(self, home_dir: Path, m3_dir: Path):
-        """Verify `--intent` is an unknown option, not a validated value.
+        """Verify `recall` rejects `--intent` as an unknown option.
 
         Mutation: keeping the `--intent` option on the recall command.
         Oracle: click's usage-error exit and `No such option` message.

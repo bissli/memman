@@ -7,33 +7,51 @@ Pins the load-bearing contract of the `BACKENDS` static registry:
   added at test time appears in the help output.
 - `extras.detect_active_extras` reads through `extras_packages`.
 
-These tests guard the abstraction the v3 refactor was for: adding
-a third RDBMS backend should require ONE new entry in the
-`BACKENDS` dict + a `_build_<name>_descriptor()` factory, with no
+These tests guard the abstraction: adding a third RDBMS backend
+should require ONE new entry in the `BACKENDS` dict and a
+`_build_<name>_descriptor()` factory, with no
 edits to factory.py / cli.py / doctor.py / extras.py dispatch.
 """
 from __future__ import annotations
 
 import pytest
+from click.testing import CliRunner
+from memman import extras
+from memman.cli import cli
+from memman.store.errors import ConfigError
 from memman.store.factory import BACKENDS, BackendDescriptor, all_descriptors
 from memman.store.factory import descriptor, known_backends
 
 
 def test_known_backends_reads_from_static_dict():
-    """`known_backends()` returns the keys of `BACKENDS`."""
+    """Verify known_backends() returns exactly the keys of BACKENDS.
+
+    Mutation: known_backends() returning a hard-coded or filtered set that
+        drifts from the registry dict.
+    Oracle: frozenset of BACKENDS keys.
+    """
     assert known_backends() == frozenset(BACKENDS.keys())
 
 
 def test_known_backends_includes_sqlite_and_postgres():
-    """Both shipped backends are registered."""
+    """Verify both shipped backends are registered.
+
+    Mutation: dropping either backend's entry from BACKENDS.
+    Oracle: the literal names 'sqlite' and 'postgres'.
+    """
     names = known_backends()
     assert 'sqlite' in names
     assert 'postgres' in names
 
 
 def test_descriptor_lookup_unknown_raises():
-    """`descriptor('nope')` raises with a hint listing registered names."""
-    from memman.store.errors import ConfigError
+    """Verify descriptor() raises ConfigError naming the backends involved.
+
+    Mutation: raising KeyError, or omitting the registered names from the
+        error message.
+    Oracle: the unknown name and known_backends() as substrings of the
+        message.
+    """
     with pytest.raises(ConfigError) as exc:
         descriptor('nonexistent_backend')
     msg = str(exc.value)
@@ -43,7 +61,12 @@ def test_descriptor_lookup_unknown_raises():
 
 
 def test_all_descriptors_returns_BackendDescriptor_instances():
-    """Every descriptor is a frozen dataclass record."""
+    """Verify every descriptor is a BackendDescriptor with callable hooks.
+
+    Mutation: a registry entry built with a missing or non-callable
+        open_backend, list_stores_keys, or drop_store_fn.
+    Oracle: isinstance and callable checks per descriptor.
+    """
     for d in all_descriptors():
         assert isinstance(d, BackendDescriptor)
         assert d.name in known_backends()
@@ -53,7 +76,12 @@ def test_all_descriptors_returns_BackendDescriptor_instances():
 
 
 def test_postgres_descriptor_declares_extras_packages():
-    """The postgres descriptor lists psycopg / pgvector as extras."""
+    """Verify the postgres descriptor lists psycopg in extras_packages.
+
+    Mutation: leaving extras_packages empty, so extras detection never
+        sees the postgres extra.
+    Oracle: the literal package name 'psycopg'.
+    """
     pg = descriptor('postgres')
     assert pg.extras_packages, (
         'postgres descriptor must declare extras_packages so'
@@ -62,28 +90,22 @@ def test_postgres_descriptor_declares_extras_packages():
 
 
 def test_sqlite_descriptor_declares_no_extras():
-    """SQLite is a stdlib backend; extras_packages is empty."""
+    """Verify the sqlite descriptor declares no extras packages.
+
+    Mutation: listing a third-party package as an sqlite extra.
+    Oracle: the empty tuple.
+    """
     sql = descriptor('sqlite')
     assert sql.extras_packages == ()
 
 
-def test_env_key_for_returns_namespaced_key():
-    """`env_key_for('postgres', 'DSN', store)` returns the per-store key."""
-    from memman import config
-    assert config.env_key_for('postgres', 'DSN', 'main') == (
-        'MEMMAN_POSTGRES_DSN_main')
-    assert config.env_key_for('postgres', 'DSN', 'shared-2') == (
-        'MEMMAN_POSTGRES_DSN_shared-2')
-
-
 def test_extras_detect_active_extras_reads_from_registry():
-    """`extras.detect_active_extras` enumerates registry-declared extras.
+    """Verify detect_active_extras returns only registered backend names.
 
-    With psycopg present in the dev environment, the postgres extra
-    resolves to active. Independent of psycopg, the function must
-    return a list whose items are subset of `known_backends()`.
+    Mutation: detect_active_extras returning a name absent from BACKENDS,
+        such as a hard-coded package name.
+    Oracle: known_backends() membership for each returned name.
     """
-    from memman import extras
     active = extras.detect_active_extras()
     assert isinstance(active, list)
     for name in active:
@@ -93,9 +115,12 @@ def test_extras_detect_active_extras_reads_from_registry():
 
 
 def test_cli_to_choice_dynamic_from_registry():
-    """`memman migrate --to` choices are derived from `known_backends()`."""
-    from click.testing import CliRunner
-    from memman.cli import cli
+    """Verify migrate --help lists every registered backend.
+
+    Mutation: hard-coding the --to choices, so a registered backend is
+        missing from the help output.
+    Oracle: known_backends() names as substrings of the help text.
+    """
 
     runner = CliRunner()
     result = runner.invoke(cli, ['migrate', '--help'])

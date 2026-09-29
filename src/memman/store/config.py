@@ -22,6 +22,7 @@ flat `INSTALLABLE_KEYS` membership check at `config set`.
 import difflib
 from dataclasses import dataclass
 
+from memman.store.db import valid_store_name
 from memman.store.errors import ConfigError
 
 
@@ -29,8 +30,8 @@ from memman.store.errors import ConfigError
 class PostgresBackendConfig:
     """Owns the `MEMMAN_POSTGRES_*` namespace.
 
-    Today: `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN). Add new
-    keys here as the postgres backend grows them.
+    The one canonical key is `MEMMAN_POSTGRES_DSN`, used in its
+    per-store form `MEMMAN_POSTGRES_DSN_<store>`.
     """
 
     NAMESPACE_PREFIX = 'MEMMAN_POSTGRES_'
@@ -38,11 +39,18 @@ class PostgresBackendConfig:
 
     @classmethod
     def _validate(cls, env: dict) -> None:
-        """Reject unknown `MEMMAN_POSTGRES_*` keys in `env`.
+        """Reject bare or unknown `MEMMAN_POSTGRES_*` keys in `env`.
 
-        Pulls a `did you mean` hint from `difflib.get_close_matches`
-        when one is sufficiently close. Raises `ConfigError`
-        immediately on the first unknown key.
+        Parameters
+        ----------
+        env : dict
+            Env keys to scan; keys outside the namespace are ignored.
+
+        Raises
+        ------
+        ConfigError
+            On the first bare, unknown, or badly suffixed key, with a
+            `did you mean` hint when a canonical key is close.
         """
         _validate_namespace(
             env, cls.NAMESPACE_PREFIX, cls.OWNED_KEYS)
@@ -50,23 +58,24 @@ class PostgresBackendConfig:
 
 def _validate_namespace(
         env: dict, prefix: str, owned: frozenset) -> None:
-    """Common namespace scan.
+    """Reject every key under `prefix` that is not a per-store key.
 
-    Iterates `env` keys with the namespace prefix. Bare canonical
-    keys (members of `owned` like `MEMMAN_POSTGRES_DSN`) are
-    rejected -- the per-store routing model requires the suffixed
-    form. Per-store-suffixed keys (e.g. `MEMMAN_POSTGRES_DSN_<store>`)
-    are accepted when the canonical `<owned-key>_<suffix>` form
-    decomposes to (a) a known canonical key and (b) a syntactically
-    valid store-name suffix.
+    Parameters
+    ----------
+    env : dict
+        Env keys to scan.
+    prefix : str
+        Namespace prefix that selects the keys to check.
+    owned : frozenset
+        Canonical keys. A key passes only as `<owned>_<store>` with a
+        valid store name; a bare canonical key fails.
 
-    The error message includes a `did you mean` hint pulled from
-    `difflib.get_close_matches`, suffixed with `_<store>` so the
-    suggestion points at the per-store form rather than the
-    rejected bare canonical.
+    Raises
+    ------
+    ConfigError
+        On the first failing key. The hint is suffixed with `_<store>`
+        so it points at the per-store form.
     """
-    from memman.store.db import valid_store_name
-
     candidates = [k for k in env if k.startswith(prefix)]
     for key in candidates:
         if key in owned:
@@ -92,16 +101,20 @@ def _validate_namespace(
 
 
 def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
-    """Return the canonical owned key when `key == '<owned>_<suffix>'`.
+    """Return the owned key that `key` extends as `<owned>_<suffix>`.
 
-    Returns None when no owned key prefixes `key` with a trailing
-    underscore. The suffix syntactic check is the caller's
-    responsibility -- this helper only handles the canonical lookup.
+    Parameters
+    ----------
+    key : str
+        Env key to test.
+    owned : frozenset
+        Canonical keys.
 
-    Iterates owned keys longest-first so a hypothetical future
-    second canonical key that prefixes another (e.g.
-    `MEMMAN_POSTGRES_DSN` and `MEMMAN_POSTGRES_DSN_BACKUP`) matches
-    the more specific one first.
+    Returns
+    -------
+    str or None
+        The longest matching owned key, or None when none matches.
+        The suffix is not checked.
     """
     for canonical in sorted(owned, key=len, reverse=True):
         if key.startswith(canonical + '_'):
@@ -112,9 +125,17 @@ def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
 def validate_all(env: dict) -> None:
     """Validate `env` against the Postgres backend namespace.
 
-    Catches typos in `MEMMAN_POSTGRES_*` (e.g. a
-    `MEMMAN_POSTGRES_DSN_typo=...`) whatever backend a store runs,
-    including sqlite. Used by `factory.open_backend` so a single
-    open-time call covers this regardless of the active backend.
+    Runs whatever backend a store uses, sqlite included, so a typo in
+    an inactive namespace still fails.
+
+    Parameters
+    ----------
+    env : dict
+        Merged env to scan.
+
+    Raises
+    ------
+    ConfigError
+        On a bare, unknown, or badly suffixed `MEMMAN_POSTGRES_*` key.
     """
     PostgresBackendConfig._validate(env)

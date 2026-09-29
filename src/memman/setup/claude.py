@@ -1,7 +1,7 @@
-"""Claude Code integration: install and uninstall orchestration."""
+"""Claude Code integration: install and uninstall orchestration.
+"""
 
 import os
-import platform
 import shutil
 import sys
 from pathlib import Path
@@ -10,12 +10,16 @@ import click
 import httpx
 from memman import config
 from memman.cli import list_claude_permissions
+from memman.embed import get_client
+from memman.embed.fingerprint import seed_if_fresh
+from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.llm import openrouter_models
+from memman.setup import wizard
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_claude_code
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
-from memman.setup.scheduler import detect_scheduler
+from memman.setup.scheduler import _write_env_keys, detect_scheduler
 from memman.setup.scheduler import install as install_scheduler
 from memman.setup.scheduler import memman_binary_path
 from memman.setup.scheduler import uninstall as uninstall_scheduler
@@ -25,21 +29,33 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
+from memman.store.db import store_dir, store_exists
+from memman.store.factory import open_backend, resolve_store_backend
 
 
 def check_prereqs(data_dir: str) -> dict[str, str]:
     """Validate install prerequisites; raise ClickException on failure.
 
-    Returns the install-time knobs dict (env-or-default for every
-    `INSTALLABLE_KEYS` entry). Mandatory keys, and a model for a
-    non-OpenRouter endpoint, are validated by `collect_install_knobs`.
-    """
-    from memman.exceptions import ConfigError
+    Parameters
+    ----------
+    data_dir : str
+        Data directory holding the env file.
 
-    if not detect_scheduler():
-        raise click.ClickException(
-            f'unsupported platform {platform.system()!r}: expected'
-            ' Linux+systemd or macOS+launchd')
+    Returns
+    -------
+    dict[str, str]
+        Install-time knobs (env-or-default for every `INSTALLABLE_KEYS`
+        entry). `collect_install_knobs` validates the mandatory keys,
+        and a model for a non-OpenRouter endpoint.
+
+    Raises
+    ------
+    RuntimeError
+        The host has no scheduler (from `detect_scheduler`).
+    click.ClickException
+        The memman binary is missing, or the knobs fail validation.
+    """
+    detect_scheduler()
     try:
         memman_binary_path()
     except RuntimeError as exc:
@@ -52,21 +68,57 @@ def check_prereqs(data_dir: str) -> dict[str, str]:
 
 
 def claude_write_skill(config_dir: str) -> str:
-    """Symlink the memman skill into the config dir."""
+    """Symlink the memman skill into the config dir.
+
+    Parameters
+    ----------
+    config_dir : str
+        Claude Code config directory (`~/.claude`).
+
+    Returns
+    -------
+    str
+        Path of the symlink, `<config_dir>/skills/memman/SKILL.md`.
+    """
     link = Path(config_dir) / 'skills' / 'memman' / 'SKILL.md'
     symlink_asset('claude/SKILL.md', link)
     return str(link)
 
 
 def claude_write_hook(config_dir: str, filename: str) -> str:
-    """Symlink a hook script into the config dir."""
+    """Symlink a hook script into the config dir.
+
+    Parameters
+    ----------
+    config_dir : str
+        Claude Code config directory (`~/.claude`).
+    filename : str
+        Shipped hook script under `assets/claude/`, e.g. `prime.sh`.
+
+    Returns
+    -------
+    str
+        Path of the symlink, `<config_dir>/hooks/memman/<filename>`.
+    """
     link = Path(config_dir) / 'hooks' / 'memman' / filename
     symlink_asset(f'claude/{filename}', link)
     return str(link)
 
 
 def claude_uninstall(config_dir: str) -> list[Exception]:
-    """Remove memman integration from the given Claude Code config dir."""
+    """Remove memman integration from the given Claude Code config dir.
+
+    Parameters
+    ----------
+    config_dir : str
+        Claude Code config directory (`~/.claude`).
+
+    Returns
+    -------
+    list[Exception]
+        Errors raised while cleaning the settings file. Empty on full
+        success.
+    """
     errs: list[Exception] = []
 
     print(f'\nRemoving Claude Code integration ({config_dir})...')
@@ -88,12 +140,8 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
         errs.append(e)
 
     skill_dir = os.path.join(config_dir, 'skills', 'memman')
-    try:
-        shutil.rmtree(skill_dir, ignore_errors=True)
-        status_ok('Skill', skill_dir + ' removed')
-    except Exception as e:
-        status_error('Skill', e)
-        errs.append(e)
+    shutil.rmtree(skill_dir, ignore_errors=True)
+    status_ok('Skill', skill_dir + ' removed')
     remove_if_empty(os.path.join(config_dir, 'skills'))
 
     remove_if_empty(config_dir)
@@ -107,12 +155,6 @@ def _init_default_store(data_dir: str) -> None:
     first-open paths share a single seed implementation, including
     the unavailable-client and dim>0 validation.
     """
-    from memman.embed import get_client
-    from memman.embed.fingerprint import seed_if_fresh
-    from memman.exceptions import ConfigError, EmbedFingerprintError
-    from memman.store.db import store_dir, store_exists
-    from memman.store.factory import open_backend, resolve_store_backend
-
     backend_kind = resolve_store_backend('default', data_dir)
     if backend_kind == 'sqlite' and not store_exists(data_dir, 'default'):
         with open_backend('default', data_dir) as backend:
@@ -125,7 +167,8 @@ def _init_default_store(data_dir: str) -> None:
 
 def _install_claude_code(env: dict, data_dir: str,
                          no_wizard: bool = False) -> None:
-    """Install memman into Claude Code (~/.claude/)."""
+    """Install memman into Claude Code (~/.claude/).
+    """
     config_dir = env['config_dir']
 
     print(f'\nSetting up Claude Code ({config_dir})...')
@@ -236,27 +279,18 @@ def run_install(data_dir: str, claude_code: bool = False,
     click.ClickException
         A flag disagrees with a value already in the env file, or a
         prerequisite is missing.
-
-    Notes
-    -----
-    - A flag that disagrees with the env file refuses before anything
-      is written; no flag silently overrides a file value.
-    - The wizard's answers reach the env file before the prereq check,
-      so a secret the wizard collected counts toward it.
     """
     _reject_flag_file_conflicts(
         data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider)
     env = detect_claude_code()
-    from memman.setup import wizard as _wizard_mod
-    from memman.setup.scheduler import _write_env_keys
-    wizard_out = _wizard_mod.run_wizard(
+    wizard_out = wizard.run_wizard(
         data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider,
         no_wizard=no_wizard)
     if wizard_out:
+        # A secret the wizard collected counts toward the prereq check.
         _write_env_keys(wizard_out, data_dir=data_dir)
-        config.reset_file_cache()
     knobs = check_prereqs(data_dir)
     _run_install_flow(env, claude_code=claude_code, data_dir=data_dir,
                       knobs=knobs, no_wizard=no_wizard)
@@ -267,8 +301,8 @@ def _reject_flag_file_conflicts(
         data_dir: str,
         backend: str | None,
         pg_dsn: str | None,
-        llm_endpoint: str | None = None,
-        embed_provider: str | None = None) -> None:
+        llm_endpoint: str | None,
+        embed_provider: str | None) -> None:
     """Exit 1 when a flag value conflicts with the env file's current value.
 
     The env-file canonical model means install flags are sticky-seed:
@@ -316,7 +350,7 @@ def run_uninstall(data_dir: str, claude_code: bool = False) -> None:
     env = detect_claude_code()
     print('\n[backup]')
     try:
-        backup_result = uninstall_backup(data_dir=data_dir)
+        backup_result = uninstall_backup()
         for action in backup_result.get('actions', []):
             status_ok(backup_result['platform'], action)
     except RuntimeError:
@@ -328,8 +362,7 @@ def _run_install_flow(env: dict, claude_code: bool,
                       data_dir: str,
                       knobs: dict[str, str],
                       no_wizard: bool = False) -> None:
-    """Install Claude Code integration and the scheduler unit, then check
-    the LLM model.
+    """Install Claude Code integration and the scheduler, then check the model.
 
     Parameters
     ----------
@@ -343,12 +376,6 @@ def _run_install_flow(env: dict, claude_code: bool,
         Install values from `check_prereqs`, handed to the scheduler.
     no_wizard : bool, default False
         Passed through to the Claude Code install.
-
-    Notes
-    -----
-    - The model check runs after the scheduler section, once the env
-      file is final. A catalog outage prints an error and the install
-      still finishes.
     """
     if claude_code:
         _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
@@ -371,6 +398,8 @@ def _run_install_flow(env: dict, claude_code: bool,
     for action in result.get('env_actions', []) + result.get('actions', []):
         status_ok(result['platform'], action)
 
+    # Runs once the env file is final. A catalog outage prints an error
+    # and the install still finishes.
     try:
         notice = openrouter_models.refresh_model_state(data_dir, force=True)
     except (httpx.HTTPError, RuntimeError) as exc:
@@ -390,7 +419,8 @@ def _run_install_flow(env: dict, claude_code: bool,
 
 def _run_uninstall_flow(env: dict, claude_code: bool,
                         data_dir: str) -> None:
-    """Uninstall Claude Code integration and remove the scheduler unit."""
+    """Uninstall Claude Code integration and remove the scheduler unit.
+    """
     failed = False
     if claude_code:
         failed = _uninstall_env(env)

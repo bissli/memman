@@ -9,7 +9,8 @@ condition without scraping queue failure counts.
 
 import pytest
 from click.testing import CliRunner
-from memman.cli import cli
+from memman import embed as embed_mod
+from memman.cli import _StoreContext, cli
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.exceptions import ConfigError, EmbedCredentialError
 from memman.queue import open_queue_db
@@ -18,7 +19,8 @@ from memman.store.sqlite import SqliteBackend
 
 
 def _seed_fingerprint(sdir: str, fp: Fingerprint) -> None:
-    """Helper: write a fingerprint to the store DB."""
+    """Write a fingerprint to the store DB.
+    """
     db = open_db(sdir)
     try:
         write_fingerprint(SqliteBackend(db), fp)
@@ -27,8 +29,8 @@ def _seed_fingerprint(sdir: str, fp: Fingerprint) -> None:
 
 
 class _UncredentialedStub:
-    """Test-only embed client whose constructor mimics openrouter:
-    raises ConfigError immediately when its key is absent.
+    """Embed client whose constructor raises ConfigError, as openrouter
+    does when its key is absent.
     """
 
     name = 'unfunded-stub'
@@ -39,12 +41,13 @@ class _UncredentialedStub:
 
 
 class TestCredentialMissingFailureMode:
-    """Missing creds for a fingerprinted store produce a clean failure."""
+    """Missing creds for a fingerprinted store produce a clean failure.
+    """
 
     @pytest.fixture
     def _registered_unfunded(self, monkeypatch):
-        """Register the `unfunded-stub` provider for the test's lifetime."""
-        from memman import embed as embed_mod
+        """Register the `unfunded-stub` provider for the test's lifetime.
+        """
         monkeypatch.setitem(
             embed_mod.PROVIDERS, 'unfunded-stub', _UncredentialedStub)
 
@@ -52,10 +55,15 @@ class TestCredentialMissingFailureMode:
     @pytest.mark.no_auto_drain
     def test_storectx_opens_with_placeholder_when_creds_missing(
             self, tmp_path, _registered_unfunded):
-        """A store fingerprinted to a credentialed-out provider opens
-        cleanly: `_StoreContext` succeeds with a placeholder client.
+        """A store fingerprinted to an uncredentialed provider still opens.
+
+        `_StoreContext` succeeds with a placeholder client.
+
+        Mutation: `_StoreContext` letting the provider's `ConfigError`
+            propagate, so a store without creds cannot be opened.
+        Oracle: the placeholder's `name`, `available()` False, and
+            `EmbedCredentialError` from `embed()`.
         """
-        from memman.cli import _StoreContext
         sdir = store_dir(str(tmp_path), 'unfunded')
         _seed_fingerprint(sdir, Fingerprint(
             provider='unfunded-stub', model='stub-1024', dim=1024))
@@ -73,13 +81,11 @@ class TestCredentialMissingFailureMode:
     @pytest.mark.no_auto_drain
     def test_drain_marks_row_failed_on_credential_error(
             self, tmp_path, _registered_unfunded):
-        """A queued row for a credentialed-out store lands in `failed`
-        with an EmbedCredentialError reason in `last_error`.
+        """A queued row for a store with no credential records the error.
 
-        The remember content must be substantive enough that real LLM
-        extraction yields at least one fact -- otherwise the drain
-        completes without attempting to embed, hides the credential
-        error, and the row falls through to 'done'.
+        Mutation: the drain swallowing the credential error and marking
+            the row `done`, or crashing instead of recording it.
+        Oracle: the queue row's `status` and `last_error` text.
         """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
@@ -87,6 +93,9 @@ class TestCredentialMissingFailureMode:
         _seed_fingerprint(sdir, Fingerprint(
             provider='unfunded-stub', model='stub-1024', dim=1024))
 
+        # The content must be substantive enough that LLM extraction
+        # yields a fact. Otherwise the drain never tries to embed, hides
+        # the credential error, and the row ends 'done'.
         result = runner.invoke(cli, [
             '--data-dir', data_dir, '--store', 'unfunded',
             'remember',

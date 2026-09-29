@@ -18,7 +18,8 @@ logger = logging.getLogger('memman')
 
 
 class Client:
-    """HTTP client for Ollama's `/api/embeddings` endpoint."""
+    """HTTP client for Ollama's `/api/embeddings` endpoint.
+    """
 
     name = 'ollama'
 
@@ -54,7 +55,7 @@ class Client:
             return
 
     def available(self) -> bool:
-        """Probe the host with a 1-token embed and cache the dim.
+        """True when a 1-token embed succeeds; caches `dim` and the result.
         """
         if self._availability_cache is not None:
             return self._availability_cache
@@ -68,15 +69,15 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via Ollama API.
-
-        Ollama's embedding runner crashes (returns HTTP 500 with an EOF
-        error) on long inputs, even when the model's context window
-        would accommodate them -- the failure point is content-dependent
-        and unrelated to `num_ctx`. Voyage/OpenAI/OpenRouter handle this
-        server-side; ollama does not, so we truncate client-side to a
-        configurable safe limit before sending.
+        """Embedding vector for `text`, truncated to `max_input_chars`.
         """
+        # Notes:
+        # - Ollama's embedding runner crashes (HTTP 500 with an EOF
+        #   error) on long inputs, even within the model's context
+        #   window. The failure point depends on content and is
+        #   unrelated to `num_ctx`.
+        # - Voyage, OpenAI, and OpenRouter truncate server-side, so only
+        #   this client truncates before sending.
         original_len = len(text)
         if original_len > self.max_input_chars:
             text = text[:self.max_input_chars]
@@ -124,13 +125,13 @@ class Client:
         return vec
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed many texts. Ollama's /api/embeddings is single-input only,
-        so this calls embed() per text.
+        """Embed each text with its own call (single-input endpoint).
         """
         return [self.embed(t) for t in texts]
 
     def unavailable_message(self) -> str:
-        """Return error message when Ollama is not available."""
+        """Return error message when Ollama is not available.
+        """
         return (
             f'Ollama not available at {self.host}'
             f' -- start Ollama or set {config.OLLAMA_HOST}')

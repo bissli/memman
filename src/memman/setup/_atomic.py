@@ -11,7 +11,21 @@ from pathlib import Path
 
 
 def atomic_write_secure(path: Path, contents: str) -> None:
-    """Atomically write contents to path at mode 0o600."""
+    """Atomically write contents to path at mode 0o600.
+
+    Parameters
+    ----------
+    path : Path
+        Destination. Missing parent directories are created.
+    contents : str
+        Text to write.
+
+    Raises
+    ------
+    OSError
+        The temp file cannot be created or written; the temp file is
+        removed and `path` keeps its prior content.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + '.tmp')
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

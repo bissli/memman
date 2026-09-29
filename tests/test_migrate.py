@@ -6,27 +6,33 @@ confirmation flow, and the per-store env-key write
 (`MEMMAN_BACKEND_<store>=postgres`) after a successful migrate.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
+from memman import config
+from memman.cli import cli
+from memman.migrate import SchemaState, inspect_target_schemas, preflight
+from memman.store.db import open_db, set_meta, store_dir
+from memman.store.model import Insight
+from memman.store.node import insert_insight
+from memman.store.sqlite import SqliteMigrator
 
 psycopg = pytest.importorskip('psycopg')
 
-from click.testing import CliRunner
+from memman.store.postgres import PostgresMigrator, _store_schema
+from memman.store.postgres import drop_postgres_store
 
 pytestmark = pytest.mark.postgres
 
 
 def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
-    """Build a minimal SQLite store with one insight + one meta row."""
-    from memman.store.db import open_db, store_dir
+    """Build a minimal SQLite store with one insight + one meta row.
+    """
     sdir = store_dir(str(data_dir), store)
     db = open_db(sdir)
     try:
-        from datetime import datetime, timezone
-
-        from memman.store.model import Insight
-        from memman.store.node import insert_insight
         ins = Insight(
             id='m-1',
             content='migrate test insight',
@@ -34,7 +40,6 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             updated_at=datetime.now(timezone.utc),
             deleted_at=None)
         insert_insight(db, ins)
-        from memman.store.db import set_meta
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
     finally:
@@ -42,122 +47,141 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
     return Path(sdir)
 
 
-def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
-    """`--dry-run` returns counts and creates no Postgres schema."""
-    from memman.store.postgres import _store_schema
-    from memman.store.sqlite import SqliteMigrator
+def test_migrate_dry_run_reports_counts_without_writing(
+        tmp_path, env_file, pg_dsn):
+    """`migrate --dry-run` reports the source counts and changes nothing.
 
-    _seed_sqlite_store(tmp_path, 'mig_dry')
+    Mutation: the dry-run branch falling through to the apply path, which
+        creates the target schema, flips MEMMAN_BACKEND_<store> and archives
+        the source; or the plan dropping the insight or meta counts.
+    Oracle: the hand-written count line for one seeded insight, then the
+        target schema absent in pg_namespace, the source db still in place
+        and the store's backend key unset.
+    """
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
+    data_dir = tmp_path / 'memman'
+    sdir = _seed_sqlite_store(data_dir, 'mig_dry')
     schema = _store_schema('mig_dry')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
-    src = SqliteMigrator(str(tmp_path))
-    src.preflight_source('mig_dry')
-    payload = src.gather('mig_dry')
-    assert payload.insights
-    assert len(payload.insights) == 1
-    assert len(payload.meta) >= 1
+    result = CliRunner().invoke(
+        cli, [
+            '--data-dir', str(data_dir),
+            'migrate', '--store', 'mig_dry', '--dry-run'],
+        catch_exceptions=False)
 
+    assert result.exit_code == 0, result.output
+    assert 'mig_dry: insights=1 oplog=' in result.output
+    assert '(dry-run)' in result.output
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT 1 FROM pg_namespace WHERE nspname = %s',
+                'select 1 from pg_namespace where nspname = %s',
                 (schema,))
-            assert cur.fetchone() is None, (
-                'dry-run created the schema; should be a no-op')
+            assert cur.fetchone() is None
+    assert (sdir / 'memman.db').exists()
+    assert config.get(config.BACKEND_FOR('mig_dry')) != 'postgres'
 
 
 def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
-    """Real migrate inserts rows; ON CONFLICT makes re-run idempotent."""
-    from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
+    """Real migrate inserts the source rows into the target schema.
 
+    Mutation: PostgresMigrator.apply skipping the insights insert, or writing
+        to the wrong schema.
+    Oracle: a direct count(*) on the target schema after apply, against one
+        seeded insight.
+    """
     _seed_sqlite_store(tmp_path, 'mig_write')
     schema = _store_schema('mig_write')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
     src = SqliteMigrator(str(tmp_path))
     src.preflight_source('mig_write')
     payload = src.gather('mig_write')
-    tgt = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+    tgt = PostgresMigrator(dsn=pg_dsn)
     tgt.preflight_target('mig_write')
     tgt.apply('mig_write', payload)
     assert len(payload.insights) == 1
 
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'SELECT COUNT(*) FROM {schema}.insights')
+            cur.execute(f'select count(*) from {schema}.insights')
             assert cur.fetchone()[0] == 1
 
     try:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
     except Exception:
         pass
 
 
 def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
-    """SchemaState.POPULATED triggers drop+recreate."""
-    from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.postgres import drop_postgres_store
-    from memman.store.sqlite import SqliteMigrator
+    """A populated target schema is dropped and rebuilt.
 
+    Mutation: drop_postgres_store leaving existing tables behind, so stale rows
+        survive a migrate.
+    Oracle: information_schema shows the pre-created junk table gone after
+        apply.
+    """
     _seed_sqlite_store(tmp_path, 'mig_overwrite')
     schema = _store_schema('mig_overwrite')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-            cur.execute(f'CREATE SCHEMA {schema}')
+            cur.execute(f'drop schema if exists {schema} cascade')
+            cur.execute(f'create schema {schema}')
             cur.execute(
-                f'CREATE TABLE {schema}.junk (id INTEGER PRIMARY KEY)')
+                f'create table {schema}.junk (id integer primary key)')
             cur.execute(
-                f'INSERT INTO {schema}.junk VALUES (42)')
+                f'insert into {schema}.junk values (42)')
 
     try:
         src = SqliteMigrator(str(tmp_path))
         src.preflight_source('mig_overwrite')
         payload = src.gather('mig_overwrite')
         drop_postgres_store('mig_overwrite', pg_dsn)
-        tgt = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt = PostgresMigrator(dsn=pg_dsn)
         tgt.preflight_target('mig_overwrite')
         tgt.apply('mig_overwrite', payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    'SELECT 1 FROM information_schema.tables'
-                    ' WHERE table_schema = %s AND table_name = %s',
+                    'select 1 from information_schema.tables'
+                    ' where table_schema = %s and table_name = %s',
                     (schema, 'junk'))
                 assert cur.fetchone() is None, (
                     'POPULATED state should have dropped junk table')
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def test_inspect_target_schemas_classifies_states(tmp_path, pg_dsn):
-    """ABSENT / EMPTY / POPULATED detection per store."""
-    from memman.migrate import SchemaState, inspect_target_schemas
-    from memman.store.postgres import _store_schema
+    """Each store maps to ABSENT, EMPTY or POPULATED.
 
+    Mutation: inspect_target_schemas treating an empty schema as populated, or
+        a missing one as empty.
+    Oracle: hand-built schemas: one with an insights table, one bare, one never
+        created.
+    """
     pop_schema = _store_schema('mig_inspect_pop')
     empty_schema = _store_schema('mig_inspect_empty')
     absent = 'mig_inspect_absent'
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {pop_schema} CASCADE')
-            cur.execute(f'DROP SCHEMA IF EXISTS {empty_schema} CASCADE')
+            cur.execute(f'drop schema if exists {pop_schema} cascade')
+            cur.execute(f'drop schema if exists {empty_schema} cascade')
             cur.execute(
-                f'DROP SCHEMA IF EXISTS {_store_schema(absent)} CASCADE')
-            cur.execute(f'CREATE SCHEMA {pop_schema}')
+                f'drop schema if exists {_store_schema(absent)} cascade')
+            cur.execute(f'create schema {pop_schema}')
             cur.execute(
-                f'CREATE TABLE {pop_schema}.insights (id text)')
-            cur.execute(f'CREATE SCHEMA {empty_schema}')
+                f'create table {pop_schema}.insights (id text)')
+            cur.execute(f'create schema {empty_schema}')
     try:
         states = inspect_target_schemas(
             pg_dsn, ['mig_inspect_pop', 'mig_inspect_empty', absent])
@@ -167,14 +191,18 @@ def test_inspect_target_schemas_classifies_states(tmp_path, pg_dsn):
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {pop_schema} CASCADE')
+                cur.execute(f'drop schema if exists {pop_schema} cascade')
                 cur.execute(
-                    f'DROP SCHEMA IF EXISTS {empty_schema} CASCADE')
+                    f'drop schema if exists {empty_schema} cascade')
 
 
 def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
-    """Preflight succeeds when pgvector is installed."""
-    from memman.migrate import preflight
+    """Preflight passes on a database with pgvector installed.
+
+    Mutation: preflight reporting pgvector missing, or skipping the select 1
+        probe.
+    Oracle: both checks true against the live test database.
+    """
     checks = preflight(pg_dsn)
     assert checks['select_1'] is True
     assert checks['pgvector_installed'] is True
@@ -182,16 +210,18 @@ def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
 
 def test_migrate_cli_requires_confirmation_for_real_run(
         tmp_path, env_file, pg_dsn):
-    """CLI aborts when no `--yes` and the prompt is not confirmed."""
+    """The CLI aborts when the confirmation prompt is declined.
+
+    Mutation: the migrate command running without --yes and without asking.
+    Oracle: answer n to the prompt; click prints Aborted and exits nonzero.
+    """
     env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli')
-    from memman.store.postgres import _store_schema
     schema = _store_schema('mig_cli')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
-    from memman.cli import cli
     runner = CliRunner()
     result = runner.invoke(
         cli, [
@@ -204,17 +234,21 @@ def test_migrate_cli_requires_confirmation_for_real_run(
 
 def test_migrate_cli_yes_flag_skips_prompt(
         tmp_path, env_file, pg_dsn):
-    """`--yes` runs without prompting and writes per-store backend keys."""
+    """--yes migrates without a prompt and writes the per-store backend keys.
+
+    Mutation: migrate not writing the backend or DSN key, or leaving the sqlite
+        store in place.
+    Oracle: env file text, a single archive slot holding memman.db, and the
+        data dir gone.
+    """
     env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, 'mig_cli_yes')
-    from memman.store.postgres import _store_schema
     schema = _store_schema('mig_cli_yes')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
-    from memman.cli import cli
     runner = CliRunner()
     try:
         result = runner.invoke(
@@ -237,23 +271,26 @@ def test_migrate_cli_yes_flag_skips_prompt(
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def test_migrate_cli_per_store_dsn_without_default(
         tmp_path, env_file, pg_dsn):
-    """`--store NAME` resolves MEMMAN_POSTGRES_DSN_<store> when DEFAULT is unset."""
+    """--store resolves MEMMAN_POSTGRES_DSN_<store> when no default DSN is set.
+
+    Mutation: DSN resolution reading only the default key.
+    Oracle: only the per-store key is set; the target schema holds one row
+        afterward.
+    """
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, 'mig_per_store')
-    from memman.store.postgres import _store_schema
     schema = _store_schema('mig_per_store')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
     env_file('MEMMAN_POSTGRES_DSN_mig_per_store', pg_dsn)
 
-    from memman.cli import cli
     runner = CliRunner()
     try:
         result = runner.invoke(
@@ -265,18 +302,21 @@ def test_migrate_cli_per_store_dsn_without_default(
         assert '(verified)' in result.output
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'SELECT COUNT(*) FROM {schema}.insights')
+                cur.execute(f'select count(*) from {schema}.insights')
                 assert cur.fetchone()[0] == 1
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def test_migrate_cli_per_store_missing_dsn_lists_both_keys(tmp_path):
-    """No DSN at all: error names PG_DSN_<store> and DEFAULT_PG_DSN."""
+    """With no DSN set, the error names both DSN keys.
+
+    Mutation: the error naming only one key, or omitting the set-pg-dsn hint.
+    Oracle: hand-listed key names in the CLI output.
+    """
     _seed_sqlite_store(tmp_path / 'memman', 'mig_no_dsn')
-    from memman.cli import cli
     runner = CliRunner()
     result = runner.invoke(
         cli, [
@@ -290,16 +330,19 @@ def test_migrate_cli_per_store_missing_dsn_lists_both_keys(tmp_path):
 
 
 def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
-    """CLI dry-run prints plan with redacted DSN, no prompt, no writes."""
+    """The CLI dry run prints the plan and exits zero with no prompt.
+
+    Mutation: --dry-run prompting for confirmation, or exiting nonzero.
+    Oracle: exit code zero, plus the plan text and the store name in the
+        output.
+    """
     env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli_dry')
 
-    from memman.cli import cli
-    from memman.store.postgres import _store_schema
     schema = _store_schema('mig_cli_dry')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
     runner = CliRunner()
     result = runner.invoke(

@@ -1,26 +1,25 @@
-"""Staleness must key on exactly what the remedy can replay (X11).
+"""Staleness keys on exactly what the remedy can replay.
 
-`memman status` reports `stale_insights` from `count_stale_insights`,
-and the remedy it points at, `enrich --stale-only`, routes through
-`enrich_pending` (`pipeline/enrich.py`), which re-runs ENRICHMENT on
+`memman status` reports `stale_insights` from `count_stale_insights`.
+The remedy it points at, `enrich --stale-only`, routes through
+`enrich_pending` (`pipeline/enrich.py`), which re-runs enrichment on
 the `slow` client and nothing else.
 
-The invariant these tests pin: `compute_prompt_version` hashes exactly
-the inputs `enrich_pending` replays, and nothing else. A key covering
-more than that reports rows stale for a change re-enrichment cannot
-address -- and the rebuild then CLEARS the report by doing unrelated
-work, so the operator pays for LLM calls and the signal reads 0.
-
-The fix stays inside the existing `prompt_version` column on purpose.
-memman carries no alter-table path (`store/db.py::_migrate`), and a
-Postgres-routed store can only gain a column by migrating to SQLite on
-the previous release, rebuilding, and migrating back
-(`store/postgres.py`). A new column would cost a fleet-wide
-cross-backend migration to fix a reporting signal.
+Notes
+-----
+- `compute_prompt_version` hashes exactly the inputs `enrich_pending`
+  replays. A wider key reports rows stale for a change re-enrichment
+  cannot address. The rebuild then clears the report by doing
+  unrelated work, so the operator pays for LLM calls and the signal
+  reads 0.
+- The key lives in the existing `prompt_version` column because a new
+  column needs a cross-backend migration (`store/db.py::_migrate`,
+  `store/postgres.py`) for a reporting signal.
 """
 
 import pytest
 from memman import config
+from memman.pipeline.remember import compute_prompt_version
 
 REPLAYED_PROMPTS = [
     ('memman.pipeline.enrich', 'ENRICHMENT_SYSTEM_PROMPT'),
@@ -28,8 +27,8 @@ REPLAYED_PROMPTS = [
 
 
 def _key():
-    """Recompute the staleness key, defeating its process-lifetime cache."""
-    from memman.pipeline.remember import compute_prompt_version
+    """Recompute the staleness key, defeating its process-lifetime cache.
+    """
     compute_prompt_version.cache_clear()
     return compute_prompt_version()
 

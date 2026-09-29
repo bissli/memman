@@ -36,7 +36,8 @@ def _seed(backend):
 
 
 def _plan_of(db, sql):
-    """The `explain query plan` steps for one statement, joined."""
+    """The `explain query plan` steps for one statement, joined.
+    """
     rows = db._conn.execute('explain query plan ' + sql).fetchall()
     return ' | '.join(r[3] for r in rows)
 
@@ -56,18 +57,15 @@ def test_the_basic_listing_takes_its_order_from_an_index(tmp_path):
         same store with the index dropped reports one. The returned
         ids are compared across both states and against the seeded
         order, newest first.
-
-    Notes
-    -----
-    - The statement under test is captured from `nodes.query` rather
-      than written out here, so a change to the verb's own `order by`
-      is measured instead of being shadowed by a stale copy.
     """
     store = tmp_path / 'listing'
     db = open_db(str(store))
     backend = SqliteBackend(db)
     _seed(backend)
 
+    # The statement comes from `nodes.query` itself, so a change to the
+    # verb's own `order by` is measured instead of hidden behind a
+    # stale copy written out here.
     captured: list[str] = []
     db._conn.set_trace_callback(captured.append)
     indexed_rows = backend.nodes.query(limit=5)

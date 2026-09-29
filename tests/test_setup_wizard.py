@@ -1,26 +1,32 @@
-"""Tests for the install wizard (`memman.setup.wizard`)."""
+"""Tests for the install wizard (`memman.setup.wizard`).
+"""
 
 import os
 
+import click
 import pytest
 from memman import config
+from memman.setup import claude as setup_claude
 from memman.setup import wizard
 
 
 @pytest.fixture
 def tty(monkeypatch):
-    """Force `sys.stdin.isatty()` True so wizard takes the interactive path."""
+    """Force `sys.stdin.isatty()` True so wizard takes the interactive path.
+    """
     monkeypatch.setattr('sys.stdin.isatty', lambda: True)
 
 
 @pytest.fixture
 def no_tty(monkeypatch):
-    """Force `sys.stdin.isatty()` False so wizard takes the headless path."""
+    """Force `sys.stdin.isatty()` False so wizard takes the headless path.
+    """
     monkeypatch.setattr('sys.stdin.isatty', lambda: False)
 
 
 def _strip_default_secrets(monkeypatch, data_dir):
-    """Remove the conftest-seeded mock secrets from the test env file."""
+    """Remove the conftest-seeded mock secrets from the test env file.
+    """
     path = config.env_file_path(str(data_dir))
     parsed = config.parse_env_file(path)
     for key in (config.OPENROUTER_API_KEY, config.VOYAGE_API_KEY,
@@ -32,16 +38,16 @@ def _strip_default_secrets(monkeypatch, data_dir):
 
 
 class TestWizardFlow:
-    """Top-level run_wizard return shape under headless / tty conditions."""
+    """Top-level run_wizard return shape under headless / tty conditions.
+    """
 
     @pytest.mark.parametrize('mode', ['no_tty', 'no_wizard_in_tty'])
     def test_no_prompts_returns_empty(self, monkeypatch, tmp_path, mode):
-        """Headless / --no-wizard short-circuit to empty when no flags given.
+        """Verify a headless or --no-wizard run with no flags returns nothing.
 
-        The default-store dispatch falls through `MEMMAN_DEFAULT_BACKEND`
-        (written later by `INSTALL_DEFAULTS`) so the wizard need not touch
-        the env file in this path. Keeping it empty preserves the
-        "prereq failure leaves filesystem untouched" invariant.
+        Mutation: the wizard writes a backend or other row when no flag is
+            given.
+        Oracle: the empty dict.
         """
         if mode == 'no_tty':
             monkeypatch.setattr('sys.stdin.isatty', lambda: False)
@@ -53,14 +59,23 @@ class TestWizardFlow:
         assert out == {}
 
     def test_explicit_backend_flag_bypasses_prompt(self, no_tty, tmp_path):
-        """`--backend sqlite` is honored without any prompting."""
+        """Verify --backend sqlite is recorded under both backend keys.
+
+        Mutation: the flag is ignored, so the defaulted choice is not
+            persisted.
+        Oracle: literal 'sqlite' at MEMMAN_DEFAULT_BACKEND and its default row.
+        """
         out = wizard.run_wizard(str(tmp_path / 'memman'), backend='sqlite')
         assert out[config.DEFAULT_BACKEND] == 'sqlite'
         assert out[config.BACKEND_FOR('default')] == 'sqlite'
 
     def test_postgres_hidden_when_extras_unavailable(
             self, tty, tmp_path, monkeypatch):
-        """Sqlite-only menu is the no-prompt fast path; wizard returns empty."""
+        """Verify a sqlite-only menu skips the prompt and persists nothing.
+
+        Mutation: the menu offers postgres without the extras installed.
+        Oracle: neither backend key appears in the returned dict.
+        """
         monkeypatch.setattr(
             'memman.setup.wizard.extras.is_available', lambda extra: False)
         out = wizard.run_wizard(str(tmp_path / 'memman'))
@@ -69,11 +84,16 @@ class TestWizardFlow:
 
 
 class TestSecretPrompts:
-    """Secret-prompt logic for OPENROUTER_API_KEY / VOYAGE_API_KEY."""
+    """Secret-prompt logic for OPENROUTER_API_KEY / VOYAGE_API_KEY.
+    """
 
     def test_secrets_prompt_fires_when_missing_in_tty(
             self, tty, tmp_path, monkeypatch):
-        """Wizard prompts (masked) when mandatory secrets are absent in TTY mode."""
+        """Verify missing secrets are prompted for in a TTY and returned.
+
+        Mutation: the prompt is skipped, or the answer is dropped or swapped.
+        Oracle: scripted prompt answers compared to the returned rows.
+        """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
@@ -91,10 +111,11 @@ class TestSecretPrompts:
 
     def test_secrets_prompt_skipped_when_present_in_file(
             self, tty, tmp_path):
-        """Wizard does not prompt when secrets are already in the file.
+        """Verify no secret prompt fires when the env file already holds them.
 
-        The autouse `_isolate_env` fixture seeds the secrets, so a default
-        test environment should not trigger any secret prompt.
+        Mutation: the file-layer check is dropped, so secrets are asked for
+            again.
+        Oracle: the seeded secret keys are absent from the returned dict.
         """
         out = wizard.run_wizard(str(tmp_path / 'memman'))
         assert config.OPENROUTER_API_KEY not in out
@@ -103,11 +124,10 @@ class TestSecretPrompts:
 
     def test_secrets_prompt_skipped_when_shell_has_them(
             self, tmp_path, monkeypatch):
-        """Wizard does not prompt when secrets are exported in the shell.
+        """Verify no prompt fires for a MEMMAN secret exported in the shell.
 
-        Even though the runtime resolver ignores `os.environ`, install will
-        still seed the shell value into the file via `collect_install_knobs`,
-        so the wizard considers a shell-set secret already-resolved.
+        Mutation: the shell-export check is dropped, so the wizard prompts.
+        Oracle: a prompt stub that raises if called.
         """
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
@@ -128,11 +148,17 @@ class TestSecretPrompts:
 
 
 class TestNativeKeyDetection:
-    """Native vendor env vars (e.g. VOYAGE_API_KEY) trigger announce-then-prompt."""
+    """A native vendor env var (VOYAGE_API_KEY) triggers announce-then-prompt.
+    """
 
     def test_native_voyage_key_announces_and_prompts_with_default(
             self, tty, tmp_path, monkeypatch, capsys):
-        """Detected native VOYAGE_API_KEY prefills a masked prompt; Enter accepts."""
+        """Verify a native vendor key is announced as a masked default.
+
+        Mutation: the native value is captured silently, or the prompt echoes
+            it.
+        Oracle: captured prompt kwargs, stdout text, and the exported values.
+        """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
@@ -162,7 +188,12 @@ class TestNativeKeyDetection:
 
     def test_memman_prefixed_still_silent_skips(
             self, tty, tmp_path, monkeypatch, capsys):
-        """MEMMAN-prefixed shell exports keep their existing silent-skip path."""
+        """Verify a MEMMAN-prefixed export is skipped with no announcement.
+
+        Mutation: the native-key announcement or prompt fires for a MEMMAN-
+            key.
+        Oracle: a raising prompt stub and 'detected' absent from stdout.
+        """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
         monkeypatch.setenv(config.VOYAGE_API_KEY, 'memman-vy')
@@ -180,19 +211,27 @@ class TestNativeKeyDetection:
 
 
 class TestDsn:
-    """`--pg-dsn` flag and probe behavior in headless mode."""
+    """`--pg-dsn` flag and probe behavior in headless mode.
+    """
 
     def test_pg_dsn_required_in_non_interactive_postgres(
             self, no_tty, tmp_path):
-        """Headless --backend postgres without --pg-dsn is a hard error."""
-        import click as _click
-        with pytest.raises(_click.ClickException, match='pg-dsn'):
+        """Verify headless postgres without --pg-dsn is a hard error.
+
+        Mutation: the missing DSN passes through and install continues.
+        Oracle: ClickException whose message names pg-dsn.
+        """
+        with pytest.raises(click.ClickException, match='pg-dsn'):
             wizard.run_wizard(
                 str(tmp_path / 'memman'), backend='postgres', no_wizard=True)
 
     def test_pg_dsn_flag_probed_and_returned(
             self, monkeypatch, no_tty, tmp_path):
-        """A passing `--pg-dsn` is probed via psycopg.connect and returned."""
+        """Verify a --pg-dsn flag is probed once, recorded under both keys.
+
+        Mutation: the flag DSN skips the probe, or lands under one key only.
+        Oracle: a probe stub recording its calls, and the literal DSN.
+        """
         probe_calls = []
 
         def _fake_probe(dsn):
@@ -207,27 +246,34 @@ class TestDsn:
         assert out[config.DEFAULT_BACKEND] == 'postgres'
         assert out[config.DEFAULT_PG_DSN] == 'postgresql://u@h/db'
         assert out[config.BACKEND_FOR('default')] == 'postgres'
-        assert out[config.env_key_for('postgres', 'DSN', 'default')] == 'postgresql://u@h/db'
+        dsn_key = config.POSTGRES_DSN_FOR('default')
+        assert out[dsn_key] == 'postgresql://u@h/db'
 
     def test_pg_dsn_probe_failure_raises(
             self, monkeypatch, no_tty, tmp_path):
-        """A failing `--pg-dsn` probe surfaces as a ClickException."""
-        import click as _click
+        """Verify a failing --pg-dsn probe surfaces as a ClickException.
+
+        Mutation: the probe error is swallowed or escapes as a bare
+            RuntimeError.
+        Oracle: ClickException whose message contains 'connection failed'.
+        """
 
         def _fail(dsn):
             raise RuntimeError('connection refused')
 
         monkeypatch.setattr('memman.setup.wizard._probe_dsn', _fail)
-        with pytest.raises(_click.ClickException, match='connection failed'):
+        with pytest.raises(click.ClickException, match='connection failed'):
             wizard.run_wizard(
                 str(tmp_path / 'memman'), backend='postgres',
                 pg_dsn='postgresql://u@h/db')
 
 
 def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
-    """`memman install --backend X` warns and exits when file holds Y."""
-    import click as _click
-    from memman.setup import claude as setup_claude
+    """Verify install --backend X refuses when the env file holds Y.
+
+    Mutation: the flag silently overrides the file value.
+    Oracle: ClickException pointing at the 'memman config set' command.
+    """
     data_dir = tmp_path / 'memman'
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / config.ENV_FILENAME).write_text(
@@ -245,47 +291,52 @@ def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
                  'version': '',
                  'config_dir': str(tmp_path / 'memman' / '.claude')})
 
-    with pytest.raises(_click.ClickException, match='memman config set'):
+    with pytest.raises(click.ClickException, match='memman config set'):
         setup_claude.run_install(
             str(data_dir), backend='postgres', no_wizard=True)
 
 
 @pytest.mark.postgres
 class TestProbeDsn:
-    """DSN probe correctness against a live pgvector container."""
+    """DSN probe correctness against a live pgvector container.
+    """
 
     def test_probe_dsn_raises_when_pgvector_missing(self, pg_dsn):
-        """Drop pgvector and verify the probe complains; restore after."""
+        """Verify the probe fails when the pgvector extension is absent.
+
+        Mutation: the pg_extension check is dropped from the probe.
+        Oracle: a live container with the extension dropped, restored after.
+        """
         import psycopg
-        from memman.setup.wizard import _probe_dsn
 
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute('DROP EXTENSION IF EXISTS vector CASCADE')
+                cur.execute('drop extension if exists vector cascade')
         try:
             with pytest.raises(RuntimeError, match='pgvector'):
-                _probe_dsn(pg_dsn)
+                wizard._probe_dsn(pg_dsn)
         finally:
             with psycopg.connect(pg_dsn, autocommit=True) as conn:
                 with conn.cursor() as cur:
-                    cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+                    cur.execute('create extension if not exists vector')
 
     def test_probe_dsn_emits_pgbouncer_hint_on_remote_dsn(
             self, pg_dsn, capsys, monkeypatch):
-        """Probe of a remote-shaped DSN emits the PgBouncer hint.
+        """Verify probing a remote-shaped DSN prints the PgBouncer hint.
 
-        Monkeypatches `_is_remote_dsn` to return True for the test
-        container's DSN and checks that the hint appears in stdout.
+        Mutation: the hint is dropped or gated on the wrong host test.
+        Oracle: 'PgBouncer' in captured stdout, with _is_remote_dsn forced
+            True.
         """
-        from memman.setup import wizard as wiz_mod
-        monkeypatch.setattr(wiz_mod, '_is_remote_dsn', lambda _dsn: True)
-        wiz_mod._probe_dsn(pg_dsn)
+        monkeypatch.setattr(wizard, '_is_remote_dsn', lambda _dsn: True)
+        wizard._probe_dsn(pg_dsn)
         captured = capsys.readouterr()
         assert 'PgBouncer' in captured.out
 
 
 def _strip_model(data_dir):
-    """Remove MEMMAN_LLM_MODEL from the seeded test env file."""
+    """Remove MEMMAN_LLM_MODEL from the seeded test env file.
+    """
     path = config.env_file_path(data_dir)
     parsed = config.parse_env_file(path)
     parsed.pop(config.LLM_MODEL, None)
@@ -294,17 +345,16 @@ def _strip_model(data_dir):
 
 
 class TestModelDefault:
-    """The OpenRouter branch leaves the model to `INSTALL_DEFAULTS`."""
+    """The OpenRouter branch leaves the model to `INSTALL_DEFAULTS`.
+    """
 
     def test_openrouter_install_asks_nothing_and_reads_no_catalog(
             self, tty, monkeypatch):
-        """An interactive OpenRouter install with no model neither asks
-        nor fetches.
+        """Verify an OpenRouter install with no model neither asks nor fetches.
 
-        Mutation: the wizard still offers a pick, or still GETs the
-            OpenRouter catalogs to build one.
-        Oracle: an HTTP client and a prompt that each fail the test if
-            called.
+        Mutation: the wizard still offers a pick, or still GETs the OpenRouter
+            catalogs to build one.
+        Oracle: an HTTP client and a prompt that each fail the test if called.
         """
         data_dir = os.environ[config.DATA_DIR]
         _strip_model(data_dir)

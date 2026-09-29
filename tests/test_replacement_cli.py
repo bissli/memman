@@ -5,20 +5,24 @@
 """
 
 import json
+import sqlite3
 
 import pytest
+from memman.store.db import store_dir
 from tests.conftest import invoke, parse_remember, queued_contents
 
 
 def _remember(runner, text, *flags):
-    """Store `text` verbatim and return its id."""
+    """Store `text` verbatim and return its id.
+    """
     res = invoke(runner, ['remember', text, *flags])
     assert res.exit_code == 0, res.output
     return parse_remember(res, runner)['id']
 
 
 def _replace(runner, target, text):
-    """Replace `target` with `text` and return the successor id."""
+    """Replace `target` with `text` and return the successor id.
+    """
     res = invoke(runner, ['replace', target, text])
     assert res.exit_code == 0, res.output
     return parse_remember(res, runner)['id']
@@ -118,10 +122,6 @@ def test_history_lists_both_predecessors_of_a_hand_made_fork(mm_runner):
     Oracle: a fork set by raw SQL; the chain from P1 names all three
         rows, the successor last.
     """
-    import sqlite3
-
-    from memman.store.db import store_dir
-
     _, data_dir = mm_runner
     p1 = _remember(mm_runner, 'the broker is kombu')
     p2 = _remember(mm_runner, 'the broker was celery before kombu')

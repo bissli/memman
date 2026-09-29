@@ -24,7 +24,8 @@ _WORD_RE = re.compile(r'[a-zA-Z0-9]+')
 
 
 def tokenize(text: str) -> set[str]:
-    """Split text into lowercase tokens with stopword filtering."""
+    """Split text into lowercase tokens with stopword filtering.
+    """
     tokens: set[str] = set()
     for word in _WORD_RE.findall(text.lower()):
         if word not in STOPWORDS:
@@ -33,7 +34,8 @@ def tokenize(text: str) -> set[str]:
 
 
 def insight_tokens(ins: Insight) -> set[str]:
-    """Return the token set of an insight's content."""
+    """Return the token set of an insight's content.
+    """
     return tokenize(ins.content)
 
 
@@ -61,12 +63,8 @@ def keyword_search(
     Returns
     -------
     list[tuple[Insight, float]]
-        `(insight, score)` descending, `score` in [0, 1].
-
-    Notes
-    -----
-    - score = (distinct query tokens present) / (query tokens), which
-      also fills `signals.keyword`.
+        `(insight, score)` descending, `score` in [0, 1]:
+        distinct query tokens present / query tokens.
     """
     query_tokens = tokenize(query)
     if not query_tokens:

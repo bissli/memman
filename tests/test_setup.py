@@ -1,6 +1,8 @@
-"""Tests for memman.setup - settings, markdown, detection."""
+"""Tests for memman.setup - settings, markdown, detection.
+"""
 
 import html
+import inspect
 import json
 import os
 import pathlib
@@ -13,6 +15,9 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli, list_claude_permissions
+from memman.setup import claude as claude_setup
+from memman.setup.claude import claude_uninstall, claude_write_hook
+from memman.setup.claude import claude_write_skill
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
@@ -27,17 +32,18 @@ from tests.conftest import make_insight
 HOOK_STDOUT_LIMIT = 10_000
 
 
-def _prompt_script():
-    """Return path to user_prompt.sh asset."""
-    from importlib.resources import files as pkg_files
+def _prompt_script() -> str:
+    """Return path to user_prompt.sh asset.
+    """
     return str(
-        pkg_files('memman.setup.assets')
+        files('memman.setup.assets')
         .joinpath('claude/user_prompt.sh'))
 
 
 def _run_hook(script: str, input_json: str,
               tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
-    """Run a hook script with HOME overridden."""
+    """Run a hook script with HOME overridden.
+    """
     return subprocess.run(
         ['bash', script],
         check=False, input=input_json,
@@ -45,56 +51,100 @@ def _run_hook(script: str, input_json: str,
         env={**os.environ, 'HOME': str(tmp_home)})
 
 
+def _run_asset(name: str, input_json: str,
+               tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
+    """Run a shipped claude hook asset with HOME overridden.
+    """
+    script = str(files('memman.setup.assets').joinpath(f'claude/{name}'))
+    return _run_hook(script, input_json, tmp_home)
+
+
 class TestStripJson5:
-    """JSON5 stripping primitive (comments, trailing commas)."""
+    """JSON5 stripping primitive (comments, trailing commas).
+    """
 
     def test_strip_json5_line_comments(self):
-        """Remove // line comments."""
+        """Verify strip_json5 removes // line comments.
+
+        Mutation: a stripper that leaves the comment text in place, so the
+            JSON parse fails.
+        Oracle: the parsed dict of a hand-written document.
+        """
         s = '{"key": "value" // comment\n}'
         assert json.loads(strip_json5(s)) == {'key': 'value'}
 
     def test_strip_json5_comment_in_string(self):
-        """// inside quotes is preserved."""
+        """Verify // inside a double-quoted string survives stripping.
+
+        Mutation: treating the // of a URL as a comment start and cutting
+            the string short.
+        Oracle: the literal URL, round-tripped through json.loads.
+        """
         s = '{"url": "https://example.com"}'
         assert json.loads(strip_json5(s)) == {'url': 'https://example.com'}
 
     def test_strip_json5_trailing_comma(self):
-        """Trailing commas before closing brackets are removed."""
+        """Verify a trailing comma before } is removed.
+
+        Mutation: leaving the comma in place, which json.loads rejects.
+        Oracle: the parsed dict of a hand-written document.
+        """
         s = '{"a": 1, "b": 2,}'
         assert json.loads(strip_json5(s)) == {'a': 1, 'b': 2}
 
     def test_strip_json5_trailing_comma_array(self):
-        """Trailing commas in arrays are removed."""
+        """Verify a trailing comma before ] is removed.
+
+        Mutation: handling only object commas, so arrays stay unparseable.
+        Oracle: the parsed list of a hand-written document.
+        """
         s = '[1, 2, 3,]'
         assert json.loads(strip_json5(s)) == [1, 2, 3]
 
     def test_strip_json5_block_comment(self):
-        """/* ... */ block comments are removed."""
+        """Verify a multi-line block comment is removed.
+
+        Mutation: a stripper that ends the comment at the first newline, or
+            never removes it.
+        Oracle: the parsed dict of a hand-written document.
+        """
         s = '{"a": 1 /* this is a block\n comment */, "b": 2}'
         assert json.loads(strip_json5(s)) == {'a': 1, 'b': 2}
 
     def test_strip_json5_block_comment_inline(self):
-        """Block comments on a single line are removed."""
+        """Verify a block comment on one line is removed.
+
+        Mutation: requiring whitespace around the comment delimiters.
+        Oracle: the parsed dict of a hand-written document.
+        """
         s = '{/* inline */"x": 42}'
         assert json.loads(strip_json5(s)) == {'x': 42}
 
     def test_strip_json5_single_quoted_passthrough(self):
-        """Single-quoted strings are preserved verbatim so callers can
-        normalize them downstream; the stripper must not mistake `//`
-        inside a single-quoted string for a comment.
+        """Verify // inside a single-quoted string is not read as a comment.
+
+        Mutation: tracking only double quotes, so the // of a single-quoted
+            URL truncates the string.
+        Oracle: the URL literal present in the stripped text.
         """
         s = "{\"url\": 'https://example.com'}"
         stripped = strip_json5(s)
         assert "'https://example.com'" in stripped
 
     def test_strip_json5_block_comment_inside_string(self):
-        """`/* */` inside a double-quoted string is NOT stripped."""
+        """Verify /* */ inside a double-quoted string is kept.
+
+        Mutation: stripping block comments without tracking string state.
+        Oracle: the literal note text, round-tripped through json.loads.
+        """
         s = '{"note": "not /* a */ comment"}'
         assert json.loads(strip_json5(s)) == {'note': 'not /* a */ comment'}
 
     def test_strip_json5_escape_in_single_quoted(self):
-        """An escaped single-quote inside a single-quoted string does
-        not terminate the string.
+        """Verify an escaped quote does not end a single-quoted string.
+
+        Mutation: ending the string at a backslash-escaped quote.
+        Oracle: the escaped literal present in the stripped text.
         """
         s = "{\"msg\": 'it\\'s fine'}"
         stripped = strip_json5(s)
@@ -102,24 +152,40 @@ class TestStripJson5:
 
 
 class TestFileOps:
-    """`remove_if_empty`, `read_json_file`, `write_json_file`."""
+    """`remove_if_empty`, `read_json_file`, `write_json_file`.
+    """
 
     def test_remove_if_empty_allows_known_leaf(self, tmp_path):
-        """remove_if_empty deletes an empty 'hooks' dir (known leaf name)."""
+        """Verify remove_if_empty deletes an empty 'hooks' directory.
+
+        Mutation: an allowlist missing 'hooks', so uninstall leaves the empty
+            directory behind.
+        Oracle: the directory no longer exists.
+        """
         target = tmp_path / 'hooks'
         target.mkdir()
         remove_if_empty(str(target))
         assert not target.exists()
 
     def test_remove_if_empty_allows_config_root(self, tmp_path):
-        """remove_if_empty accepts a directory named '.claude'."""
+        """Verify remove_if_empty deletes an empty '.claude' directory.
+
+        Mutation: an allowlist missing '.claude'.
+        Oracle: the directory no longer exists.
+        """
         target = tmp_path / '.claude'
         target.mkdir()
         remove_if_empty(str(target))
         assert not target.exists()
 
     def test_remove_if_empty_rejects_outside_allowlist(self, tmp_path):
-        """remove_if_empty raises when basename is not in the allowlist."""
+        """Verify remove_if_empty refuses a directory outside the allowlist.
+
+        Mutation: dropping the allowlist check, so any empty directory is
+            removed.
+        Oracle: a ValueError naming the refusal, and the directory still
+            present.
+        """
         target = tmp_path / 'arbitrary'
         target.mkdir()
         with pytest.raises(ValueError, match='refused'):
@@ -127,12 +193,20 @@ class TestFileOps:
         assert target.exists()
 
     def test_remove_if_empty_rejects_root(self):
-        """remove_if_empty refuses to operate on '/' (basename is empty)."""
+        """Verify remove_if_empty refuses '/'.
+
+        Mutation: an allowlist check that lets an empty basename through.
+        Oracle: a ValueError naming the refusal.
+        """
         with pytest.raises(ValueError, match='refused'):
             remove_if_empty('/')
 
     def test_remove_if_empty_noop_on_non_empty_dir(self, tmp_path):
-        """remove_if_empty leaves a non-empty allowed dir intact."""
+        """Verify remove_if_empty keeps an allowed directory that holds a file.
+
+        Mutation: removing the tree instead of only an empty directory.
+        Oracle: the directory and its file still exist.
+        """
         target = tmp_path / 'hooks'
         target.mkdir()
         (target / 'keep.json').write_text('{}')
@@ -141,19 +215,32 @@ class TestFileOps:
         assert (target / 'keep.json').exists()
 
     def test_read_json_missing_file(self, tmp_path):
-        """Missing file returns empty dict."""
+        """Verify read_json_file returns {} for a missing file.
+
+        Mutation: raising FileNotFoundError, which breaks a first install.
+        Oracle: the empty dict.
+        """
         result = read_json_file(str(tmp_path / 'nope.json'))
         assert result == {}
 
     def test_read_json_with_comments(self, tmp_path):
-        """JSON5 with comments parses correctly."""
+        """Verify read_json_file parses a file that holds a // comment.
+
+        Mutation: a reader that skips strip_json5 and fails on the comment.
+        Oracle: the hand-written dict.
+        """
         p = tmp_path / 'test.json'
         p.write_text('{\n  "key": "val" // comment\n}')
         result = read_json_file(str(p))
         assert result == {'key': 'val'}
 
     def test_write_json_atomic(self, tmp_path):
-        """Write uses .tmp + rename pattern."""
+        """Verify write_json_file leaves the target and no .tmp file behind.
+
+        Mutation: writing in place, or leaving the temporary file after the
+            rename.
+        Oracle: the target content read back, and the absent .tmp path.
+        """
         p = str(tmp_path / 'out.json')
         write_json_file(p, {'hello': 'world'})
         assert pathlib.Path(p).exists()
@@ -163,10 +250,16 @@ class TestFileOps:
 
 
 class TestHookManagement:
-    """`add_claude_hooks_selective` and `remove_claude_hooks`."""
+    """`add_claude_hooks_selective` and `remove_claude_hooks`.
+    """
 
     def test_remove_claude_hooks(self):
-        """Remove memman hooks from settings dict."""
+        """Verify remove_claude_hooks drops memman entries and keeps others.
+
+        Mutation: clearing the whole event list, or matching no memman
+            command.
+        Oracle: one surviving entry, free of the string 'memman'.
+        """
         data = {
             'hooks': {
                 'SessionStart': [
@@ -179,8 +272,12 @@ class TestHookManagement:
         assert len(data['hooks']['SessionStart']) == 1
         assert 'memman' not in str(data['hooks']['SessionStart'][0])
 
-    def test_add_claude_hooks_selective(self):
-        """Add hooks idempotently with selective options."""
+    def test_add_claude_hooks_selective_remind_only(self):
+        """Verify a remind-only call registers two hook events.
+
+        Mutation: registering a Stop hook, or dropping either default event.
+        Oracle: the hand-listed event names present or absent in the result.
+        """
         data = {}
         add_claude_hooks_selective(data, '/hooks/dir', remind=True)
         hooks = data['hooks']
@@ -208,14 +305,23 @@ class TestHookManagement:
             'task_recall.sh')
 
     def test_add_claude_hooks_task_recall_default_false(self):
-        """Default (no task_recall) does NOT create PreToolUse."""
+        """Verify no PreToolUse entry appears unless task_recall is set.
+
+        Mutation: defaulting task_recall to True.
+        Oracle: 'PreToolUse' absent from the hook keys.
+        """
         data = {}
         add_claude_hooks_selective(data, '/hooks/dir')
         hooks = data['hooks']
         assert 'PreToolUse' not in hooks
 
     def test_remove_claude_hooks_cleans_pretooluse(self):
-        """MemMan PreToolUse entries removed, non-memman preserved."""
+        """Verify remove_claude_hooks drops a memman PreToolUse entry only.
+
+        Mutation: leaving PreToolUse untouched, or dropping the foreign
+            entry along with the memman one.
+        Oracle: one surviving entry, the Bash matcher.
+        """
         data = {
             'hooks': {
                 'PreToolUse': [
@@ -238,7 +344,12 @@ class TestHookManagement:
         assert entries[0]['matcher'] == 'Bash'
 
     def test_remove_claude_hooks_preserves_non_memman_pretooluse(self):
-        """PreToolUse with only non-memman entries is untouched."""
+        """Verify a PreToolUse list without memman entries is unchanged.
+
+        Mutation: removing PreToolUse entries by event rather than by
+            command.
+        Oracle: the one Bash entry still present.
+        """
         data = {
             'hooks': {
                 'PreToolUse': [
@@ -256,7 +367,11 @@ class TestHookManagement:
         assert entries[0]['matcher'] == 'Bash'
 
     def test_add_claude_hooks_appends_to_existing_pretooluse(self):
-        """task_recall appends to existing PreToolUse array."""
+        """Verify task_recall appends to an existing PreToolUse list.
+
+        Mutation: replacing the list, which drops the foreign Bash entry.
+        Oracle: the matcher set {'Bash', 'Agent|Task'}.
+        """
         data = {
             'hooks': {
                 'PreToolUse': [
@@ -276,7 +391,11 @@ class TestHookManagement:
         assert matchers == {'Bash', 'Agent|Task'}
 
     def test_add_claude_hooks_with_compact(self):
-        """compact=True produces PreCompact entry."""
+        """Verify compact=True registers one PreCompact compact.sh hook.
+
+        Mutation: registering the wrong script, or no PreCompact event.
+        Oracle: one entry whose command ends in compact.sh.
+        """
         data = {}
         add_claude_hooks_selective(
             data, '/hooks/dir', compact=True)
@@ -288,14 +407,22 @@ class TestHookManagement:
             'compact.sh')
 
     def test_add_claude_hooks_compact_default_false(self):
-        """Default (no compact) does NOT create PreCompact."""
+        """Verify no PreCompact entry appears unless compact is set.
+
+        Mutation: defaulting compact to True.
+        Oracle: 'PreCompact' absent from the hook keys.
+        """
         data = {}
         add_claude_hooks_selective(data, '/hooks/dir')
         hooks = data['hooks']
         assert 'PreCompact' not in hooks
 
     def test_add_claude_hooks_with_exit_plan(self):
-        """exit_plan=True produces PreToolUse entry with ExitPlanMode matcher."""
+        """Verify exit_plan=True registers an ExitPlanMode PreToolUse hook.
+
+        Mutation: a wrong matcher, or the wrong script.
+        Oracle: one entry with matcher 'ExitPlanMode' and command exit_plan.sh.
+        """
         data = {}
         add_claude_hooks_selective(
             data, '/hooks/dir', exit_plan=True)
@@ -308,7 +435,12 @@ class TestHookManagement:
             'exit_plan.sh')
 
     def test_add_claude_hooks_task_recall_and_exit_plan(self):
-        """Both task_recall and exit_plan produce two PreToolUse entries."""
+        """Verify task_recall with exit_plan registers two PreToolUse entries.
+
+        Mutation: the second flag overwriting the first entry.
+        Oracle: two entries with the matcher set {'Agent|Task',
+            'ExitPlanMode'}.
+        """
         data = {}
         add_claude_hooks_selective(
             data, '/hooks/dir', task_recall=True, exit_plan=True)
@@ -320,10 +452,15 @@ class TestHookManagement:
 
 
 class TestPermissions:
-    """`add_memman_permission`, `remove_memman_permission`."""
+    """`add_memman_permission`, `remove_memman_permission`.
+    """
 
     def test_add_memman_permission(self):
-        """Adds every curated entry to allow. Idempotent."""
+        """Verify add_memman_permission adds every entry once, idempotently.
+
+        Mutation: appending on every call, which duplicates entries.
+        Oracle: each curated entry counted exactly once after two calls.
+        """
         data = {}
         add_memman_permission(data, list_claude_permissions())
         allow = data['permissions']['allow']
@@ -334,7 +471,11 @@ class TestPermissions:
             assert data['permissions']['allow'].count(entry) == 1
 
     def test_add_memman_permission_existing_allow(self):
-        """Appends curated entries without disturbing existing ones."""
+        """Verify curated entries are appended after existing allow entries.
+
+        Mutation: replacing the existing allow list.
+        Oracle: the first entry unchanged, the rest equal to the curated list.
+        """
         data = {'permissions': {'allow': ['Bash(git:*)']}}
         add_memman_permission(data, list_claude_permissions())
         allow = data['permissions']['allow']
@@ -342,7 +483,11 @@ class TestPermissions:
         assert allow[1:] == list(list_claude_permissions())
 
     def test_remove_memman_permission(self):
-        """Drops every memman-containing entry from allow; preserves others."""
+        """Verify remove_memman_permission drops memman entries only.
+
+        Mutation: clearing allow, or leaving curated entries in place.
+        Oracle: allow equal to the one foreign entry.
+        """
         data = {
             'permissions': {
                 'allow': ['Bash(git:*)', *list_claude_permissions()],
@@ -352,13 +497,21 @@ class TestPermissions:
         assert data['permissions']['allow'] == ['Bash(git:*)']
 
     def test_remove_memman_permission_missing(self):
-        """No-op when no memman entries present."""
+        """Verify removal is a no-op when no memman entry exists.
+
+        Mutation: removing an unrelated entry, or raising on absence.
+        Oracle: allow unchanged.
+        """
         data = {'permissions': {'allow': ['Bash(git:*)']}}
         remove_memman_permission(data)
         assert data['permissions']['allow'] == ['Bash(git:*)']
 
     def test_remove_memman_permission_sweeps_user_added(self):
-        """Removes hypothetical user-added Bash(memman ...) entries too."""
+        """Verify removal also drops hand-added Bash(memman ...) entries.
+
+        Mutation: removing only the curated list, not every memman entry.
+        Oracle: allow equal to the one foreign entry.
+        """
         data = {
             'permissions': {
                 'allow': [
@@ -373,7 +526,11 @@ class TestPermissions:
         assert data['permissions']['allow'] == ['Bash(git:*)']
 
     def test_remove_memman_permission_sweeps_deny_and_ask(self):
-        """Sweeps deny and ask sections as well as allow."""
+        """Verify removal sweeps deny and ask as well as allow.
+
+        Mutation: sweeping allow only.
+        Oracle: permissions equal to the one foreign deny entry.
+        """
         data = {
             'permissions': {
                 'allow': ['Bash(memman recall:*)'],
@@ -385,13 +542,22 @@ class TestPermissions:
         assert data['permissions'] == {'deny': ['Bash(rm:*)']}
 
     def test_remove_memman_permission_drops_empty_permissions(self):
-        """Empty permissions dict is removed entirely."""
+        """Verify an emptied permissions dict is removed.
+
+        Mutation: leaving an empty 'permissions' key in settings.
+        Oracle: 'permissions' absent from the data.
+        """
         data = {'permissions': {'allow': list(list_claude_permissions())}}
         remove_memman_permission(data)
         assert 'permissions' not in data
 
     def test_install_uninstall_roundtrip(self):
-        """Add then remove returns dict to starting state."""
+        """Verify add then remove restores the starting settings.
+
+        Mutation: a removal that leaves residue, or an add that changes
+            foreign entries.
+        Oracle: equality with a deep copy taken before the add.
+        """
         before = {'permissions': {'allow': ['Bash(git:*)']}}
         data = json.loads(json.dumps(before))
         add_memman_permission(data, list_claude_permissions())
@@ -417,20 +583,18 @@ class TestPermissions:
 
 
 class TestPrimeAndCompactHooks:
-    """Prime / compact hook script execution."""
+    """Prime / compact hook script execution.
+    """
 
     def test_compact_hook_script(self, tmp_path):
-        """Compact hook writes flag file with session info."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/compact.sh'))
+        """Verify compact.sh writes a flag file for the session.
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"session_id": "test-abc-123", "trigger": "manual"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        Mutation: a wrong flag path, or a flag missing the trigger or ts key.
+        Oracle: the flag read back against the payload's trigger.
+        """
+        result = _run_asset(
+            'compact.sh',
+            '{"session_id": "test-abc-123", "trigger": "manual"}', tmp_path)
         assert result.returncode == 0
 
         flag = tmp_path / '.memman' / 'compact' / 'test-abc-123.json'
@@ -440,39 +604,34 @@ class TestPrimeAndCompactHooks:
         assert 'ts' in data
 
     def test_compact_hook_script_no_session(self, tmp_path):
-        """Compact hook writes no flag when session_id is missing."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/compact.sh'))
+        """Verify compact.sh writes no flag without a session_id.
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"trigger": "auto"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        Mutation: writing a flag named from an empty id.
+        Oracle: exit status 0 and an absent compact directory.
+        """
+        result = _run_asset(
+            'compact.sh',
+            '{"trigger": "auto"}', tmp_path)
         assert result.returncode == 0
 
         compact_dir = tmp_path / '.memman' / 'compact'
         assert not compact_dir.exists()
 
     def test_prime_hook_compact_source(self, tmp_path):
-        """Prime hook outputs recall instruction on compact source."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/prime.sh'))
+        """Verify prime.sh on a compact source reports the flag's trigger.
 
+        Mutation: ignoring the flag file, or deleting it after reading.
+        Oracle: the flag's trigger 'manual' in the output, and the flag still
+            present.
+        """
         compact_dir = tmp_path / '.memman' / 'compact'
         compact_dir.mkdir(parents=True)
         flag = compact_dir / 'sess-42.json'
         flag.write_text('{"trigger":"manual","ts":"2026-01-01T00:00:00Z"}')
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"source": "compact", "session_id": "sess-42"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        result = _run_asset(
+            'prime.sh',
+            '{"source": "compact", "session_id": "sess-42"}', tmp_path)
         assert result.returncode == 0
         assert 'compacted' in result.stdout
         assert 'manual' in result.stdout
@@ -480,48 +639,41 @@ class TestPrimeAndCompactHooks:
         assert flag.exists()
 
     def test_prime_hook_compact_no_flag(self, tmp_path):
-        """Prime hook outputs recall instruction even without flag file."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/prime.sh'))
+        """Verify prime.sh on a compact source defaults the trigger to auto.
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"source": "compact", "session_id": "no-flag"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        Mutation: failing, or printing no compact notice, when the flag file
+            is absent.
+        Oracle: 'compacted' and 'auto' in the output.
+        """
+        result = _run_asset(
+            'prime.sh',
+            '{"source": "compact", "session_id": "no-flag"}', tmp_path)
         assert result.returncode == 0
         assert 'compacted' in result.stdout
         assert 'auto' in result.stdout
 
     def test_prime_hook_normal_source(self, tmp_path):
-        """Prime hook does NOT output recall instruction on normal startup."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/prime.sh'))
+        """Verify prime.sh prints no compact notice on a normal startup.
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"source": "startup"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        Mutation: emitting the compact notice for every source.
+        Oracle: 'compacted' absent from the output.
+        """
+        result = _run_asset(
+            'prime.sh',
+            '{"source": "startup"}', tmp_path)
         assert result.returncode == 0
         assert 'compacted' not in result.stdout
 
     def test_exit_plan_hook_advisory(self, tmp_path):
-        """Exit plan hook passes with advisory message (non-blocking)."""
-        from importlib.resources import files as pkg_files
-        script = str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/exit_plan.sh'))
+        """Verify exit_plan.sh prints an advisory and exits 0.
 
-        result = subprocess.run(
-            ['bash', script],
-            check=False, input='{"session_id": "test-plan-123"}',
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_path)})
+        Mutation: a blocking exit status, or a flag directory written.
+        Oracle: exit status 0, 'memman' and 'plan' in the output, and an
+            absent exit_plan directory.
+        """
+        result = _run_asset(
+            'exit_plan.sh',
+            '{"session_id": "test-plan-123"}', tmp_path)
         assert result.returncode == 0
         assert 'memman' in result.stdout.lower()
         assert 'plan' in result.stdout.lower()
@@ -530,10 +682,12 @@ class TestPrimeAndCompactHooks:
         assert not flag_dir.exists()
 
     def test_prime_hook_emits_guide_content(self, tmp_path):
-        """prime.sh with memman on PATH emits guide content via `memman prime`.
+        """Verify prime.sh relays the output of `memman prime`.
+
+        Mutation: printing a fixed text instead of calling memman.
+        Oracle: a shim memman on PATH that prints a marker line.
         """
-        from importlib.resources import files as pkg_files
-        script = str(pkg_files('memman.setup.assets')
+        script = str(files('memman.setup.assets')
                      .joinpath('claude/prime.sh'))
 
         shim_dir = tmp_path / 'shim-bin'
@@ -562,10 +716,14 @@ class TestPrimeAndCompactHooks:
         assert 'SHIM-GUIDE-MARKER' in result.stdout
 
     def test_prime_hook_warns_when_memman_missing(self, tmp_path):
-        """prime.sh emits a warning and exits cleanly when memman is not on PATH.
+        """Verify prime.sh warns and exits 0 when memman is not on PATH.
+
+        Mutation: a failing exit status, or silence, when the binary is
+            missing.
+        Oracle: exit status 0 and 'not on PATH' in the output, run with a PATH
+            that holds no memman.
         """
-        from importlib.resources import files as pkg_files
-        script = str(pkg_files('memman.setup.assets')
+        script = str(files('memman.setup.assets')
                      .joinpath('claude/prime.sh'))
 
         env = {'HOME': str(tmp_path), 'PATH': '/usr/bin:/bin'}
@@ -602,7 +760,8 @@ class TestPrimeAndCompactHooks:
 
 
 class TestUserPromptHook:
-    """`user_prompt.sh` recall reminder and session-id hint."""
+    """`user_prompt.sh` recall reminder and session-id hint.
+    """
 
     def test_prints_the_bare_recall_reminder_regardless_of_session_id(
             self, tmp_path):
@@ -650,7 +809,8 @@ class TestUserPromptHook:
 
 
 class TestNoBlockingHook:
-    """No shipped hook re-invokes the model after a turn has ended."""
+    """No shipped hook re-invokes the model after a turn has ended.
+    """
 
     def test_no_shipped_hook_emits_a_block_decision(self, tmp_path):
         """Verify every shipped hook emits plain text, never a block decision.
@@ -660,8 +820,7 @@ class TestNoBlockingHook:
         Oracle: hand-written expectation that the shipped hook set emits
             text only - stdout parsed as JSON carries no decision key.
         """
-        from importlib.resources import files as pkg_files
-        assets = pkg_files('memman.setup.assets')
+        assets = files('memman.setup.assets')
         payload = json.dumps({
             'stop_hook_active': False,
             'session_id': 'sess-block-probe',
@@ -702,7 +861,6 @@ class TestNoBlockingHook:
         Oracle: hand-enumerated event set, with every boolean switch the
             function offers turned on.
         """
-        import inspect
         switches = {
             name: True
             for name, param in
@@ -737,7 +895,8 @@ class TestNoBlockingHook:
 
 
 class TestPreToolUseHooksReachTheModel:
-    """PreToolUse reminders ride the one channel Claude Code reads."""
+    """PreToolUse reminders ride the one channel Claude Code reads.
+    """
 
     def test_pretooluse_hooks_emit_additional_context(self, tmp_path):
         """Verify every PreToolUse hook speaks additionalContext.
@@ -749,7 +908,6 @@ class TestPreToolUseHooksReachTheModel:
             files under PreToolUse, each required to emit JSON naming
             the event and carrying a memman line.
         """
-        from importlib.resources import files as pkg_files
         registered: dict = {}
         add_claude_hooks_selective(
             registered, '/hooks/dir', remind=True, compact=True,
@@ -762,7 +920,7 @@ class TestPreToolUseHooksReachTheModel:
         assert scripts
         for name in scripts:
             script = str(
-                pkg_files('memman.setup.assets')
+                files('memman.setup.assets')
                 .joinpath(f'claude/{name}'))
             result = _run_hook(
                 script, '{"session_id": "sess-ctx"}', tmp_path)
@@ -773,7 +931,8 @@ class TestPreToolUseHooksReachTheModel:
 
 
 class TestDocsMatchShippedHooks:
-    """Prose and diagram counts track the shipped hook set."""
+    """Prose and diagram counts track the shipped hook set.
+    """
 
     def test_doc_hook_counts_match_the_asset_tree(self):
         """Verify every doc site naming a hook count names the real one.
@@ -826,17 +985,21 @@ class TestDocsMatchShippedHooks:
 
 
 class TestSetupCli:
-    """`memman prime` CLI command."""
+    """`memman prime` CLI command.
+    """
 
     def test_prime_command_emits_status_and_guide(self, tmp_path, monkeypatch):
-        """`memman prime` emits a status line and the guide content."""
+        """Verify `memman prime` prints the status line and the shipped guide.
+
+        Mutation: dropping the guide text, or the status line.
+        Oracle: the guide.md asset read directly.
+        """
         monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
         runner = CliRunner()
         result = runner.invoke(cli, ['prime'], input='{}')
         assert result.exit_code == 0
         assert '[memman] Memory active' in result.output
-        from importlib.resources import files as pkg_files
-        shipped = (pkg_files('memman.setup.assets')
+        shipped = (files('memman.setup.assets')
                    .joinpath('claude/guide.md').read_text())
         assert shipped.strip() in result.output
 
@@ -885,7 +1048,11 @@ class TestSetupCli:
         assert '[memman] Memory active (2 insights).' in result.output
 
     def test_prime_command_emits_compact_hint(self, tmp_path, monkeypatch):
-        """`memman prime` emits the compact-recall hint when source=compact."""
+        """Verify `memman prime` prints the compact hint for source=compact.
+
+        Mutation: ignoring the payload's source.
+        Oracle: the hint phrase 'Context was just compacted'.
+        """
         monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
         runner = CliRunner()
         payload = json.dumps({'source': 'compact', 'session_id': 'sess-x'})
@@ -894,7 +1061,11 @@ class TestSetupCli:
         assert 'Context was just compacted' in result.output
 
     def test_prime_command_reads_compact_flag_trigger(self, tmp_path, monkeypatch):
-        """`memman prime` picks up trigger from compact flag file."""
+        """Verify `memman prime` reads the trigger from the flag file.
+
+        Mutation: always printing the default trigger.
+        Oracle: the flag's 'manual' trigger in the output.
+        """
         monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
         compact_dir = tmp_path / '.memman' / 'compact'
         compact_dir.mkdir(parents=True)
@@ -908,37 +1079,43 @@ class TestSetupCli:
 
 
 class TestSymlinks:
-    """`claude_write_skill` / `claude_write_hook` symlink behavior."""
+    """`claude_write_skill` / `claude_write_hook` symlink behavior.
+    """
 
     def test_claude_write_skill_creates_symlink(self, tmp_path):
-        """claude_write_skill creates a symlink to the shipped SKILL.md."""
-        from importlib.resources import files as pkg_files
+        """Verify claude_write_skill links to the shipped SKILL.md.
 
-        from memman.setup.claude import claude_write_skill
+        Mutation: copying the file, or linking to another path.
+        Oracle: the resolved link equals the resolved asset path.
+        """
         config = tmp_path / 'claude'
         link_path = claude_write_skill(str(config))
         link = pathlib.Path(link_path)
         assert link.is_symlink()
-        target = pathlib.Path(str(pkg_files('memman.setup.assets')
+        target = pathlib.Path(str(files('memman.setup.assets')
                                   .joinpath('claude/SKILL.md'))).resolve()
         assert link.resolve() == target
 
     def test_claude_write_hook_creates_symlink(self, tmp_path):
-        """claude_write_hook creates a symlink to the shipped hook script."""
-        from importlib.resources import files as pkg_files
+        """Verify claude_write_hook links to the shipped hook script.
 
-        from memman.setup.claude import claude_write_hook
+        Mutation: copying the script, or linking to another path.
+        Oracle: the resolved link equals the resolved prime.sh asset path.
+        """
         config = tmp_path / 'claude'
         link_path = claude_write_hook(str(config), 'prime.sh')
         link = pathlib.Path(link_path)
         assert link.is_symlink()
-        target = pathlib.Path(str(pkg_files('memman.setup.assets')
+        target = pathlib.Path(str(files('memman.setup.assets')
                                   .joinpath('claude/prime.sh'))).resolve()
         assert link.resolve() == target
 
     def test_symlink_replaces_stale_symlink(self, tmp_path):
-        """Re-install replaces a dangling symlink with a live one."""
-        from memman.setup.claude import claude_write_skill
+        """Verify a reinstall replaces a dangling symlink with a live one.
+
+        Mutation: skipping the write when a link path already exists.
+        Oracle: the link exists after the call, and did not before.
+        """
         config = tmp_path / 'claude'
         link = config / 'skills' / 'memman' / 'SKILL.md'
         link.parent.mkdir(parents=True)
@@ -950,8 +1127,11 @@ class TestSymlinks:
         assert link.exists()
 
     def test_symlink_replaces_regular_file(self, tmp_path):
-        """Re-install replaces a pre-existing regular file with a symlink."""
-        from memman.setup.claude import claude_write_skill
+        """Verify a reinstall replaces a regular file with a symlink.
+
+        Mutation: leaving the stale file in place.
+        Oracle: the path is a symlink after the call.
+        """
         config = tmp_path / 'claude'
         link = config / 'skills' / 'memman' / 'SKILL.md'
         link.parent.mkdir(parents=True)
@@ -961,13 +1141,14 @@ class TestSymlinks:
         assert link.is_symlink()
 
     def test_uninstall_removes_symlink_not_target(self, tmp_path):
-        """claude_uninstall removes the symlink without touching the target."""
-        from importlib.resources import files as pkg_files
+        """Verify claude_uninstall removes the link, keeps the asset.
 
-        from memman.setup.claude import claude_uninstall, claude_write_skill
+        Mutation: deleting through the link, which destroys the packaged file.
+        Oracle: the asset's bytes read before and after.
+        """
         config = tmp_path / '.claude'
         claude_write_skill(str(config))
-        target = pathlib.Path(str(pkg_files('memman.setup.assets')
+        target = pathlib.Path(str(files('memman.setup.assets')
                                   .joinpath('claude/SKILL.md'))).resolve()
         target_bytes = target.read_bytes()
         claude_uninstall(str(config))
@@ -977,15 +1158,16 @@ class TestSymlinks:
 
 
 class TestInstallConsent:
-    """`_install_claude_code` TTY consent flow for permissions."""
+    """`_install_claude_code` TTY consent flow for permissions.
+    """
 
     @pytest.fixture
     def env(self, tmp_path, monkeypatch):
-        """Set up a clean Claude Code config dir and stub heavy deps."""
+        """Set up a clean Claude Code config dir and stub heavy deps.
+        """
         config_dir = tmp_path / '.claude'
         config_dir.mkdir()
         monkeypatch.setenv('HOME', str(tmp_path))
-        from memman.setup import claude as claude_setup
         monkeypatch.setattr(claude_setup, '_init_default_store',
                             lambda data_dir: None)
         return {'config_dir': str(config_dir)}
@@ -997,8 +1179,11 @@ class TestInstallConsent:
 
     def test_tty_consent_accept_writes_permissions(
             self, env, tmp_path, monkeypatch):
-        """Interactive accept writes all curated entries."""
-        from memman.setup import claude as claude_setup
+        """Verify accepting the TTY prompt writes every curated permission.
+
+        Mutation: ignoring the confirm answer, or writing a partial list.
+        Oracle: each entry of list_claude_permissions in allow.
+        """
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         monkeypatch.setattr(
             'memman.setup.claude.click.confirm',
@@ -1011,8 +1196,11 @@ class TestInstallConsent:
 
     def test_tty_consent_decline_skips_permissions(
             self, env, tmp_path, monkeypatch):
-        """Interactive decline leaves permissions untouched; hooks present."""
-        from memman.setup import claude as claude_setup
+        """Verify declining the TTY prompt skips permissions and keeps hooks.
+
+        Mutation: writing permissions despite a decline, or skipping hooks.
+        Oracle: no curated entry in allow, and a non-empty hooks section.
+        """
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         monkeypatch.setattr(
             'memman.setup.claude.click.confirm',
@@ -1029,8 +1217,12 @@ class TestInstallConsent:
 
     def test_no_wizard_skips_prompt_and_writes(
             self, env, tmp_path, monkeypatch):
-        """`no_wizard=True` writes silently with no confirm call."""
-        from memman.setup import claude as claude_setup
+        """Verify no_wizard writes permissions without asking.
+
+        Mutation: prompting despite no_wizard on a TTY.
+        Oracle: a spy on click.confirm records no call, and every entry is in
+            allow.
+        """
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         confirm_calls: list = []
         monkeypatch.setattr(
@@ -1045,8 +1237,12 @@ class TestInstallConsent:
 
     def test_non_tty_skips_prompt_and_writes(
             self, env, tmp_path, monkeypatch):
-        """Non-TTY writes silently with no confirm call."""
-        from memman.setup import claude as claude_setup
+        """Verify a non-TTY install writes permissions without asking.
+
+        Mutation: prompting with no terminal to answer.
+        Oracle: a spy on click.confirm records no call, and every entry is in
+            allow.
+        """
         monkeypatch.setattr('sys.stdin.isatty', lambda: False)
         confirm_calls: list = []
         monkeypatch.setattr(
@@ -1090,7 +1286,6 @@ def test_uninstall_raises_when_claude_code_cleanup_fails(
     Oracle: a stubbed cleanup returning one error, and a spy proving
         the scheduler removal never ran.
     """
-    from memman.setup import claude as claude_setup
     monkeypatch.setattr(
         claude_setup, 'claude_uninstall',
         lambda config_dir: [RuntimeError('settings rewrite failed')])
@@ -1118,7 +1313,6 @@ def test_install_flow_forces_claude_code_when_undetected(
     Oracle: a spy on `_install_claude_code` proving the install branch
         ran on the forced config dir.
     """
-    from memman.setup import claude as claude_setup
     installs = []
     monkeypatch.setattr(
         claude_setup, '_install_claude_code',
@@ -1147,7 +1341,6 @@ def test_uninstall_flow_forces_claude_code_when_undetected(
     Oracle: a spy on `claude_uninstall` proving the cleanup ran on the
         forced config dir.
     """
-    from memman.setup import claude as claude_setup
     cleaned = []
     monkeypatch.setattr(
         claude_setup, 'claude_uninstall',

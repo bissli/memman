@@ -10,6 +10,8 @@ import json
 
 import pytest
 from memman.pipeline.remember import _apply_plan
+from memman.queue import enqueue, queue_db
+from memman.store.factory import open_backend
 from tests.conftest import invoke, make_insight
 
 
@@ -60,9 +62,6 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         current head, the drain output naming `redirected_from`, and
         no failed queue row.
     """
-    from memman.queue import enqueue, queue_db
-    from memman.store.factory import open_backend
-
     _, data_dir = mm_runner
     res = invoke(mm_runner, ['remember', 'the broker is kombu'])
     assert res.exit_code == 0, res.output

@@ -14,7 +14,8 @@ from tests.conftest import make_insight
 
 
 def _replace_apply(backend, new_id, target_id, **insight_overrides):
-    """Apply a replace of `target_id` with a successor built from overrides."""
+    """Apply a replace of `target_id` with a successor built from overrides.
+    """
     overrides = {
         'id': new_id,
         'content': 'merged content',

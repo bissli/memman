@@ -1,10 +1,10 @@
 """Contracts the FTS5 keyword channel has to hold.
 
-`RecallSession.keyword_counts` replaced a per-recall tokenization of
-every active row. It fills `kw_score`'s numerator, so a count that
-disagrees with `keyword.insight_tokens` moves `signals.keyword` and
-the rerank blend together. These pin the count, the
-query-language safety rule, and the index's sync with the rows it
+`RecallSession.keyword_counts` answers a recall from the keyword
+index without tokenizing rows. It fills `kw_score`'s numerator, so a
+count that disagrees with `keyword.insight_tokens` moves
+`signals.keyword` and the rerank blend together. These pin the count,
+the query-language safety rule, and the index's sync with the rows it
 indexes.
 """
 
@@ -12,14 +12,18 @@ import sqlite3
 from pathlib import Path
 from unittest import mock
 
+import memman.search.keyword as keyword_module
+import memman.search.recall as recall_module
 import memman.store.db as db_module
 import pytest
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.search.recall import run_recall
+from memman.store.backend import Backend
 from memman.store.db import open_db, open_read_only
 from memman.store.errors import BackendError
+from memman.store.model import Insight
 from memman.store.sqlite import SqliteBackend
-from tests.conftest import make_insight
+from tests.conftest import _safe_store_name, make_insight
 
 # Every one of these raises `OperationalError` when handed straight to
 # `match`: `?` `-` `/` `.` `[` `)` are operators or syntax errors and
@@ -46,8 +50,9 @@ CORPUS = [
 ]
 
 
-def _seed(backend):
-    """Insert the shared corpus and return its insights by id."""
+def _seed(backend: Backend) -> dict[str, Insight]:
+    """Insert the shared corpus and return its insights by id.
+    """
     out = {}
     for iid, content in CORPUS:
         ins = make_insight(id=iid, content=content)
@@ -56,8 +61,11 @@ def _seed(backend):
     return out
 
 
-def _python_counts(insights, query_tokens):
-    """Match counts the pre-index route produced, as the oracle."""
+def _python_counts(
+        insights: dict[str, Insight],
+        query_tokens: set[str]) -> dict[str, int]:
+    """Match counts from Python tokenization, as the oracle.
+    """
     return {
         iid: n for iid, n in (
             (iid, sum(1 for t in query_tokens if t in insight_tokens(ins)))
@@ -73,16 +81,13 @@ def test_counts_match_python_tokenization(backend):
         recall working while silently moving every `kw_score` that
         depends on an inflected word.
     Oracle: the counts recomputed in Python from `insight_tokens`,
-        which is the route the drain still uses.
-
-    Notes
-    -----
-    - The last query is inflected on purpose and matches nothing
-      under either route. It is what pins `unicode61`: a `porter`
-      tokenizer would stem `jumping`/`rankings` onto the stored
-      `jumps`/`ranking` and return hits Python never returns.
+        which is the route the drain uses.
     """
     insights = _seed(backend)
+    # The last query is inflected and matches nothing under either
+    # route. It pins `unicode61`: a `porter` tokenizer would stem
+    # `jumping`/`rankings` onto the stored `jumps`/`ranking` and
+    # return hits Python never returns.
     for query in ('brown fox', 'vulpes physics', 'adjacency sqlite map',
                   'bm25 ranking photons', 'contract sparse',
                   'jumping photons rankings'):
@@ -102,17 +107,15 @@ def test_punctuation_and_case_count_the_same_as_python(backend):
         mixed-case token.
     Oracle: the Python token-overlap counts for the same strings,
         which no FTS5 syntax and no SQL folding can reach.
-
-    Notes
-    -----
-    - These strings are the ones that raise `OperationalError` when
-      handed to `match` raw. That they cannot reach `match` is
-      structural, not something this test defends: `keyword_counts`
-      takes an already-tokenized `set[str]`. What it does defend is
-      that the counts are right for them, `_ALLOWED_BOOL_FLAGS`
-      included, the corpus's only mixed-case token.
     """
     insights = _seed(backend)
+    # Notes:
+    # - These strings raise `OperationalError` when handed to `match`
+    #   raw. The signature keeps them from `match`: `keyword_counts`
+    #   takes an already-tokenized `set[str]`, so this test does not
+    #   defend that.
+    # - It defends the counts for them, including
+    #   `_ALLOWED_BOOL_FLAGS`, the corpus's only mixed-case token.
     for query in HOSTILE_QUERIES:
         query_tokens = tokenize(query)
         assert query_tokens, query
@@ -150,18 +153,9 @@ def test_edits_reindex_and_unrelated_writes_do_not(tmp_path):
         so the old terms linger and the row keeps matching a word it
         no longer holds.
     Oracle: probes for the removed and the added word, by value.
-
-    Notes
-    -----
-    - SQLite-only: the FTS5 trigger is what reindexes a content edit.
-      Postgres has no equivalent -- `kw_tokens` is set once, at
-      insert.
-    - The embedding write asserts the index survives an unrelated
-      write. It does NOT pin the trigger's `of content` scoping: a
-      bare `after update` rewrites the row with identical values, so
-      it costs writes and changes no output. Catching that needs a
-      write-count spy, not this assertion.
     """
+    # SQLite-only: the FTS5 trigger reindexes a content edit. Postgres
+    # has no equivalent, since `kw_tokens` is set once, at insert.
     store = tmp_path / 'reindex'
     db = open_db(str(store))
     backend = SqliteBackend(db)
@@ -176,6 +170,12 @@ def test_edits_reindex_and_unrelated_writes_do_not(tmp_path):
         assert session.keyword_counts({'vulpes'}) == {}
         assert session.keyword_counts({'canis'}) == {'kw-a': 1}
 
+    # Notes:
+    # - The embedding write shows the index survives an unrelated
+    #   write. It does NOT pin the trigger's `of content` scoping.
+    # - A bare `after update` rewrites the row with identical values,
+    #   so it costs writes and changes no output. Catching that needs
+    #   a write-count spy.
     backend.nodes.update_embedding('kw-a', [0.0] * 512, 'test-model')
     assert backend.integrity_check()['ok']
     with backend.recall_session() as session:
@@ -192,16 +192,8 @@ def test_recall_stops_tokenizing_every_row(backend, monkeypatch):
         index probe comes back empty.
     Oracle: a spy on `insight_tokens`, bound in BOTH modules that
         can hold a reference, against a store with rows to tokenize.
-
-    Notes
-    -----
-    - The second query matches nothing, so `keyword_counts` returns
-      an empty dict. That is the input that separates `is None` from
-      a falsiness test, and it is why the assertion runs twice.
     """
     _seed(backend)
-    import memman.search.keyword as keyword_module
-    import memman.search.recall as recall_module
 
     calls: list[str] = []
     real = keyword_module.insight_tokens
@@ -218,6 +210,8 @@ def test_recall_stops_tokenizing_every_row(backend, monkeypatch):
     assert resp['results']
     assert calls == []
 
+    # This query matches nothing, so `keyword_counts` returns an empty
+    # dict: the input that separates `is None` from a falsiness test.
     resp = run_recall(
         backend, 'zzznomatch qqqnomatch', None, 10)
     assert resp['results'], 'recency anchors should still return rows'
@@ -254,14 +248,11 @@ def test_keyword_signal_is_the_overlap_fraction(backend):
         documented range.
     Oracle: hand-computed. 'brown fox jumps quantum' has four
         tokens; kw-a holds three of them and kw-b one.
-
-    Notes
-    -----
-    - No row matches all four on purpose. With a query every row
-        could match in full, `max(matched)` equals the query length
-        and a denominator swapped for it is invisible.
     """
     _seed(backend)
+    # No row matches all four tokens. If one did, `max(matched)` would
+    # equal the query length and a denominator swapped for it would
+    # pass.
     resp = run_recall(
         backend, 'brown fox jumps quantum', None, 10)
     signals = {r['insight'].id: r['signals']['keyword']
@@ -274,18 +265,14 @@ def test_integrity_check_catches_a_drifted_index(tmp_path):
     """Verify drift is detected, which needs the rank-1 probe.
 
     Mutation: reporting `pragma integrity_check` alone, or FTS5's
-        default `'integrity-check'`. Measured: both pass on an index
+        default `'integrity-check'`. Both pass on an index
         whose terms no longer match the rows, so either one turns
         this check into a tautology.
     Oracle: the same store before and after the base row is edited
         behind the index's back.
-
-    Notes
-    -----
-    - SQLite-only: the FTS5 index is the SQLite keyword channel, and
-      Postgres counts against the rows themselves with nothing to
-      drift.
     """
+    # SQLite-only: the FTS5 index is the SQLite keyword channel.
+    # Postgres counts against the rows themselves, so nothing drifts.
     store = tmp_path / 'drift'
     db = open_db(str(store))
     backend = SqliteBackend(db)
@@ -316,14 +303,6 @@ def test_creating_the_index_populates_it(tmp_path):
         degrade silently rather than fail.
     Oracle: the probe result before the table is dropped, re-asserted
         after it is dropped and the store reopened.
-
-    Notes
-    -----
-    - Dropping the table AND its triggers is how a store that
-      predates the index reaches `_migrate`, and also how one
-      restored from an older backup does. Dropping only the table
-      leaves a state `_migrate` cannot produce and every write
-      rejects, since the triggers would reference a missing table.
     """
     store = tmp_path / 'backfill'
     db = open_db(str(store))
@@ -334,6 +313,13 @@ def test_creating_the_index_populates_it(tmp_path):
     assert before
     db.close()
 
+    # Notes:
+    # - Dropping the table AND its triggers is the state `_migrate`
+    #   sees in a store that predates the index, or one restored from
+    #   an older backup.
+    # - Dropping only the table leaves a state `_migrate` cannot
+    #   produce, and every write rejects because the triggers name a
+    #   missing table.
     raw = sqlite3.connect(Path(store) / 'memman.db')
     for name in ('insert', 'delete', 'update'):
         raw.execute(f'drop trigger insights_fts_{name}')
@@ -357,15 +343,12 @@ def test_the_index_is_created_and_filled_atomically(tmp_path):
         the connection is autocommit, so the table would survive a
         failed backfill - and the absence check would then read as
         "already migrated" forever, leaving the keyword channel dead
-        with no error. That is the snapshot's failure mode exactly.
+        with no error.
     Oracle: `sqlite_master` after the failure (nothing left), then a
         clean reopen that indexes every row.
-
-    Notes
-    -----
-    - SQLite-only: the transaction is SQLite DDL. Postgres has no
-      index here to create.
     """
+    # SQLite-only: the transaction is SQLite DDL. Postgres has no index
+    # here to create.
     store = tmp_path / 'atomic'
     db = open_db(str(store))
     backend = SqliteBackend(db)
@@ -410,11 +393,6 @@ def test_integrity_check_does_not_cry_drift_on_a_read_only_handle(
         doctor` exits 1 on it.
     Oracle: the same store read through `open_read_only`, which must
         agree with the read-write handle that the store is healthy.
-
-    Notes
-    -----
-    - SQLite-only, and `open_read_only` is how the benchmark and
-      ablation harnesses open a live store.
     """
     store = tmp_path / 'readonly'
     db = open_db(str(store))
@@ -423,6 +401,8 @@ def test_integrity_check_does_not_cry_drift_on_a_read_only_handle(
     assert backend.integrity_check()['ok']
     db.close()
 
+    # SQLite-only. The benchmark and ablation harnesses open a live
+    # store through `open_read_only`.
     result = SqliteBackend(open_read_only(str(store))).integrity_check()
 
     assert result['ok'] is True
@@ -440,25 +420,21 @@ def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
     Oracle: hand-computed from the two tokenizers' rules. `_WORD_RE`
         is `[a-zA-Z0-9]+`, so `naive` with an i-diaeresis is `na` +
         `ve`; `unicode61` keeps it whole and matches neither.
-
-    Notes
-    -----
-    - This asserts a DIVERGENCE, on purpose. SQLite cannot reproduce
-      `_WORD_RE` without changing `_WORD_RE` itself, which would
-      reshape `signals.keyword` recall scoring and needs its own
-      sweep. The gap is documented on `RecallSession.keyword_counts`
-      with its measured cost; this test is what stops it growing
-      unnoticed.
-    - Postgres is the faithful side and is asserted as such, so a
-      regression there fails even though the value differs by
-      backend.
     """
     backend.nodes.insert(make_insight(
-        id='kw-nonascii', content='a naïve fallback'))
+        id='kw-nonascii', content='a na\u00efve fallback'))
 
     with backend.recall_session() as session:
         got = session.keyword_counts({'na', 've', 'fallback'})
 
+    # Notes:
+    # - This asserts a DIVERGENCE. SQLite cannot reproduce `_WORD_RE`
+    #   without changing `_WORD_RE` itself, which would reshape
+    #   `signals.keyword` recall scoring. `RecallSession.keyword_counts`
+    #   documents the gap and its cost.
+    # - Postgres is the faithful side and is asserted as such, so a
+    #   regression there fails even though the value differs by
+    #   backend.
     assert got.get('kw-nonascii') == (1 if backend_kind == 'sqlite' else 3), (
         'sqlite indexes the whole word and matches only "fallback";'
         ' postgres splits exactly as _WORD_RE does')
@@ -484,13 +460,9 @@ def test_a_row_cannot_exist_without_its_token_set(request, pg_dsn):
         being set to an empty array, which is what `soft_delete`
         does.
     """
-    # Local because psycopg and the postgres backend are an optional
-    # extra: importing them at module scope breaks collection of the
-    # sqlite half of this file wherever the extra is absent.
     import psycopg
     from memman.store.postgres import _store_schema, drop_postgres_store
     from memman.store.postgres import open_postgres_backend
-    from tests.conftest import _safe_store_name
 
     store = _safe_store_name(request.node.name)
     drop_postgres_store(store, pg_dsn)
@@ -515,8 +487,5 @@ def test_a_row_cannot_exist_without_its_token_set(request, pg_dsn):
             'an emptied row leaves the keyword channel and its'
             ' siblings stay, which is what soft_delete relies on')
     finally:
-        try:
-            backend.close()
-        except Exception:
-            pass
+        backend.close()
         drop_postgres_store(store, pg_dsn)

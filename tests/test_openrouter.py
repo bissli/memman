@@ -1,4 +1,5 @@
-"""Unit tests for the OpenRouter-facing parts of the LLM client."""
+"""Unit tests for the OpenRouter-facing parts of the LLM client.
+"""
 
 import pytest
 from memman.exceptions import ConfigError
@@ -6,6 +7,12 @@ from memman.llm.client import MemmanLLMClient
 
 
 def test_llm_client_requires_model():
+    """Verify an empty model raises ConfigError.
+
+    Mutation: accepting an empty model and letting the request go out with
+        no model set.
+    Oracle: pytest.raises(ConfigError, match='model is empty').
+    """
     with pytest.raises(ConfigError, match='model is empty'):
         MemmanLLMClient(
             'https://openrouter.ai/api/v1',
@@ -14,6 +21,11 @@ def test_llm_client_requires_model():
 
 
 def test_llm_client_accepts_model():
+    """Verify a client keeps the given model and endpoint.
+
+    Mutation: rewriting or dropping the model or endpoint in __init__.
+    Oracle: the literal model id and endpoint URL passed in.
+    """
     client = MemmanLLMClient(
         'https://openrouter.ai/api/v1',
         'sk-or-test',
@@ -23,7 +35,8 @@ def test_llm_client_accepts_model():
 
 
 def _capture_post(monkeypatch):
-    """Stub the shared session and return the dict the body lands in."""
+    """Stub the shared session and return the dict the body lands in.
+    """
     captured = {}
 
     class _Resp:
@@ -50,12 +63,12 @@ def _capture_post(monkeypatch):
 
 @pytest.mark.no_mock_llm
 def test_openrouter_request_carries_the_operator_provider_routing(monkeypatch):
-    """A client given provider routing sends it as the body's `provider`.
+    """Verify provider routing goes into the request body as `provider`.
 
-    Mutation: the routing block is dropped from the request body, so
-    every call routes to whichever provider OpenRouter picks and the
-    operator's jurisdiction and retention choice goes unenforced with
-    no error raised.
+    Mutation: dropping the routing block from the request body, so every
+        call routes to whichever provider OpenRouter picks and the
+        operator's jurisdiction and retention choice goes unenforced with
+        no error raised.
     Oracle: the request body captured from a stubbed session.
     """
     captured = _capture_post(monkeypatch)
@@ -69,11 +82,10 @@ def test_openrouter_request_carries_the_operator_provider_routing(monkeypatch):
 
 @pytest.mark.no_mock_llm
 def test_client_without_routing_sends_no_provider_key(monkeypatch):
-    """A vendor-neutral endpoint gets no OpenRouter-only field.
+    """Verify a vendor-neutral endpoint gets no OpenRouter-only field.
 
-    Mutation: the provider block is attached unconditionally, so an
-    Ollama or vLLM shim receives an unknown top-level field it may
-    reject.
+    Mutation: attaching the provider block unconditionally, so an Ollama or
+        vLLM shim receives an unknown top-level field it may reject.
     Oracle: the request body captured from a stubbed session.
     """
     captured = _capture_post(monkeypatch)

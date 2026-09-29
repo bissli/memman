@@ -12,12 +12,6 @@ after total loss of `~/.memman/`.
 Secrets (API keys, the default Postgres DSN, and every per-store
 `MEMMAN_POSTGRES_DSN_<store>`) are excluded from the bundle and
 re-entered / resolved on the target host at restore.
-
-Notes
-- The manifest carries its own `BACKUP_FORMAT_VERSION` (no global DB
-  schema version exists); `embed_fingerprint` is recorded per store.
-- The per-store `backend` field in the manifest is authoritative for
-  restore routing.
 """
 
 import contextlib
@@ -90,6 +84,15 @@ def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
 
     Does NOT run migrations (unlike `open_db`); the source is opened
     read-only.
+
+    Parameters
+    ----------
+    store : str
+        Store name.
+    data_dir : str
+        The memman data directory holding the store.
+    dst_db_path : Path
+        Destination file for the copy.
     """
     _online_copy(
         os.path.join(store_dir(data_dir, store), DB_FILENAME), dst_db_path)
@@ -99,7 +102,21 @@ def snapshot_postgres(store: str, dsn: str, dst_dump_path: Path) -> None:
     """Dump `store_<store>` to `dst_dump_path` with `pg_dump -Fc`.
 
     The custom-format dump is MVCC-consistent, so no scheduler stop is
-    required. Raises `RuntimeError` on pg_dump failure.
+    required.
+
+    Parameters
+    ----------
+    store : str
+        Store name; the schema dumped is `store_<store>`.
+    dsn : str
+        Postgres connection string.
+    dst_dump_path : Path
+        Destination file for the dump.
+
+    Raises
+    ------
+    RuntimeError
+        When `pg_dump` fails.
     """
     schema = f'store_{store}'
     cmd = ['pg_dump', '-Fc', '-d', dsn, '-n', schema,
@@ -120,11 +137,18 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
     `<target>/.memman-incoming/` and atomically published; a sidecar
     `<bundle>.manifest.json` is written alongside for cheap listing.
 
-    The write queue (`queue.db`) is snapshotted BEFORE the store DBs:
-    any queue row marked done in that copy had its insight committed
-    before the later store snapshots (so it is present), while
-    pending/claimed rows simply re-drain idempotently on the restored
-    host -- so a not-yet-drained `remember` is never lost.
+    Parameters
+    ----------
+    data_dir : str
+        The memman data directory to back up.
+    target : str
+        External directory that receives the bundle; `~` expands.
+
+    Returns
+    -------
+    dict[str, Any]
+        `bundle` and `manifest` paths, per-store manifest entries under
+        `stores`, and the `active_store`.
     """
     target_path = Path(os.path.expanduser(target))
     target_path.mkdir(parents=True, exist_ok=True)
@@ -151,6 +175,12 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
             for prefix, secret in config.PER_STORE_KEY_SPECS)
 
     try:
+        # The write queue (`queue.db`) is snapshotted BEFORE the store
+        # DBs: a queue row marked done in that copy had its insight
+        # committed before the later store snapshots (so it is
+        # present), while pending/claimed rows re-drain idempotently on
+        # the restored host, so a not-yet-drained `remember` is never
+        # lost.
         queue_pending: int | None = 0
         queue_src = os.path.join(data_dir, QUEUE_FILENAME)
         if os.path.exists(queue_src):
@@ -266,9 +296,20 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
 def prune(target: str, keep: int) -> list[str]:
     """Delete bundles beyond the newest `keep`, by UTC stamp in the name.
 
-    Returns the removed bundle paths. Names without a parseable
-    `YYYYMMDDTHHMMSSZ` stamp are skipped; each bundle's sidecar
-    manifest is removed with it.
+    Names without a parseable `YYYYMMDDTHHMMSSZ` stamp are skipped;
+    each bundle's sidecar manifest is removed with it.
+
+    Parameters
+    ----------
+    target : str
+        Directory holding the bundles; `~` expands.
+    keep : int
+        Number of newest bundles to retain; a negative value counts as 0.
+
+    Returns
+    -------
+    list[str]
+        The removed bundle paths.
     """
     target_path = Path(os.path.expanduser(target))
     if not target_path.is_dir():
@@ -304,10 +345,22 @@ def prune(target: str, keep: int) -> list[str]:
 def run_backup(data_dir: str, target: str | None = None) -> dict[str, Any]:
     """Build a bundle then prune, resolving the target if not passed.
 
-    `target` falls back to `MEMMAN_BACKUP_TARGET`. The worker entry
-    point (`memman backup worker`) and `backup run` both call this so
-    the build+prune logic lives in one place. Raises `RuntimeError`
-    when no target is configured.
+    Parameters
+    ----------
+    data_dir : str
+        The memman data directory to back up.
+    target : str or None, default None
+        Falls back to `MEMMAN_BACKUP_TARGET`.
+
+    Returns
+    -------
+    dict[str, Any]
+        `build_bundle`'s result plus `pruned`, the removed paths.
+
+    Raises
+    ------
+    RuntimeError
+        When no target is configured.
     """
     target = target or config.get(config.BACKUP_TARGET)
     if not target:
@@ -334,6 +387,25 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
     Postgres stores resolve their DSN on the target host (the DSN is a
     secret and is not in the bundle); a store with no DSN or no
     `pg_restore` is skipped and reported under `pg_restore_skipped`.
+
+    Parameters
+    ----------
+    bundle_path : str
+        The `.tar.gz` bundle to read.
+    data_dir : str
+        The memman data directory to rebuild.
+
+    Returns
+    -------
+    dict[str, Any]
+        Keys `restored`, `failed`, `pg_restore_skipped`,
+        `embed_mismatch`, `queue_restored`, `active_store` and
+        `secret_keys_needed`.
+
+    Raises
+    ------
+    RuntimeError
+        When the bundle's `format_version` is not the supported one.
     """
     extract_root = Path(tempfile.mkdtemp(prefix='memman-restore-'))
     try:
@@ -390,11 +462,9 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
                     tmp = dst_dir / (DB_FILENAME + '.tmp')
                     shutil.copy2(src / DB_FILENAME, tmp)
                     os.replace(tmp, dst_dir / DB_FILENAME)
-                    # The WAL and SHM belong to the database being
-                    # replaced, not to the one arriving. Leaving them
-                    # lets SQLite replay a foreign log over the
-                    # restored file, which is corruption rather than
-                    # staleness.
+                    # The WAL and SHM belong to the replaced database.
+                    # Leaving them lets SQLite replay a foreign log
+                    # over the restored file and corrupt it.
                     for side in (
                             DB_FILENAME + '-wal', DB_FILENAME + '-shm'):
                         (dst_dir / side).unlink(missing_ok=True)

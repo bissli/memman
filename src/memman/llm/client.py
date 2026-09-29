@@ -25,10 +25,9 @@ from memman.llm.shared import safe_json
 
 logger = logging.getLogger('memman')
 
-# Enrichment emits JSON that scales with input size (its summary); a
-# small cap truncates large insights mid-JSON and the parse fails, so
-# the client gets a large token budget and, with WORKER_TIMEOUT, a
-# long read timeout.
+# Enrichment emits JSON that scales with input size. A small cap
+# truncates a large insight mid-JSON and the parse fails, so the client
+# takes a large token budget and, with WORKER_TIMEOUT, a long timeout.
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1
@@ -40,7 +39,8 @@ _OR_ATTRIBUTION_HEADERS = {
 
 
 class MemmanLLMClient:
-    """OpenAI-schema LLM client for any endpoint with a `/chat/completions` shim."""
+    """OpenAI-schema client for any endpoint with `/chat/completions`.
+    """
 
     def __init__(
             self,
@@ -53,18 +53,27 @@ class MemmanLLMClient:
             extra_headers: dict[str, str] | None = None,
             provider_routing: dict | None = None,
             ) -> None:
-        """Initialize with endpoint, API key, and an explicit model id.
+        """Bind the client to an endpoint, API key, and model id.
 
-        `api_key` may be empty: in that case the `Authorization` header
-        is omitted, supporting auth-less endpoints (Ollama, local
-        vLLM/LiteLLM). `extra_headers` is merged on top of the standard
-        headers and is used to attach attribution headers for known
-        endpoints (OpenRouter).
-
-        `provider_routing` is sent verbatim as the request body's
-        `provider` field and is omitted entirely when None. The field
-        is OpenRouter's, so only an OpenRouter endpoint is given one;
-        a vendor-neutral shim would reject an unknown key.
+        Parameters
+        ----------
+        endpoint : str
+            Base URL; a trailing slash is dropped.
+        api_key : str
+            May be empty: the `Authorization` header is then omitted,
+            for auth-less endpoints (Ollama, local vLLM/LiteLLM).
+        model : str
+            Model id. Raises `ConfigError` when empty.
+        max_tokens : int, default 1024
+            Completion token cap sent with each request.
+        timeout : float, default ENRICHMENT_TIMEOUT
+            Per-request timeout in seconds.
+        extra_headers : dict[str, str] or None, default None
+            Merged over the standard headers (OpenRouter attribution).
+        provider_routing : dict or None, default None
+            Sent verbatim as the body's `provider` field, and omitted
+            when None. Only an OpenRouter endpoint is given one, since
+            a vendor-neutral shim rejects an unknown key.
         """
         self.provider_routing = provider_routing
         if not model:
@@ -98,22 +107,23 @@ class MemmanLLMClient:
         str
             The first choice's `message.content`.
 
+        Raises
+        ------
+        ValueError
+            On an unknown `stage`.
+        httpx.HTTPStatusError
+            On a non-retryable status, or a retryable one after the
+            last attempt.
+        RuntimeError
+            When every attempt returns an empty body, or a response
+            lacks `message.content` (raised at once, without retry).
+
         Notes
         -----
-        - Retries up to `MAX_RETRIES` attempts. Retryable HTTP statuses
-          sleep `RETRY_BACKOFF`; an empty body (missing or empty
-          `choices`, or empty / whitespace-only / null `content`)
-          retries after `EMPTY_RETRY_DELAY` and raises `RuntimeError`
-          when every attempt is empty.
-        - A structurally malformed response (missing `message.content`)
-          raises immediately; it does not self-heal.
-        - Token accounting is per attempt, inside the retry loop: an
-          empty HTTP-200 body is a billed completion, so success-only
-          accounting undercounts by up to `MAX_RETRIES - 1` attempts.
-        - Non-2xx attempts are booked as `http_errors`, never
-          `calls`: a 429 storm bills nothing and must not read as
-          billed completions. An HTTP-200 whose body is not JSON is
-          booked like an empty body and retried.
+        - Makes up to `MAX_RETRIES` attempts. A retryable status sleeps
+          `RETRY_BACKOFF`. An empty body (no `choices`, or empty,
+          whitespace-only, or null `content`) or a non-JSON 200 sleeps
+          `EMPTY_RETRY_DELAY`.
         """
         if stage not in llm_usage.VALID_STAGES:
             raise ValueError(
@@ -155,6 +165,8 @@ class MemmanLLMClient:
                 usage_block = (
                     err_body.get('usage')
                     if isinstance(err_body, dict) else None)
+                # A non-2xx attempt books as `http_errors`, never
+                # `calls`: a 429 storm bills nothing.
                 llm_usage.record(stage, usage_block, http_error=True)
                 trace.event(
                     'llm_response',
@@ -175,18 +187,14 @@ class MemmanLLMClient:
                     time.sleep(delay)
                     continue
                 raise
-            # Notes:
-            # - A 200 with an unparseable body (truncating proxy) is
-            #   still a billed attempt; book it before the retry,
-            #   not after a raise that skips the ledger.
-            # - Keep the raw text for the trace/error surfaces --
-            #   the operator needs to tell an HTML error page from
-            #   truncated JSON, exactly as the non-2xx branch does.
+            # Keep the raw text for the trace and error surfaces: the
+            # operator must tell an HTML error page from truncated JSON.
             raw_body = safe_json(resp)
             data = raw_body if isinstance(raw_body, dict) else None
-            # Every HTTP-200 attempt is a billed completion --
-            # malformed, empty and success alike carry a usage block,
-            # so record it here, once per attempt, before branching.
+            # Every HTTP-200 attempt is a billed completion, whether
+            # malformed, empty, or successful. Record it once per
+            # attempt, before branching, so a raise cannot skip the
+            # ledger.
             usage_block = (
                 data.get('usage') if isinstance(data, dict) else None)
             llm_usage.record(stage, usage_block)
@@ -240,12 +248,10 @@ class MemmanLLMClient:
                 logger.debug(
                     f'llm {empty_kind}, retry'
                     f' {attempt + 1}/{MAX_RETRIES - 1}')
-                # Notes:
-                # - An empty body is a flaky-endpoint blip, not rate
-                #   limiting, so RETRY_BACKOFF does not apply: its
-                #   (1.0, 2.0, 4.0) of sleep is charged against the
-                #   60 s drain timeout whose maintenance pass needs
-                #   ~30 s.
+                # An empty body signals a flaky endpoint, so the
+                # rate-limit RETRY_BACKOFF does not apply: its sleep
+                # is charged against the drain timeout, whose
+                # maintenance pass needs a minimum budget.
                 time.sleep(EMPTY_RETRY_DELAY)
                 continue
             raise RuntimeError(
@@ -286,14 +292,11 @@ def get_llm_client() -> MemmanLLMClient:
     if config.is_openrouter_endpoint(endpoint):
         extra.update(_OR_ATTRIBUTION_HEADERS)
         # Notes:
-        # - Retention and jurisdiction are the operator's call, so all
-        #   three values come from the env file rather than a literal.
-        # - An empty allowlist means no pin: OpenRouter then picks any
-        #   provider serving the model, which is the shipped default
-        #   only for an operator who clears the variable.
-        # - A pin that no provider satisfies fails the call outright.
-        #   That is the intended direction: a refusal is recoverable,
-        #   a silent route to an unapproved host is not.
+        # - An empty allowlist sends no pin, so OpenRouter picks any
+        #   provider serving the model.
+        # - A pin that no provider satisfies fails the call outright:
+        #   a refusal is recoverable, a silent route to an unapproved
+        #   host is not.
         only = [
             name.strip()
             for name in (config.get(config.LLM_PROVIDER_ONLY) or '').split(',')
@@ -303,8 +306,8 @@ def get_llm_client() -> MemmanLLMClient:
         collection = (config.get(config.LLM_DATA_COLLECTION) or '').strip()
         if collection:
             routing['data_collection'] = collection.lower()
-        if (config.get(config.LLM_ZDR) or '').strip().lower() in {
-                '1', 'true', 'yes', 'on'}:
+        if (config.get(config.LLM_ZDR) or '').strip().lower() in (
+                config.TRUTHY):
             routing['zdr'] = True
     _CLIENT = MemmanLLMClient(
         endpoint, api_key, model, max_tokens=WORKER_MAX_TOKENS,
@@ -314,6 +317,7 @@ def get_llm_client() -> MemmanLLMClient:
 
 
 def reset_client_cache() -> None:
-    """Drop the cached client. Used by tests that swap env vars."""
+    """Drop the cached client. Used by tests that swap env vars.
+    """
     global _CLIENT
     _CLIENT = None

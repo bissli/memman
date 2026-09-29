@@ -1,10 +1,10 @@
-"""Schema canaries for the `replaced_by` column (0.33.0).
+"""Schema canaries for the `replaced_by` column.
 
 `replaced_by text` is nullable, carries no foreign key, and is
 appended LAST at every touch point. These tests pin the paths a
 silent omission would degrade: doctor's schema audit, the migration
 payload round-trip on both migrator halves, and the baseline index
-that makes a pre-0.33.0 store fail at open.
+that makes a store missing the column fail at open.
 """
 
 import inspect
@@ -24,7 +24,8 @@ from tests.conftest import make_insight
 
 
 def _drop_column(conn, column):
-    """Drop `column` and, first, every index whose DDL names it."""
+    """Drop `column` and, first, every index whose DDL names it.
+    """
     indexes = conn.execute(
         "select name from sqlite_master where type = 'index'"
         " and tbl_name = 'insights' and sql like ?",
@@ -57,7 +58,8 @@ def _seed_store(data_dir, store):
 
 
 def _insight_columns(backend):
-    """Every column name of the insights table, on either backend."""
+    """Every column name of the insights table, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query('pragma table_info(insights)').fetchall()
         return {r[1] for r in rows}
@@ -86,8 +88,7 @@ def test_replaced_by_round_trips_through_migration(tmp_path):
 
     Mutation: omitting `replaced_by` from gather's optional list,
         from its index map, or from apply's insert list -- a rebuild
-        silently drops every pointer, and the fleet's 9,2xx
-        replacements with it.
+        silently drops every pointer.
     Oracle: the payload row carries `p-2` in between, the applied
         store returns it, and the adjacent `queue_uuid` keeps its
         distinct value.

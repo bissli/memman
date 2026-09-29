@@ -28,7 +28,8 @@ _CORRECTION = (
 
 
 def _remember_id(runner, text):
-    """Store `text` and return the id `remember` printed."""
+    """Store `text` and return the id `remember` printed.
+    """
     result = invoke(runner, ['remember', text])
     assert result.exit_code == 0, result.output
     return json.loads(result.output)['id']

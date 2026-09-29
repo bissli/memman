@@ -1,7 +1,9 @@
-"""Tests for enrich_pending."""
+"""Tests for enrich_pending.
+"""
 
 from datetime import datetime, timezone
 
+from memman.pipeline import enrich as enrich_mod
 from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
 from memman.store.node import insert_insight
 from tests.conftest import insert_pending as _insert_pending
@@ -11,11 +13,11 @@ OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 class TestEnrichPending:
-    """enrich_pending processes insights with enrich_attempted_at IS NULL."""
+    """enrich_pending processes insights with enrich_attempted_at is null.
+    """
 
     def test_processes_null_enrich_attempted_at(self, tmp_db, tmp_backend):
-        """Insights with NULL enrich_attempted_at get stamped after
-        processing.
+        """Verify pending insights are stamped after processing.
 
         Mutation: enrich_pending skipping the stamp_enrich_attempted
             call, leaving the row pending forever.
@@ -29,13 +31,13 @@ class TestEnrichPending:
         assert processed == 2
 
         row = tmp_db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE enrich_attempted_at IS NULL AND deleted_at IS NULL'
+            'select count(*) from insights'
+            ' where enrich_attempted_at is null and deleted_at is null'
             ).fetchone()
         assert row[0] == 0
 
     def test_skips_already_attempted(self, tmp_db, tmp_backend):
-        """Insights with enrich_attempted_at set are not re-processed.
+        """Verify an already-attempted insight is not re-processed.
 
         Mutation: get_pending_enrich_ids dropping the
             `enrich_attempted_at is null` filter, sweeping in an
@@ -46,14 +48,14 @@ class TestEnrichPending:
         insert_insight(tmp_db, make_insight(
             id='ac-1', content='already attempted insight'))
         tmp_db._conn.execute(
-            "UPDATE insights SET enrich_attempted_at = created_at"
-            " WHERE id = 'ac-1'")
+            "update insights set enrich_attempted_at = created_at"
+            " where id = 'ac-1'")
 
         processed = enrich_pending(tmp_backend)
         assert processed == 0
 
     def test_batch_cap_respected(self, tmp_db, tmp_backend):
-        """Only MAX_ENRICH_BATCH insights processed per call.
+        """Verify one call processes at most MAX_ENRICH_BATCH insights.
 
         Mutation: get_pending_enrich_ids ignoring its limit argument,
             or enrich_pending defaulting max_batch to an unbounded
@@ -70,13 +72,13 @@ class TestEnrichPending:
         assert processed == MAX_ENRICH_BATCH
 
         pending = tmp_db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE enrich_attempted_at IS NULL AND deleted_at IS NULL'
+            'select count(*) from insights'
+            ' where enrich_attempted_at is null and deleted_at is null'
             ).fetchone()[0]
         assert pending == 5
 
     def test_max_batch_parameter_respected(self, tmp_db, tmp_backend):
-        """max_batch parameter caps processing to the given count.
+        """Verify max_batch caps processing to the given count.
 
         Mutation: enrich_pending ignoring its max_batch argument and
             passing MAX_ENRICH_BATCH to get_pending_enrich_ids
@@ -91,14 +93,14 @@ class TestEnrichPending:
         assert processed == 2
 
         pending = tmp_db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE enrich_attempted_at IS NULL AND deleted_at IS NULL'
+            'select count(*) from insights'
+            ' where enrich_attempted_at is null and deleted_at is null'
             ).fetchone()[0]
         assert pending == 3
 
     def test_unreachable_llm_still_attempts(
             self, tmp_db, tmp_backend, monkeypatch):
-        """An unreachable LLM still stamps enrich_attempted_at.
+        """Verify an unreachable LLM still stamps enrich_attempted_at.
 
         Mutation: letting get_llm_client's exception propagate out of
             enrich_pending, or skipping stamp_enrich_attempted when
@@ -106,8 +108,6 @@ class TestEnrichPending:
         Oracle: the row's enrich_attempted_at column read back
             not-None after the raised RuntimeError.
         """
-        from memman.pipeline import enrich as enrich_mod
-
         def _unavailable(*args, **kwargs):
             raise RuntimeError('no LLM credential')
 
@@ -118,12 +118,12 @@ class TestEnrichPending:
         assert processed == 1
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at FROM insights WHERE id = ?',
+            'select enrich_attempted_at from insights where id = ?',
             ('ln-1',)).fetchone()
         assert row[0] is not None
 
     def test_zero_pending_noop(self, tmp_db, tmp_backend):
-        """No pending insights returns 0 without error.
+        """Verify no pending insights returns 0 without error.
 
         Mutation: enrich_pending raising, or returning a nonzero
             count, when get_pending_enrich_ids finds no rows.
@@ -132,13 +132,13 @@ class TestEnrichPending:
         insert_insight(tmp_db, make_insight(
             id='zp-1', content='all attempted'))
         tmp_db._conn.execute(
-            "UPDATE insights SET enrich_attempted_at = created_at"
-            " WHERE id = 'zp-1'")
+            "update insights set enrich_attempted_at = created_at"
+            " where id = 'zp-1'")
         processed = enrich_pending(tmp_backend)
         assert processed == 0
 
     def test_llm_calls_outside_transaction(self, tmp_db, tmp_backend):
-        """LLM HTTP calls must not occur inside BEGIN IMMEDIATE.
+        """Verify LLM calls run outside the write transaction.
 
         Mutation: moving the `enrich_with_llm` call inside the
             `with backend.transaction():` block, holding the write
@@ -165,7 +165,7 @@ class TestEnrichPending:
             f'LLM calls made inside transaction: {llm_calls_in_tx}')
 
     def test_progress_callback_called(self, tmp_db, tmp_backend):
-        """on_progress receives enrich and done stages per insight.
+        """Verify on_progress receives enrich and done stages per insight.
 
         Mutation: dropping an `on_progress` call, or emitting a stage
             name no consumer expects -- a caller rendering a progress

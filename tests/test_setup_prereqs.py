@@ -1,4 +1,5 @@
-"""Prereq-check tests for run_install()."""
+"""Prereq-check tests for run_install().
+"""
 
 from pathlib import Path
 
@@ -33,19 +34,34 @@ def all_prereqs_ok(monkeypatch):
 
 
 class TestPrereqs:
-    """Platform / binary / API-key checks at the run_install boundary."""
+    """Platform / binary / API-key checks at the run_install boundary.
+    """
 
     def test_unsupported_platform_fails_loud(self, monkeypatch, tmp_path):
-        """run_install raises when no scheduler platform is detected."""
-        monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
+        """run_install raises when no scheduler platform is detected.
+
+        Mutation: dropping the platform check in `run_install`, so an
+        install on an unsupported host continues to the file writes.
+        Oracle: `detect_scheduler`'s `RuntimeError` reaching the caller,
+        with keys and binary otherwise valid.
+        """
+        def no_scheduler():
+            raise RuntimeError('no scheduler available on this host')
+
+        monkeypatch.setattr(setup_claude, 'detect_scheduler', no_scheduler)
         monkeypatch.setattr(setup_claude, 'memman_binary_path',
                             lambda: '/fake/bin/memman')
         _write_keys(tmp_path, openrouter='x', voyage='y')
-        with pytest.raises(click.ClickException, match='unsupported platform'):
+        with pytest.raises(RuntimeError, match='no scheduler available'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
     def test_missing_memman_binary_fails_loud(self, monkeypatch, tmp_path):
-        """run_install raises when the memman binary is not on PATH."""
+        """run_install raises when the memman binary is not on PATH.
+
+        Mutation: swallowing the binary lookup's `RuntimeError`, so the
+        install writes units that point at a missing executable.
+        Oracle: `ClickException` matching `memman binary`.
+        """
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
 
         def _not_found():
@@ -58,7 +74,13 @@ class TestPrereqs:
 
     def test_missing_embed_api_key_fails_loud(
             self, all_prereqs_ok, tmp_path):
-        """run_install raises when the embed provider's API key is absent."""
+        """run_install raises when the embed provider's API key is absent.
+
+        Mutation: checking only the LLM key, so an install with no
+        embed key finishes and fails at the first recall.
+        Oracle: `ClickException` naming `MEMMAN_VOYAGE_API_KEY` when
+        only the OpenRouter key is written.
+        """
         _write_keys(tmp_path, openrouter='x')
         with pytest.raises(click.ClickException, match='MEMMAN_VOYAGE_API_KEY'):
             setup_claude.run_install(data_dir=str(tmp_path))
@@ -72,6 +94,11 @@ class TestPrereqs:
         `~/.config/systemd/user/`, and clears the real
         `~/.memman/backup.state` - silently disarming the nightly
         backup on every full test run.
+
+        Mutation: `run_uninstall` running the install prereq checks,
+        so a host without keys or a scheduler cannot uninstall.
+        Oracle: the call returns without raising under an empty
+        platform and no keys.
         """
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
         monkeypatch.setattr(
@@ -86,12 +113,18 @@ class TestPrereqs:
             lambda data_dir=None: {'platform': 'unknown', 'actions': []})
         monkeypatch.setattr(
             setup_claude, 'uninstall_backup',
-            lambda data_dir=None: {'platform': 'unknown', 'actions': []})
+            lambda: {'platform': 'unknown', 'actions': []})
         setup_claude.run_uninstall(data_dir=str(tmp_path))
 
     def test_prereq_failure_writes_nothing_to_filesystem(
             self, monkeypatch, tmp_path):
-        """A prereq failure must leave the filesystem untouched."""
+        """A prereq failure must leave the filesystem untouched.
+
+        Mutation: moving a directory or file write ahead of the prereq
+        checks in `run_install`.
+        Oracle: the sorted file tree under a fake home, equal before
+        and after the failing install.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
         monkeypatch.setattr(setup_claude, 'memman_binary_path',
@@ -111,7 +144,8 @@ class TestPrereqs:
 
 
 class TestCliCommands:
-    """Top-level memman CLI surface for setup verbs."""
+    """Top-level memman CLI surface for setup verbs.
+    """
 
     @pytest.mark.parametrize(('command', 'target'), [
         ('install', 'run_install'),

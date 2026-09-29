@@ -1,8 +1,8 @@
-"""Protocol-shape tests: every Backend implementation must expose the
-swap-method surface used by `embed/swap.py` and the swap CLI.
+"""Protocol-shape tests for the Backend swap-method surface.
 
-Existing swap tests use concrete backend instances; without these
-shape tests, the Protocol could silently drift away from one backend.
+Every Backend implementation must expose the swap methods that
+`embed/swap.py` and the swap CLI call. Swap tests that use one concrete
+backend cannot show the Protocol drifting away from the other.
 """
 
 
@@ -17,10 +17,15 @@ SWAP_METHODS = (
 
 
 class TestBackendExposesSwapMethods:
-    """Both backends must implement every swap verb declared on Backend."""
+    """Both backends must implement every swap verb declared on Backend.
+    """
 
     def test_all_swap_methods_present(self, backend):
         """Every swap verb resolves to a callable on the active backend.
+
+        Mutation: a backend class missing or misnaming one of the swap
+            verbs the Protocol declares.
+        Oracle: the `SWAP_METHODS` tuple, hand-listed from the Protocol.
         """
         for method in SWAP_METHODS:
             assert callable(getattr(backend, method, None)), (

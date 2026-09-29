@@ -14,21 +14,33 @@ trial without erroring.
 """
 
 import pytest
-from memman.store.config import PostgresBackendConfig
+from memman import config
+from memman.store import factory
+from memman.store.config import PostgresBackendConfig, validate_all
 from memman.store.errors import ConfigError
 
 
 class TestPostgresValidation:
-    """`PostgresBackendConfig._validate` for `MEMMAN_POSTGRES_*` keys."""
+    """`PostgresBackendConfig._validate` for `MEMMAN_POSTGRES_*` keys.
+    """
 
     def test_per_store_key_passes(self):
         """A per-store MEMMAN_POSTGRES_DSN_<store> passes silently.
+
+        Mutation: `_validate` rejecting the suffixed form it tells
+            users to write.
+        Oracle: no `ConfigError` on a well-formed per-store key.
         """
         env = {'MEMMAN_POSTGRES_DSN_default': 'postgresql://localhost/x'}
         PostgresBackendConfig._validate(env)
 
     def test_bare_pg_dsn_rejected_with_hint(self):
-        """The bare canonical MEMMAN_POSTGRES_DSN is no longer accepted.
+        """The bare canonical MEMMAN_POSTGRES_DSN is rejected.
+
+        Mutation: `_validate` accepting an owned key without a store
+            suffix, so a DSN routes to no store.
+        Oracle: `ConfigError` naming the bare key and the
+            `MEMMAN_POSTGRES_DSN_<store>` form.
         """
         env = {'MEMMAN_POSTGRES_DSN': 'postgresql://localhost/x'}
         with pytest.raises(ConfigError) as exc:
@@ -38,8 +50,14 @@ class TestPostgresValidation:
         assert 'MEMMAN_POSTGRES_DSN_<store>' in msg
 
     def test_typo_raises_with_hint(self):
-        """A typo'd MEMMAN_POSTGRES_DSL raises ConfigError with a did-you-mean
-        pointing at the per-store form.
+        """A typo'd MEMMAN_POSTGRES_DSL raises ConfigError with a hint.
+
+        The hint points at the per-store form.
+
+        Mutation: dropping the `difflib` suggestion, or suggesting the
+            bare canonical key.
+        Oracle: message holds the typo, the per-store form, and
+            `did you mean`.
         """
         env = {'MEMMAN_POSTGRES_DSL': 'postgresql://localhost/x'}
         with pytest.raises(ConfigError) as exc:
@@ -51,6 +69,10 @@ class TestPostgresValidation:
 
     def test_unknown_key_without_close_match(self):
         """An unknown MEMMAN_POSTGRES_* key with no close match still errors.
+
+        Mutation: `_validate` raising only when a close match exists,
+            so a wholly unknown key passes.
+        Oracle: `ConfigError` naming the unknown key.
         """
         env = {'MEMMAN_POSTGRES_FOOBARBAZ': 'x'}
         with pytest.raises(ConfigError) as exc:
@@ -58,7 +80,11 @@ class TestPostgresValidation:
         assert 'MEMMAN_POSTGRES_FOOBARBAZ' in str(exc.value)
 
     def test_cross_backend_keys_ignored(self):
-        """Cross-backend keys are not scanned by Postgres validator.
+        """The Postgres validator does not scan cross-backend keys.
+
+        Mutation: the prefix scan widened to `MEMMAN_`, so shared keys
+            such as `MEMMAN_DEFAULT_POSTGRES_DSN` raise.
+        Oracle: no `ConfigError` on a hand-built env of shared keys.
         """
         env = {
             'MEMMAN_OPENROUTER_API_KEY': 'k',
@@ -71,16 +97,19 @@ class TestPostgresValidation:
 
 
 class TestOpenBackendIntegration:
-    """`factory.open_backend` runs the Postgres namespace scan on every open."""
+    """`factory.open_backend` runs the Postgres namespace scan on every open.
+    """
 
     def test_open_backend_rejects_postgres_typo(
             self, monkeypatch, tmp_path):
-        """A MEMMAN_POSTGRES_DSL typo with backend=postgres errors before
-        the connection attempt.
-        """
-        from memman import config
-        from memman.store import factory
+        """A MEMMAN_POSTGRES_DSL typo errors before any connection attempt.
 
+        Mutation: `open_backend` connecting before validating, or not
+            validating at all, so the typo surfaces as a connection
+            failure.
+        Oracle: `ConfigError` naming the typo and the correct key, with
+            no reachable server behind the DSN.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(exist_ok=True)
         env_path = data_dir / 'env'
@@ -98,7 +127,8 @@ class TestOpenBackendIntegration:
 
 
 class TestValidateAll:
-    """`validate_all` runs the Postgres namespace scan whatever the backend."""
+    """`validate_all` runs the Postgres namespace scan whatever the backend.
+    """
 
     def test_empty_suffix_rejected(self):
         """`MEMMAN_POSTGRES_DSN_` (no suffix) is an invalid store name.
@@ -107,7 +137,6 @@ class TestValidateAll:
             truncated key routes a DSN to no store.
         Oracle: `ConfigError` on the bare-underscore key.
         """
-        from memman.store.config import validate_all
         env = {'MEMMAN_POSTGRES_DSN_': 'x'}
         with pytest.raises(ConfigError):
             validate_all(env)
@@ -119,22 +148,18 @@ class TestValidateAll:
             per-store suffix.
         Oracle: `ConfigError` on a suffix holding a slash.
         """
-        from memman.store.config import validate_all
         env = {'MEMMAN_POSTGRES_DSN_bad/name': 'x'}
         with pytest.raises(ConfigError):
             validate_all(env)
 
     def test_validate_all_catches_inactive_namespace_typo(self):
-        """`validate_all` runs the Postgres namespace scan on every open,
-        so a `MEMMAN_POSTGRES_DSN_typo` key is rejected even when the
-        active backend is sqlite.
+        """`validate_all` rejects a typo'd Postgres key with sqlite active.
 
         Mutation: `validate_all` gating the namespace scan on
             `MEMMAN_DEFAULT_BACKEND == 'postgres'`, so a typo in an
             inactive namespace goes uncaught until a backend switch.
         Oracle: `ConfigError` raised with sqlite active.
         """
-        from memman.store.config import validate_all
         env = {
             'MEMMAN_DEFAULT_BACKEND': 'sqlite',
             'MEMMAN_POSTGRES_FAKE_KEY_main': 'x',
@@ -142,38 +167,20 @@ class TestValidateAll:
         with pytest.raises(ConfigError):
             validate_all(env)
 
-    def test_validate_all_catches_inactive_postgres_typo_when_active_is_sqlite(
-            self):
-        """End-to-end inactive-namespace coverage: a `MEMMAN_POSTGRES_*`
-        typo is caught when sqlite is active.
-        """
-        from memman.store.config import validate_all
-        env = {
-            'MEMMAN_DEFAULT_BACKEND': 'sqlite',
-            'MEMMAN_POSTGRES_DSL': 'postgresql://x',
-            }
-        with pytest.raises(ConfigError):
-            validate_all(env)
-
     def test_did_you_mean_hints_point_at_per_store_form(self):
-        """Property: every did-you-mean hint from `PostgresBackendConfig`
-        points at the per-store form (`<canonical>_<store>`), never at
-        a bare canonical.
+        """Every near-miss key raises with a hint at the per-store form.
 
         Mutation: the hint built from `suggestions[0]` alone, dropping
             the `+ '_<store>'` suffix, so it re-suggests the still-
-            rejected bare canonical key.
-        Oracle: every near-miss key's `ConfigError` message contains
-            the literal `<store>` placeholder.
+            rejected bare canonical key; or a near-miss key that raises
+            nothing, or no hint.
+        Oracle: for each owned key plus 'L', `validate_all` with sqlite
+            active raises `ConfigError` whose message is the hand-written
+            "did you mean '<owned>_<store>'?" hint.
         """
         for owned in PostgresBackendConfig.OWNED_KEYS:
             typo = owned + 'L'
-            env = {typo: 'value'}
-            try:
-                PostgresBackendConfig._validate(env)
-            except ConfigError as exc:
-                msg = str(exc)
-                if 'did you mean' in msg.lower():
-                    assert '<store>' in msg, (
-                        f'hint for {typo!r} should point at the'
-                        f' per-store form: {msg!r}')
+            env = {'MEMMAN_DEFAULT_BACKEND': 'sqlite', typo: 'value'}
+            with pytest.raises(ConfigError) as excinfo:
+                validate_all(env)
+            assert f"did you mean '{owned}_<store>'?" in str(excinfo.value)

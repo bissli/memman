@@ -1,8 +1,10 @@
-"""Tests for memman.doctor health-check module."""
+"""Tests for memman.doctor health-check module.
+"""
 
 import json
 import os
 import struct
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,23 +16,36 @@ except ImportError:
     psycopg = None
 
 from click.testing import CliRunner
+from memman import config
+from memman import doctor as doctor_mod
 from memman.cli import cli
-from memman.doctor import check_drain_heartbeat, check_env_completeness
-from memman.doctor import check_env_permissions, check_scheduler_heartbeat
-from memman.doctor import check_scheduler_state
+from memman.doctor import check_claude_hooks, check_drain_heartbeat
+from memman.doctor import check_embedding_consistency
+from memman.doctor import check_enrichment_coverage, check_env_completeness
+from memman.doctor import check_env_permissions, check_integrity
+from memman.doctor import check_per_store_keys, check_provenance_drift
+from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
+from memman.doctor import run_all_checks
+from memman.exceptions import ConfigError
+from memman.pipeline.remember import compute_prompt_version
+from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+from memman.setup import scheduler as sch
+from memman.store.db import DB
+from memman.store.model import WorkerRun
 from memman.store.node import insert_insight, update_embedding
 from memman.store.node import update_enrichment
 from tests.conftest import make_insight
 
 
 def _fake_embedding(dim: int = 512) -> bytes:
-    """Return a deterministic embedding blob of the given dimension."""
+    """Return a deterministic embedding blob of the given dimension.
+    """
     return struct.pack(f'<{dim}d', *([0.1] * dim))
 
 
-def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight with enough content') -> None:
-    """Insert an insight with all enrichment fields populated."""
-    from memman.pipeline.remember import compute_prompt_version
+def _insert_healthy_insight(db: DB, id: str, content: str = 'Healthy test insight with enough content') -> None:
+    """Insert an insight with all enrichment fields populated.
+    """
     ins = make_insight(
         id=id, content=content, prompt_version=compute_prompt_version())
     insert_insight(db, ins)
@@ -41,8 +56,12 @@ def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight wi
 class TestSqliteIntegrity:
 
     def test_pass_on_fresh_db(self, tmp_backend):
-        """Fresh database passes integrity check."""
-        from memman.doctor import check_integrity
+        """Verify a fresh database passes the integrity check.
+
+        Mutation: reading the wrong pragma column, or reporting a status other
+            than pass for a healthy file.
+        Oracle: SQLite's own `ok` result on a newly created database.
+        """
         result = check_integrity(tmp_backend)
         assert result['name'] == 'integrity'
         assert result['status'] == 'pass'
@@ -59,7 +78,6 @@ class TestEnrichmentCoverage:
             rather than reports, or counting it as a missing field.
         Oracle: two rows carrying exactly the two graded fields.
         """
-        from memman.doctor import check_enrichment_coverage
         _insert_healthy_insight(tmp_db, 'e-1')
         _insert_healthy_insight(tmp_db, 'e-2')
         result = check_enrichment_coverage(tmp_backend)
@@ -67,8 +85,12 @@ class TestEnrichmentCoverage:
         assert result['detail']['coverage_pct'] == 100.0
 
     def test_partial_warn(self, tmp_db, tmp_backend):
-        """Some fields missing returns warn when coverage >= 90%."""
-        from memman.doctor import check_enrichment_coverage
+        """Verify one unembedded row in eleven warns instead of passing.
+
+        Mutation: the check ignoring a missing embedding, or failing where
+            coverage stays at or above 90%.
+        Oracle: ten enriched rows plus one bare row, hand-counted.
+        """
         for i in range(10):
             _insert_healthy_insight(tmp_db, f'e-{i}', f'Content for insight number {i}')
         ins = make_insight(id='e-bare', content='Bare insight without enrichment')
@@ -89,7 +111,6 @@ class TestEnrichmentCoverage:
             the `missing_*` counts are zero, and exactly one of them
             attempted and never enriched.
         """
-        from memman.doctor import check_enrichment_coverage
         for rid in ('ok-1', 'strand-1', 'pend-1'):
             backend.nodes.insert(make_insight(
                 id=rid, content=f'content for {rid} long enough'))
@@ -107,16 +128,23 @@ class TestEnrichmentCoverage:
 class TestEmbeddingConsistency:
 
     def test_consistent_pass(self, tmp_db, tmp_backend):
-        """All embeddings same size returns pass."""
-        from memman.doctor import check_embedding_consistency
+        """Verify embeddings of one size pass.
+
+        Mutation: treating any pair of rows as inconsistent.
+        Oracle: two rows built with the same vector dimension.
+        """
         _insert_healthy_insight(tmp_db, 'emb-1')
         _insert_healthy_insight(tmp_db, 'emb-2')
         result = check_embedding_consistency(tmp_backend)
         assert result['status'] == 'pass'
 
     def test_mixed_fail(self, tmp_db, tmp_backend):
-        """Different embedding sizes returns fail."""
-        from memman.doctor import check_embedding_consistency
+        """Verify embeddings of two sizes fail and list both sizes.
+
+        Mutation: comparing only the first row, or grouping by model name
+            rather than by vector size.
+        Oracle: one 512-dimension row and one 256-dimension row.
+        """
         _insert_healthy_insight(tmp_db, 'emb-1')
         ins2 = make_insight(id='emb-2', content='Different dim embedding')
         insert_insight(tmp_db, ins2)
@@ -130,8 +158,11 @@ class TestEmbeddingConsistency:
 class TestProvenanceDrift:
 
     def test_no_rows_pass(self, tmp_db, tmp_backend):
-        """Empty store: no stale rows."""
-        from memman.doctor import check_provenance_drift
+        """Verify an empty store reports no stale rows.
+
+        Mutation: counting a phantom row, or raising on an empty table.
+        Oracle: an empty store has zero stale rows.
+        """
         result = check_provenance_drift(tmp_backend)
         assert result['name'] == 'provenance_drift'
         assert result['status'] == 'pass'
@@ -144,8 +175,6 @@ class TestProvenanceDrift:
             variable other than MEMMAN_LLM_MODEL.
         Oracle: the model the autouse fixture seeds into the env file.
         """
-        from memman import config
-        from memman.doctor import check_provenance_drift
         result = check_provenance_drift(tmp_backend)
         assert result['detail']['active_model'] == \
             config.INSTALL_DEFAULTS[config.LLM_MODEL]
@@ -158,14 +187,12 @@ class TestProvenanceDrift:
         Oracle: the row's `prompt_version` set to the freshly
             computed `active_pv` before the check runs.
         """
-        from memman.doctor import check_provenance_drift
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
 
         _insert_healthy_insight(tmp_db, 'p-1')
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ? WHERE id = ?',
+            'update insights set prompt_version = ? where id = ?',
             (active_pv, 'p-1'))
 
         result = check_provenance_drift(tmp_backend)
@@ -182,7 +209,6 @@ class TestProvenanceDrift:
         Oracle: a row inserted with `prompt_version=None`, checked
             against `check_provenance_drift`'s `stale_rows` output.
         """
-        from memman.doctor import check_provenance_drift
 
         ins = make_insight(id='p-null', prompt_version=None)
         insert_insight(tmp_db, ins)
@@ -200,8 +226,6 @@ class TestProvenanceDrift:
         Oracle: two drifted rows against one carrying the active key,
             counted.
         """
-        from memman.doctor import check_provenance_drift
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
 
@@ -209,12 +233,12 @@ class TestProvenanceDrift:
             _insert_healthy_insight(tmp_db, f'p-stale-{i}')
         _insert_healthy_insight(tmp_db, 'p-fresh')
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?'
-            " WHERE id IN ('p-stale-0', 'p-stale-1')",
+            'update insights set prompt_version = ?'
+            " where id in ('p-stale-0', 'p-stale-1')",
             ('deadbeefdeadbeef',))
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?'
-            " WHERE id = 'p-fresh'",
+            'update insights set prompt_version = ?'
+            " where id = 'p-fresh'",
             (active_pv,))
 
         result = check_provenance_drift(tmp_backend)
@@ -227,11 +251,20 @@ class TestStaleHelpers:
     """Cross-backend tests for iter_stale_insight_ids and count_stale_insights.
     """
 
-    def _seed_stale_matrix(self, backend, active_pv):
-        """Seed the canonical predicate rows; return expected stale ids.
+    def _seed_stale_matrix(self, backend, active_pv: str) -> list[str]:
+        """Seed one current and two drifted rows; return the drifted ids.
 
-        Mapping, by prompt_version: B=current not stale, C=OLD STALE,
-        E=OLD STALE.
+        Parameters
+        ----------
+        backend : Backend
+            Store to seed.
+        active_pv : str
+            Prompt version stamped on the current row.
+
+        Returns
+        -------
+        list[str]
+            Ids of the two rows stamped with an old prompt version.
         """
         OLD_PV = 'old-prompt-version-deadbeef'
         rows = [
@@ -254,7 +287,6 @@ class TestStaleHelpers:
             `_seed_stale_matrix`, whose only stale ids are the two
             seeded on `OLD_PV`.
         """
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
         expected = self._seed_stale_matrix(backend, active_pv)
@@ -271,7 +303,6 @@ class TestStaleHelpers:
         Oracle: the hand-counted stale total of 2 from
             `_seed_stale_matrix`.
         """
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
         self._seed_stale_matrix(backend, active_pv)
@@ -291,8 +322,6 @@ class TestStaleHelpers:
         Oracle: the store helper's own count, cross-checked against
             the doctor check's `stale_rows` on the identical rows.
         """
-        from memman.doctor import check_provenance_drift
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
         self._seed_stale_matrix(backend, active_pv)
@@ -312,7 +341,6 @@ class TestStaleHelpers:
         Oracle: three rows with a null `prompt_version`, of which only
             `strand-1` is attempted and never enriched.
         """
-        from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
         for rid in ('strand-1', 'legacy-1', 'pend-1'):
@@ -326,8 +354,12 @@ class TestStaleHelpers:
         assert backend.nodes.count_stale_insights(active_pv) == 1
 
     def test_empty_store(self, backend):
-        """Empty store returns 0 / [] from both helpers."""
-        from memman.pipeline.remember import compute_prompt_version
+        """Verify both stale helpers return nothing on an empty store.
+
+        Mutation: the count returning None, or the iterator yielding a row,
+            when the table is empty.
+        Oracle: hand-set `[]` and `0`.
+        """
 
         active_pv = compute_prompt_version()
         assert backend.nodes.iter_stale_insight_ids(active_pv) == []
@@ -337,8 +369,11 @@ class TestStaleHelpers:
 class TestRunAllChecks:
 
     def test_structure(self, tmp_db, tmp_backend):
-        """Verify output shape: status, checks list, total_active."""
-        from memman.doctor import run_all_checks
+        """Verify the report carries status, checks, and total_active.
+
+        Mutation: dropping a top-level key, or returning checks as a dict.
+        Oracle: the documented report keys and status vocabulary.
+        """
         _insert_healthy_insight(tmp_db, 'all-1')
         result = run_all_checks(tmp_backend)
         assert 'status' in result
@@ -348,16 +383,24 @@ class TestRunAllChecks:
         assert result['status'] in {'pass', 'warn', 'fail'}
 
     def test_empty_db(self, tmp_db, tmp_backend):
-        """Empty store returns status 'empty' with no checks."""
-        from memman.doctor import run_all_checks
+        """Verify an empty store reports status empty with no checks.
+
+        Mutation: running every check on an empty store, which reports
+            failures for missing coverage.
+        Oracle: hand-set `empty`, zero rows, and an empty check list.
+        """
         result = run_all_checks(tmp_backend)
         assert result['status'] == 'empty'
         assert result['total_active'] == 0
         assert result['checks'] == []
 
     def test_healthy_db(self, tmp_db, tmp_backend):
-        """Fully healthy DB returns status 'pass'."""
-        from memman.doctor import run_all_checks
+        """Verify a fully enriched store passes every check.
+
+        Mutation: any check flagging a healthy store, such as a coverage
+            threshold applied to the wrong field.
+        Oracle: six rows built with all enrichment fields set.
+        """
         ids = [f'h-{i}' for i in range(6)]
         for id in ids:
             _insert_healthy_insight(tmp_db, id, f'Healthy content for {id} insight')
@@ -369,12 +412,13 @@ class TestRunAllChecks:
 
 
 class TestEnvCompleteness:
-    """check_env_completeness against INSTALLABLE_KEYS."""
+    """check_env_completeness against INSTALLABLE_KEYS.
+    """
 
     @pytest.fixture
     def write_env(self, tmp_path, monkeypatch):
-        """Write a custom env file under a fresh data dir."""
-        from memman import config
+        """Return a writer that replaces the env file under a fresh data dir.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
@@ -386,16 +430,23 @@ class TestEnvCompleteness:
         return _write
 
     def test_pass_when_all_present(self, write_env):
-        """All INSTALLABLE_KEYS in the file -> status pass."""
-        from memman import config
+        """Verify an env file holding every installable key passes.
+
+        Mutation: requiring a key outside INSTALLABLE_KEYS.
+        Oracle: a file generated from INSTALLABLE_KEYS itself.
+        """
         lines = [f'{key}=value-for-{key}' for key in config.INSTALLABLE_KEYS]
         write_env('\n'.join(lines) + '\n')
         out = check_env_completeness()
         assert out['status'] == 'pass'
 
     def test_warns_when_non_secret_missing(self, write_env):
-        """Missing non-secret key -> warn with key in detail.missing."""
-        from memman import config
+        """Verify a missing non-secret key warns and names the fix.
+
+        Mutation: ignoring missing non-secret keys, or omitting the
+            `memman install` remediation.
+        Oracle: a file that lacks only MEMMAN_LLM_MODEL.
+        """
         lines = [
             f'{key}=v' for key in config.INSTALLABLE_KEYS
             if key != config.LLM_MODEL
@@ -407,8 +458,11 @@ class TestEnvCompleteness:
         assert 'memman install' in out['detail']['fix']
 
     def test_ignores_optional_secret(self, write_env):
-        """Missing OPENAI_EMBED_API_KEY (optional secret) does not fail."""
-        from memman import config
+        """Verify a missing optional secret does not warn.
+
+        Mutation: treating every secret as required.
+        Oracle: a file that lacks only OPENAI_EMBED_API_KEY.
+        """
         lines = [
             f'{key}=v' for key in config.INSTALLABLE_KEYS
             if key != config.OPENAI_EMBED_API_KEY
@@ -435,7 +489,6 @@ class TestEnvCompleteness:
             chosen provider's key and the LLM key exported, with Voyage
             reranking off unless the provider is voyage.
         """
-        from memman import config
         for key in (*config.INSTALLABLE_KEYS,
                     *config.NATIVE_INSTALL_KEY_FALLBACKS.values()):
             monkeypatch.delenv(key, raising=False)
@@ -460,7 +513,6 @@ class TestEnvCompleteness:
             beside the Voyage key.
         Oracle: rerank/voyage.py requires `MEMMAN_VOYAGE_API_KEY`.
         """
-        from memman import config
         values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
         values.update({
             config.EMBED_PROVIDER: 'openai',
@@ -481,7 +533,6 @@ class TestEnvCompleteness:
         Oracle: with `MEMMAN_RERANK_ENABLED=false` and a non-voyage embed
             provider that owns its own key, `missing` carries neither key.
         """
-        from memman import config
         values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
         values.update({
             config.EMBED_PROVIDER: 'openai',
@@ -509,7 +560,6 @@ class TestEnvCompleteness:
         Oracle: `recall` in cli.py reads the per-store key first, then the
             global with `default=True`.
         """
-        from memman import config
         values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
         values.update({
             config.EMBED_PROVIDER: 'openai',
@@ -527,8 +577,11 @@ class TestEnvCompleteness:
         assert config.VOYAGE_API_KEY in out['detail']['missing']
 
     def test_ignores_optional_backup_keys(self, write_env):
-        """Absent BACKUP_CRON/TARGET (opt-in feature) does not warn."""
-        from memman import config
+        """Verify absent backup keys do not warn.
+
+        Mutation: requiring BACKUP_CRON, BACKUP_TARGET, or BACKUP_KEEP.
+        Oracle: a file that lacks only the three opt-in backup keys.
+        """
         optional_backup = {
             config.BACKUP_CRON, config.BACKUP_TARGET, config.BACKUP_KEEP}
         lines = [
@@ -544,20 +597,26 @@ class TestEnvCompleteness:
 
 
 class TestCheckPerStoreKeys:
-    """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape."""
+    """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape.
+    """
 
     def test_pass_when_no_stores(self, tmp_path):
-        """Empty data dir -> pass with empty stores list."""
-        from memman.doctor import check_per_store_keys
+        """Verify an empty data dir passes with an empty stores list.
+
+        Mutation: raising on a missing data dir, or listing a phantom store.
+        Oracle: a data dir path that does not exist.
+        """
         out = check_per_store_keys(str(tmp_path / 'memman'))
         assert out['name'] == 'per_store_keys'
         assert out['status'] == 'pass'
         assert out['detail']['stores'] == []
 
     def test_pass_when_per_store_key_resolves(self, tmp_path, env_file):
-        """SQLite store with explicit per-store key -> pass."""
-        from memman import config
-        from memman.doctor import check_per_store_keys
+        """Verify a sqlite store with its own backend key passes.
+
+        Mutation: dropping stores that carry an explicit per-store key.
+        Oracle: one store dir plus a `MEMMAN_BACKEND_one=sqlite` row.
+        """
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'one').mkdir(parents=True, exist_ok=True)
@@ -570,9 +629,12 @@ class TestCheckPerStoreKeys:
         assert 'one' in names
 
     def test_pass_when_falling_back_to_default(self, tmp_path, env_file):
-        """No per-store key, default sqlite -> pass with fallback flag."""
-        from memman import config
-        from memman.doctor import check_per_store_keys
+        """Verify a store with no per-store key resolves via the default.
+
+        Mutation: reporting the source as `store` for a default fallback, or
+            failing a store that has no per-store key.
+        Oracle: the default backend set to sqlite and no per-store row.
+        """
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'fallback').mkdir(parents=True, exist_ok=True)
@@ -587,9 +649,11 @@ class TestCheckPerStoreKeys:
         assert match['source'] == 'default'
 
     def test_fails_on_unknown_backend_value(self, tmp_path, env_file):
-        """`MEMMAN_BACKEND_<store>=mongo` -> fail (unknown backend)."""
-        from memman import config
-        from memman.doctor import check_per_store_keys
+        """Verify an unknown backend name fails the check.
+
+        Mutation: accepting any string as a backend.
+        Oracle: `MEMMAN_BACKEND_bad=mongo`, which no backend implements.
+        """
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'bad').mkdir(parents=True, exist_ok=True)
@@ -603,9 +667,11 @@ class TestCheckPerStoreKeys:
         assert 'unknown backend' in bad.get('error', '').lower()
 
     def test_warns_when_postgres_dsn_missing(self, tmp_path, env_file):
-        """`MEMMAN_BACKEND_<store>=postgres` without DSN -> fail."""
-        from memman import config
-        from memman.doctor import check_per_store_keys
+        """Verify a postgres store with no DSN fails and names the DSN.
+
+        Mutation: skipping the DSN lookup for a postgres store.
+        Oracle: a postgres store with neither per-store nor default DSN.
+        """
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'pg_one').mkdir(parents=True, exist_ok=True)
@@ -619,10 +685,11 @@ class TestCheckPerStoreKeys:
         assert 'dsn' in pg.get('error', '').lower()
 
     def test_postgres_default_dsn_satisfies(self, tmp_path, env_file):
-        """`MEMMAN_DEFAULT_POSTGRES_DSN` covers a postgres store without a per-store DSN.
+        """Verify the default DSN covers a postgres store with no own DSN.
+
+        Mutation: requiring a per-store DSN whatever the default holds.
+        Oracle: default DSN set and per-store DSN absent.
         """
-        from memman import config
-        from memman.doctor import check_per_store_keys
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'pg_two').mkdir(parents=True, exist_ok=True)
@@ -637,22 +704,18 @@ class TestCheckPerStoreKeys:
         assert pg['backend'] == 'postgres'
 
     def test_no_warn_when_dsns_differ(self, tmp_path, env_file):
-        """Per-store DSN differs from default DSN -> pass (canonical
-        rotation-pinning state, not a typo).
+        """Verify a per-store DSN that differs from the default does not warn.
 
-        The 0.14.1 doctor warned on this divergence; F.2 drops the
-        warn because per-store routing pins each store to its own
-        DSN, and an explicit per-store DSN is the documented way to
-        keep a store on a stable cluster while the default rotates.
+        Mutation: a warning restored for divergent DSNs, which flags the
+            supported way to pin a store to its own cluster.
+        Oracle: a per-store DSN and a distinct default DSN.
         """
-        from memman import config
-        from memman.doctor import check_per_store_keys
 
         data_dir = str(tmp_path / 'memman')
         Path(data_dir, 'data', 'pg_pinned').mkdir(parents=True, exist_ok=True)
         Path(data_dir, 'data', 'pg_pinned', 'memman.db').write_bytes(b'')
         env_file(config.BACKEND_FOR('pg_pinned'), 'postgres')
-        env_file(config.env_key_for('postgres', 'DSN', 'pg_pinned'), 'postgresql://pinned@host/db')
+        env_file(config.POSTGRES_DSN_FOR('pg_pinned'), 'postgresql://pinned@host/db')
         env_file(config.DEFAULT_PG_DSN, 'postgresql://default@host/db')
 
         out = check_per_store_keys(data_dir)
@@ -664,12 +727,12 @@ class TestCheckPerStoreKeys:
 
     def test_check_per_store_keys_includes_declared_but_not_created_store(
             self, tmp_path, env_file):
-        """A store declared via `MEMMAN_BACKEND_<name>` but missing
-        on disk still appears in the doctor enumeration so the
-        operator notices the mismatch.
+        """Verify a declared store with no directory still appears.
+
+        Mutation: enumerating only stores found on disk, which hides a
+            declared store that was never created.
+        Oracle: a `MEMMAN_BACKEND_declared_only` row and no store directory.
         """
-        from memman import config
-        from memman.doctor import check_per_store_keys
 
         data_dir = str(tmp_path / 'memman')
         env_file(config.BACKEND_FOR('declared_only'), 'sqlite')
@@ -680,8 +743,9 @@ class TestCheckPerStoreKeys:
         assert 'declared_only' in names
 
 
-def _started_scheduler_status(interval=900):
-    """Test helper: pretend the scheduler is installed + started."""
+def _started_scheduler_status(interval: int = 900) -> dict:
+    """Scheduler status of an installed, started unit at the given interval.
+    """
     return {
         'interval_seconds': interval,
         'state': 'started',
@@ -690,7 +754,8 @@ def _started_scheduler_status(interval=900):
 
 
 class TestHardening:
-    """B12 doctor checks: schema, env perms, scheduler, worker runs."""
+    """Doctor checks for env permissions, scheduler, and worker runs.
+    """
 
     @pytest.mark.parametrize(('mode', 'expected_status', 'assert_issue'), [
         (None, 'pass', False),
@@ -699,7 +764,12 @@ class TestHardening:
     ])
     def test_env_permissions(
             self, tmp_path, monkeypatch, mode, expected_status, assert_issue):
-        """Permissions check passes for missing or 0600, fails for 0644."""
+        """Verify the check passes for a missing or 0600 env file and fails 0644.
+
+        Mutation: comparing the mode with the wrong mask, or skipping a
+            world-readable file.
+        Oracle: files chmodded to known modes under a fake home.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         if mode is not None:
             mm = tmp_path / '.memman'
@@ -721,7 +791,6 @@ class TestHardening:
         Oracle: the check's own status against a stubbed
             not-installed `status()`.
         """
-        from memman.setup import scheduler as sch
         monkeypatch.setattr(
             sch, 'status',
             lambda: {'installed': False, 'active': False,
@@ -737,7 +806,6 @@ class TestHardening:
         Oracle: the check's own status against a stubbed installed,
             active `status()`.
         """
-        from memman.setup import scheduler as sch
         monkeypatch.setattr(
             sch, 'status',
             lambda: {'installed': True, 'active': True,
@@ -746,8 +814,11 @@ class TestHardening:
         assert result['status'] == 'pass'
 
     def test_scheduler_heartbeat_fail_when_no_drains_and_started(self, tmp_path, monkeypatch):
-        """Scheduler started + installed but no worker_runs row yet -> fail."""
-        from memman.setup import scheduler as sch
+        """Verify a started scheduler with no recorded drain fails.
+
+        Mutation: passing when the worker_runs table is empty.
+        Oracle: a stubbed started status and an empty queue database.
+        """
         monkeypatch.setattr(sch, 'status', _started_scheduler_status)
         result = check_scheduler_heartbeat(str(tmp_path))
         assert result['status'] == 'fail'
@@ -761,8 +832,11 @@ class TestHardening:
     ])
     def test_scheduler_heartbeat_pass_when_inactive(
             self, tmp_path, monkeypatch, status, reason_snippet):
-        """Scheduler stopped or uninstalled -> pass (no drain expected)."""
-        from memman.setup import scheduler as sch
+        """Verify a stopped or uninstalled scheduler passes.
+
+        Mutation: failing for a missing drain when none is expected.
+        Oracle: stubbed stopped and uninstalled statuses, with no runs.
+        """
         monkeypatch.setattr(sch, 'status', lambda: status)
         result = check_scheduler_heartbeat(str(tmp_path))
         assert result['status'] == 'pass'
@@ -770,10 +844,12 @@ class TestHardening:
             assert reason_snippet in result['detail']['reason']
 
     def test_scheduler_heartbeat_pass_on_recent_drain(self, tmp_path, monkeypatch):
-        """A drain within the interval window passes."""
-        from memman.queue import finish_worker_run, open_queue_db
-        from memman.queue import start_worker_run
-        from memman.setup import scheduler as sch
+        """Verify a drain inside the interval window passes.
+
+        Mutation: comparing the run age with the wrong bound so a fresh
+            drain fails.
+        Oracle: a run just finished against a 900-second interval.
+        """
 
         monkeypatch.setattr(sch, 'status', _started_scheduler_status)
         conn = open_queue_db(str(tmp_path))
@@ -786,16 +862,11 @@ class TestHardening:
         assert result['status'] == 'pass'
 
     def test_scheduler_heartbeat_threshold_floors_at_180s(self, tmp_path, monkeypatch):
-        """At interval=0 (serve continuous), the threshold floors at 180s.
+        """Verify interval 0 floors the fail threshold at 180 seconds.
 
-        Without the floor, `3 * 0 = 0` would fail every heartbeat check.
-        With the floor (max(3*interval, 180s)), serve mode is robust to
-        sub-minute intervals -- the rate-limited heartbeat writes 1/min so
-        a 180s window allows two-miss tolerance.
+        Mutation: dropping the floor, so `3 * 0 = 0` fails every heartbeat.
+        Oracle: a 90-second-old run must pass and report a 180 threshold.
         """
-        from memman.queue import finish_worker_run, open_queue_db
-        from memman.queue import start_worker_run
-        from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status',
                             lambda: _started_scheduler_status(interval=0))
@@ -804,8 +875,8 @@ class TestHardening:
             run_id = start_worker_run(conn, worker_pid=1)
             finish_worker_run(conn, run_id, 0, 0, 0)
             conn.execute(
-                'UPDATE worker_runs SET started_at = started_at - 90'
-                ' WHERE id = ?', (run_id,))
+                'update worker_runs set started_at = started_at - 90'
+                ' where id = ?', (run_id,))
             conn.commit()
         finally:
             conn.close()
@@ -817,15 +888,12 @@ class TestHardening:
 
     def test_scheduler_heartbeat_fails_at_interval_zero_when_stale(
             self, tmp_path, monkeypatch):
-        """At interval=0, a heartbeat older than 180s fails.
+        """Verify interval 0 still fails a heartbeat older than 180 seconds.
 
-        Validates that the `interval and` truthiness guard is removed --
-        interval=0 must reach the threshold comparison, not short-circuit
-        to PASS.
+        Mutation: a truthiness guard on the interval that returns pass
+            before the threshold comparison runs.
+        Oracle: a 200-second-old run just past the 180-second floor.
         """
-        from memman.queue import finish_worker_run, open_queue_db
-        from memman.queue import start_worker_run
-        from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status',
                             lambda: _started_scheduler_status(interval=0))
@@ -834,8 +902,8 @@ class TestHardening:
             run_id = start_worker_run(conn, worker_pid=1)
             finish_worker_run(conn, run_id, 0, 0, 0)
             conn.execute(
-                'UPDATE worker_runs SET started_at = started_at - 200'
-                ' WHERE id = ?', (run_id,))
+                'update worker_runs set started_at = started_at - 200'
+                ' where id = ?', (run_id,))
             conn.commit()
         finally:
             conn.close()
@@ -845,10 +913,11 @@ class TestHardening:
             f' got {result}')
 
     def test_scheduler_heartbeat_fail_on_recorded_error(self, tmp_path, monkeypatch):
-        """A finished run with an error string flips the check to fail."""
-        from memman.queue import finish_worker_run, open_queue_db
-        from memman.queue import start_worker_run
-        from memman.setup import scheduler as sch
+        """Verify a finished run with an error string fails the check.
+
+        Mutation: reading only run timing and ignoring the error column.
+        Oracle: a run finished with `RuntimeError: boom`.
+        """
 
         monkeypatch.setattr(sch, 'status', _started_scheduler_status)
         conn = open_queue_db(str(tmp_path))
@@ -866,9 +935,11 @@ class TestHardening:
         return mm_runner
 
     def test_doctor_text_mode_emits_colored_summary(self, runner):
-        """`memman doctor --text` produces a human-readable report.
+        """Verify `doctor --text` prints a readable report.
 
-        Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+        Mutation: ignoring --text and emitting JSON, or omitting the check
+            names.
+        Oracle: the literal title and a known check name in the output.
         """
         r, data_dir = runner
         result = r.invoke(cli, ['--data-dir', data_dir, 'doctor', '--text'])
@@ -878,9 +949,10 @@ class TestHardening:
                 or 'env_permissions' in result.output)
 
     def test_doctor_json_default(self, runner):
-        """`memman doctor` emits JSON by default.
+        """Verify `doctor` emits JSON with checks and status by default.
 
-        Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+        Mutation: defaulting to text output, or dropping a top-level key.
+        Oracle: `json.loads` of the output and the two keys.
         """
         r, data_dir = runner
         result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
@@ -890,17 +962,17 @@ class TestHardening:
         assert 'status' in payload
 
     def test_doctor_reports_llm_probe_failure(self, runner, monkeypatch):
-        """`memman doctor` surfaces an LLM ConfigError and exits non-zero.
+        """Verify an LLM ConfigError fails the llm_probe check and exit code.
 
-        Replaces the prior `keys test` surface; doctor's check_llm_probe
-        is now the canonical key-validity gate.
+        Mutation: swallowing the probe error so doctor reports pass, or
+            dropping the error text from the check detail.
+        Oracle: a stub client factory that raises ConfigError naming the key.
         """
-        from memman.exceptions import ConfigError
 
         r, data_dir = runner
         monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
 
-        def _raise():
+        def _raise() -> None:
             raise ConfigError('MEMMAN_OPENROUTER_API_KEY must be set')
         monkeypatch.setattr(
             'memman.llm.client.get_llm_client', _raise)
@@ -917,7 +989,12 @@ class TestHardening:
         assert 'MEMMAN_OPENROUTER_API_KEY' in llm_check['detail']['error']
 
     def test_doctor_reports_probes_pass_under_mocks(self, runner):
-        """With the autouse mocks both LLM and embed probes pass."""
+        """Verify both probes pass under the autouse mocks.
+
+        Mutation: a probe that fails despite a working client, or a missing
+            embed_probe entry.
+        Oracle: the mocked LLM and embed clients from conftest.
+        """
         r, data_dir = runner
         result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
         payload = json.loads(result.output)
@@ -930,20 +1007,28 @@ class TestHardening:
 
 
 class TestDrainHeartbeat:
-    """check_drain_heartbeat: per-store drain-heartbeat consumer."""
+    """check_drain_heartbeat: per-store drain-heartbeat consumer.
+    """
 
     pytestmark = pytest.mark.postgres
 
     def test_skips_when_no_postgres_stores(self, tmp_path):
-        """No postgres-backed stores -> pass with skipped_reason."""
+        """Verify the check passes with a skipped reason when no store is postgres.
+
+        Mutation: failing or opening a backend when no postgres store exists.
+        Oracle: an empty data dir.
+        """
         result = check_drain_heartbeat(str(tmp_path))
         assert result['name'] == 'drain_heartbeat'
         assert result['status'] == 'pass'
         assert 'skipped_reason' in result['detail']
 
     def test_passes_when_no_in_progress_runs(self, env_file, pg_dsn):
-        """Postgres-backed store with no in-progress runs: status pass."""
-        import os
+        """Verify a postgres store with no in-progress run passes.
+
+        Mutation: counting a finished run as in progress.
+        Oracle: every open run closed by a direct SQL update.
+        """
 
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
@@ -951,10 +1036,7 @@ class TestDrainHeartbeat:
         store = 'hb_doctor_setup'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
-        try:
-            drop_postgres_store(store, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(store, pg_dsn)
         backend = open_postgres_backend(store, pg_dsn)
         backend.close()
 
@@ -973,14 +1055,15 @@ class TestDrainHeartbeat:
             assert result['detail']['stale_runs'] == []
             assert store in result['detail']['stores_checked']
         finally:
-            try:
-                drop_postgres_store(store, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(store, pg_dsn)
 
     def test_warns_no_drain_heartbeat_in_5m(self, env_file, pg_dsn):
-        """In-progress per-store run with stale heartbeat -> warn."""
-        import os
+        """Verify an in-progress run silent for 10 minutes warns.
+
+        Mutation: a threshold above 10 minutes, or a missing store name on
+            the stale-run entry.
+        Oracle: a row inserted with heartbeat and start 10 minutes old.
+        """
 
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
@@ -988,10 +1071,7 @@ class TestDrainHeartbeat:
         store = 'hb_doctor_stale'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
-        try:
-            drop_postgres_store(store, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(store, pg_dsn)
         backend = open_postgres_backend(store, pg_dsn)
         backend.close()
 
@@ -1017,14 +1097,14 @@ class TestDrainHeartbeat:
             assert match['age_seconds'] >= 5 * 60
             assert match['store'] == store
         finally:
-            try:
-                drop_postgres_store(store, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(store, pg_dsn)
 
     def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
-        """Per-store in-progress run with recent heartbeat does NOT warn."""
-        import os
+        """Verify an in-progress run with a 30-second heartbeat passes.
+
+        Mutation: warning on any in-progress run whatever its heartbeat age.
+        Oracle: a row inserted with heartbeat and start 30 seconds old.
+        """
 
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
@@ -1032,10 +1112,7 @@ class TestDrainHeartbeat:
         store = 'hb_doctor_fresh'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
-        try:
-            drop_postgres_store(store, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(store, pg_dsn)
         backend = open_postgres_backend(store, pg_dsn)
         backend.close()
 
@@ -1056,33 +1133,32 @@ class TestDrainHeartbeat:
             assert result['detail']['stale_runs'] == []
             assert result['detail']['in_progress'] >= 1
         finally:
-            try:
-                drop_postgres_store(store, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(store, pg_dsn)
 
 
 class TestDrainHeartbeatSeverity:
-    """check_drain_heartbeat severity ladder when failures and stale combine."""
+    """check_drain_heartbeat severity ladder when failures and stale combine.
+    """
 
     def test_failures_outrank_stale(self, tmp_path, monkeypatch):
-        """Both failures and stale present -> fail (failures wins)."""
-        from contextlib import contextmanager
+        """Verify a store failure plus a stale run reports fail.
 
-        from memman import doctor as doctor_mod
+        Mutation: letting warn from a stale run override fail from an
+            unreachable store, or dropping either list from the detail.
+        Oracle: a stub backend set with one store that raises and one with a
+            stale run.
+        """
 
         @contextmanager
-        def _fake_open_backend(store, data_dir, *, read_only=False):
+        def _fake_open_backend(store: str, data_dir: str, *, read_only: bool = False):
             if store == 'broken':
                 raise RuntimeError('connection refused')
             yield _StaleRunsBackend()
 
         class _StaleRunsBackend:
 
-            def recent_runs(self, *, limit):
-                from datetime import datetime, timedelta, timezone
+            def recent_runs(self, *, limit: int) -> list[WorkerRun]:
 
-                from memman.store.model import WorkerRun
                 stale = datetime.now(timezone.utc) - timedelta(minutes=10)
                 return [WorkerRun(
                     id=42, started_at=stale, ended_at=None,
@@ -1106,13 +1182,19 @@ class TestDrainHeartbeatSeverity:
 
 
 class TestDoctorBackendDispatch:
-    """`memman doctor` runs against the active backend, not always SQLite."""
+    """`memman doctor` runs against the active backend, not always SQLite.
+    """
 
     pytestmark = pytest.mark.postgres
 
     def test_doctor_dispatches_to_postgres(
             self, tmp_path, env_file, pg_dsn, monkeypatch):
-        """`db_path` reports the redacted DSN, not a filesystem path."""
+        """Verify `doctor` reports the redacted DSN as db_path for a postgres store.
+
+        Mutation: opening the sqlite file path regardless of the store's
+            backend.
+        Oracle: the `#store_doctor_dispatch` suffix of the postgres locator.
+        """
         store = 'doctor_dispatch'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
@@ -1120,10 +1202,7 @@ class TestDoctorBackendDispatch:
 
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
-        try:
-            drop_postgres_store(store, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(store, pg_dsn)
         b = open_postgres_backend(store, pg_dsn)
         b.close()
 
@@ -1135,19 +1214,31 @@ class TestDoctorBackendDispatch:
             data = json.loads(result.output)
             assert '#store_doctor_dispatch' in data['db_path']
         finally:
-            try:
-                drop_postgres_store(store, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(store, pg_dsn)
 
 
 class TestClaudeHooksCheck:
-    """`check_claude_hooks` compares live registrations to the installer."""
+    """`check_claude_hooks` compares live registrations to the installer.
+    """
 
-    def _install(self, home, *, matcher='Agent|Task', drop=None,
-                 extra_stop=False, dangle=False):
-        """Write a settings.json and hook files under a fake home."""
-        import json as _json
+    def _install(self, home: Path, *, matcher: str = 'Agent|Task',
+                 drop: str | None = None, extra_stop: bool = False,
+                 dangle: bool = False) -> None:
+        """Write a settings.json and hook scripts under a fake home.
+
+        Parameters
+        ----------
+        home : Path
+            Fake home directory.
+        matcher : str
+            Matcher of the task_recall registration.
+        drop : str or None
+            Event to remove from settings.
+        extra_stop : bool
+            Add a Stop registration that memman no longer writes.
+        dangle : bool
+            Leave out the task_recall.sh script file.
+        """
         hooks_dir = home / '.claude' / 'hooks' / 'memman'
         hooks_dir.mkdir(parents=True)
         scripts = ['prime.sh', 'user_prompt.sh', 'compact.sh',
@@ -1157,7 +1248,7 @@ class TestClaudeHooksCheck:
                 continue
             (hooks_dir / name).write_text('#!/bin/bash\n')
 
-        def cmd(name):
+        def cmd(name: str) -> str:
             return f'~/.claude/hooks/memman/{name}'
 
         hooks = {
@@ -1183,7 +1274,7 @@ class TestClaudeHooksCheck:
         if drop:
             hooks.pop(drop)
         settings = home / '.claude' / 'settings.json'
-        settings.write_text(_json.dumps({'hooks': hooks}))
+        settings.write_text(json.dumps({'hooks': hooks}))
 
     def test_clean_install_passes(self, tmp_path, monkeypatch):
         """Verify a settings file the installer would write reports pass.
@@ -1195,7 +1286,6 @@ class TestClaudeHooksCheck:
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         self._install(tmp_path)
-        from memman.doctor import check_claude_hooks
         assert check_claude_hooks()['status'] == 'pass'
 
     def test_no_claude_config_passes(self, tmp_path, monkeypatch):
@@ -1206,7 +1296,6 @@ class TestClaudeHooksCheck:
         Oracle: a home directory with no .claude at all.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-        from memman.doctor import check_claude_hooks
         assert check_claude_hooks()['status'] == 'pass'
 
     def test_dangling_command_fails(self, tmp_path, monkeypatch):
@@ -1220,7 +1309,6 @@ class TestClaudeHooksCheck:
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         self._install(tmp_path, dangle=True)
-        from memman.doctor import check_claude_hooks
         result = check_claude_hooks()
         assert result['status'] == 'fail'
         assert any('task_recall.sh' in c
@@ -1232,11 +1320,10 @@ class TestClaudeHooksCheck:
         Mutation: comparing only the events the installer writes, so a
             retired registration left by an older install stays
             invisible.
-        Oracle: a Stop entry, which no memman version at HEAD writes.
+        Oracle: a Stop entry, which no current memman version writes.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         self._install(tmp_path, extra_stop=True)
-        from memman.doctor import check_claude_hooks
         result = check_claude_hooks()
         assert result['status'] == 'warn'
         assert any('Stop' in e for e in result['detail']['extra'])
@@ -1245,14 +1332,12 @@ class TestClaudeHooksCheck:
         """Verify a matcher the installer no longer writes is reported.
 
         Mutation: comparing event and command but dropping the matcher,
-            so a pre-0.40.1 registration keeps a narrower matcher with
-            no warning.
-        Oracle: the replaced matcher value Task against the
-            installer's own current value.
+            so a registration with a narrower matcher draws no warning.
+        Oracle: the matcher `Task` against the installer's own
+            current value.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         self._install(tmp_path, matcher='Task')
-        from memman.doctor import check_claude_hooks
         result = check_claude_hooks()
         assert result['status'] == 'warn'
         assert result['detail']['missing']
@@ -1267,7 +1352,6 @@ class TestClaudeHooksCheck:
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         self._install(tmp_path, drop='PreCompact')
-        from memman.doctor import check_claude_hooks
         result = check_claude_hooks()
         assert result['status'] == 'warn'
         assert any('compact.sh' in m for m in result['detail']['missing'])

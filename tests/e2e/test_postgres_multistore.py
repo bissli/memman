@@ -28,24 +28,23 @@ pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 
 
 def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
-    """`open_postgres_backend` on a never-seen store creates the per-store tables.
+    """Verify opening a new store creates exactly the per-store tables.
 
-    Includes `worker_runs` -- the drain heartbeat moved from a global
-    `queue` schema to per-store in 0.14.x.
+    Mutation: a baseline table (`insights`, `meta`, `oplog`,
+        `worker_runs`) missing from the DDL, or one created outside
+        the store schema.
+    Oracle: the sorted `pg_tables` names in the store schema.
     """
     store = _safe(request.node.name)
     schema = _store_schema(store)
-    try:
-        drop_postgres_store(store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(store, pg_dsn)
     backend = open_postgres_backend(store, pg_dsn)
     try:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    'SELECT tablename FROM pg_tables'
-                    ' WHERE schemaname = %s ORDER BY tablename',
+                    'select tablename from pg_tables'
+                    ' where schemaname = %s order by tablename',
                     (schema,))
                 tables = [r[0] for r in cur.fetchall()]
         assert tables == [
@@ -56,15 +55,18 @@ def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
 
 
 def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
-    """drop_store(A) leaves store B intact (data + schema)."""
+    """Verify dropping store A leaves store B's schema and rows intact.
+
+    Mutation: a drop that cascades across stores, such as one
+        that drops every store schema or a shared one.
+    Oracle: `pg_namespace` counts (A gone, B present) and B's
+        inserted row read back after the drop.
+    """
     base = _safe(request.node.name)[:36]
     store_a = f'{base}_a'
     store_b = f'{base}_b'
     for s in (store_a, store_b):
-        try:
-            drop_postgres_store(s, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(s, pg_dsn)
 
     a = open_postgres_backend(store_a, pg_dsn)
     b = open_postgres_backend(store_b, pg_dsn)
@@ -82,12 +84,12 @@ def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_a),))
             assert cur.fetchone()[0] == 0, (
                 'store_a schema should be dropped')
             cur.execute(
-                'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
+                'select count(*) from pg_namespace where nspname = %s',
                 (_store_schema(store_b),))
             assert cur.fetchone()[0] == 1, (
                 'store_b schema must survive drop of A')
@@ -104,18 +106,18 @@ def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
 
 
 def test_cross_backend_parity_insert_and_get(pg_dsn, tmp_path, request):
-    """Same Insight inserted via SQLite + Postgres returns equal content
-    on get(). Smoke test for the cross-backend parity matrix.
+    """Verify SQLite and Postgres backends return the same inserted content.
+
+    Mutation: either backend truncating or altering `content` on
+        insert or get.
+    Oracle: the literal content string inserted through both.
     """
     sqlite_data = str(tmp_path / 'memman_sqlite')
     Path(sqlite_data).mkdir(parents=True, exist_ok=True)
     sqlite_backend = open_sqlite_backend('parity', sqlite_data)
 
     pg_store = _safe(request.node.name)
-    try:
-        drop_postgres_store(pg_store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(pg_store, pg_dsn)
     pg_backend = open_postgres_backend(pg_store, pg_dsn)
 
     try:

@@ -6,11 +6,17 @@ a long read timeout.
 """
 
 import pytest
+from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL
+from memman.exceptions import ConfigError
 from memman.llm.client import get_llm_client, reset_client_cache
 
 
 def test_client_gets_large_budget():
-    """The client gets headroom so big enrichment inputs are not truncated.
+    """Verify the client gets headroom for large enrichment output.
+
+    Mutation: lowering the token budget or read timeout to a provider
+        default, which truncates or times out on a large insight.
+    Oracle: the 4096-token and 60-second floors set in the module doc.
     """
     reset_client_cache()
     client = get_llm_client()
@@ -26,8 +32,6 @@ def test_unset_model_var_raises(env_file):
         model the operator never chose.
     Oracle: `ConfigError` raised with the model var cleared.
     """
-    from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL
-    from memman.exceptions import ConfigError
     env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(LLM_API_KEY, 'k')
     env_file(LLM_MODEL, None)

@@ -5,11 +5,10 @@ The Postgres backend translates every statement failure into
 only the OPEN. The root group closes the gap, so `database is locked`
 mid-recall exits as one clean line on either backend.
 
-The seam is the root group, not `DB._query`: fifteen callers branch on
-a driver type (the queue's stale-claim reclaim, recall's bookkeeping
-skip, the `sqlite3.IntegrityError` arm in `sqlite.py`), and their
-handlers sit deeper, so translating at the statement would make every
-one of them dead code.
+The seam is the root group. Many callers branch on a driver type (the
+queue's stale-claim reclaim, recall's bookkeeping skip, the
+`sqlite3.IntegrityError` arm in `sqlite.py`) and their handlers sit
+deeper, so translating at `DB._query` would make each one dead code.
 
 Alongside it: the worker keeps a stack the stream must never print,
 `migrate` keeps the store name on a bare `BackendError`, and a failure
@@ -39,11 +38,14 @@ FAKE_DSN = 'postgresql://u:p@h:5432/d'
 
 @pytest.fixture
 def runner(mm_runner):
+    """The `mm_runner` fixture under a shorter name.
+    """
     return mm_runner
 
 
 def _seed_store(data_dir, name, dim=512):
-    """Create a migratable SQLite store carrying one insight."""
+    """Create a migratable SQLite store carrying one insight.
+    """
     sdir = Path(data_dir) / 'data' / name
     sdir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(sdir / 'memman.db'))
@@ -102,19 +104,18 @@ def test_sqlite_statement_error_exits_as_one_clean_line(runner, monkeypatch):
 
 
 def test_the_db_layer_leaves_driver_errors_driver_typed(tmp_path):
-    """A failing statement reaches its caller as `sqlite3`, not wrapped.
+    """A failing statement reaches its caller as a raw `sqlite3` error.
 
-    This pins WHERE the seam sits, at the DB layer only. Fifteen
-    callers branch on a driver type -- the queue's stale-claim reclaim,
-    recall's bookkeeping skip, the `sqlite3.IntegrityError` arm in `sqlite.py`
-    -- and every one needs the driver type to survive `DB._query` /
-    `DB._exec`. Those two methods are what this test covers; a
+    This pins where the seam sits, at the DB layer only. Callers branch
+    on a driver type (the queue's stale-claim reclaim, recall's
+    bookkeeping skip, the `sqlite3.IntegrityError` arm in `sqlite.py`),
+    so the driver type must survive `DB._query` and `DB._exec`. A
     translation added higher, in the node layer or in `queue.py`, would
-    leave it green and is NOT pinned here.
+    leave this test green and is not pinned here.
 
     Mutation: translating inside `DB._query` / `DB._exec`, the
-        symmetry with `postgres._connection`. Each of those
-        fifteen handlers silently becomes dead code.
+        symmetry with `postgres._connection`. Each driver-type
+        handler silently becomes dead code.
     Oracle: the exception type out of a failing statement, which is
         `BackendError` under the mutation and `sqlite3.OperationalError`
         as shipped.

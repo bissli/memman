@@ -28,7 +28,8 @@ DROPPED_HINTS = {'hint_imp', 'hint_source', 'hint_entities'}
 
 
 def _insight_columns(backend):
-    """Every column name of the insights table, on either backend."""
+    """Every column name of the insights table, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query('pragma table_info(insights)').fetchall()
         return {r[1] for r in rows}
@@ -41,7 +42,8 @@ def _insight_columns(backend):
 
 
 def _index_definitions(backend):
-    """Map each insights index name to its definition, on either backend."""
+    """Map each insights index name to its definition, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query(
             "select name, sql from sqlite_master where type = 'index'"

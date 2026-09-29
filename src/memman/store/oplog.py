@@ -1,4 +1,5 @@
-"""Operation logging with auto-trim."""
+"""Operation logging with auto-trim.
+"""
 
 import json
 import logging
@@ -20,14 +21,25 @@ def log_op(db: 'DB', operation: str, insight_id: str,
            detail: str,
            before: dict[str, Any] | None = None,
            after: dict[str, Any] | None = None) -> None:
-    """Record an operation to the oplog (insert-only).
+    """Insert one oplog row; a failed insert logs a warning.
 
-    Bounded growth is enforced by `maintenance_step` once per drain,
-    not on every write. This keeps the hot path insert-only so
-    Postgres `oplog.log` can be a single statement with no delete.
-    `before` carries the prior insight content on a replace or forget
-    row, and `after` the new content on a remember, replace or
-    target-gone row.
+    Insert-only: `maintenance_step` bounds growth once per drain, so
+    Postgres `oplog.log` stays a single statement with no delete.
+
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    operation : str
+        Operation name.
+    insight_id : str
+        Id of the insight the operation touched.
+    detail : str
+        Free-text detail.
+    before : dict[str, Any] or None
+        Prior insight content on a replace or forget row.
+    after : dict[str, Any] or None
+        New content on a remember, replace or target-gone row.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     before_s = json.dumps(before) if before is not None else None
@@ -46,13 +58,12 @@ values (?, ?, ?, ?, ?, ?)
 
 
 def maintenance_step(db: 'DB') -> None:
-    """Run the per-store SQLite maintenance step.
+    """Cap the oplog at `MAX_OPLOG_ENTRIES`, then reclaim freelist space.
 
-    Caps the oplog at `MAX_OPLOG_ENTRIES` (delete rows older than
-    the cap), then `pragma incremental_vacuum(200)` to reclaim
-    freelist space. Called once per drain by the worker maintenance
-    pass. Postgres uses autovacuum; its parallel verb is a single
-    delete on `PostgresOplog`.
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
     """
     sql = """
 delete from oplog
@@ -77,17 +88,12 @@ def trim_oplog_by_age(db: 'DB') -> int:
     -------
     int
         Rows deleted; 0 when the delete fails, which logs a warning.
-
-    Notes
-    -----
-    - Called once per worker drain so the table cannot grow unbounded
-      even with sparse writes per day. Bounded by idx_oplog_created
-      for an O(expired) delete.
     """
     cutoff_dt = datetime.now(timezone.utc) - timedelta(
         days=OPLOG_RETENTION_DAYS)
     cutoff = format_timestamp(cutoff_dt)
     try:
+        # idx_oplog_created bounds the delete to the expired rows.
         cur = db._exec(
             'delete from oplog where created_at < ?', (cutoff,))
         return int(cur.rowcount)
@@ -98,7 +104,24 @@ def trim_oplog_by_age(db: 'DB') -> int:
 
 def get_oplog(db: 'DB', limit: int = 20,
               since: str = '') -> list[dict[str, Any]]:
-    """Return the most recent N oplog entries, optionally filtered by date."""
+    """Return the most recent oplog entries, newest first.
+
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    limit : int, default 20
+        Maximum entries returned.
+    since : str, default ''
+        RFC3339 timestamp; when set, only entries created at or after
+        it are returned.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        One dict per row, with `before` and `after` decoded from JSON
+        (None when unset).
+    """
     if since:
         sql = """
 select id, operation, insight_id, detail, created_at, before, after
@@ -116,7 +139,7 @@ order by id desc
 limit ?
 """
         rows = db._query(sql, (limit,)).fetchall()
-    entries = [{
+    return [{
             'id': row[0],
             'operation': row[1],
             'insight_id': row[2] or '',
@@ -125,11 +148,26 @@ limit ?
             'before': json.loads(row[5]) if row[5] else None,
             'after': json.loads(row[6]) if row[6] else None,
             } for row in rows]
-    return entries
 
 
 def get_oplog_stats(db: 'DB', since: str = '') -> dict[str, Any]:
-    """Return grouped operation counts and the current insight count."""
+    """Return grouped operation counts and the current insight count.
+
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    since : str, default ''
+        RFC3339 timestamp; when set, only operations created at or
+        after it are counted.
+
+    Returns
+    -------
+    dict[str, Any]
+        `operation_counts` (operation to count, most frequent first)
+        and `total_active` (current insights, neither deleted nor
+        replaced; the count ignores `since`).
+    """
     if since:
         sql = """
 select operation, count(*)

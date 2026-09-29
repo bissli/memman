@@ -2,19 +2,12 @@
 
 `get_for(provider, model)` constructs an embedder bound to the
 requested pair. If the provider constructor raises `ConfigError`
-(missing creds), returns a `_PlaceholderEmbedder` so processes can
-open multiple stores even when one provider's creds are absent.
+(missing creds), it returns a `_PlaceholderEmbedder`, so a process can
+open multiple stores when one provider's creds are absent.
 
-The result is cached per `(provider, model)` for the lifetime of
-the process so `factory()` + `prepare()` (which may issue a network
-probe) only run once per pair. The cache uses an explicit
-`threading.Lock` rather than `functools.lru_cache` because two
-drain workers cold-starting on the same key can both miss with
-`lru_cache` and both run the (network-issuing) `factory()` /
-`prepare()` pair; the lock + double-check pattern collapses that
-to one. Tests share one process, so the autouse fixture in
-`tests/conftest.py` calls `reset_for_tests()` between tests to
-keep credential-missing flows reproducible.
+The result is cached per `(provider, model)` for the process lifetime,
+so `factory()` + `prepare()` (which may probe the network) run once
+per pair.
 """
 
 import threading
@@ -35,14 +28,32 @@ def get_for(provider: str, model: str) -> EmbeddingProvider:
     constructor raises `ConfigError` (missing creds), returns a
     placeholder whose `embed()` raises `EmbedCredentialError`.
 
-    Cached per `(provider, model)` for the process lifetime under an
-    explicit lock to prevent duplicate provider probes when two
-    drain workers cold-start on the same key concurrently.
+    Parameters
+    ----------
+    provider : str
+        A key of `PROVIDERS`.
+    model : str
+        Model id to bind the client to.
+
+    Returns
+    -------
+    EmbeddingProvider
+        The client cached for the pair, built and prepared once per
+        process.
+
+    Raises
+    ------
+    ConfigError
+        When `provider` is not registered.
     """
     key = (provider, model)
     cached = _GET_FOR_CACHE.get(key)
     if cached is not None:
         return cached
+    # A dict and lock stand in for `functools.lru_cache`: two drain
+    # workers cold-starting on one key can both miss an `lru_cache`
+    # and both run the network-issuing factory and prepare. The lock
+    # with a re-check collapses that to one run.
     with _GET_FOR_LOCK:
         cached = _GET_FOR_CACHE.get(key)
         if cached is not None:
@@ -70,7 +81,11 @@ def get_for(provider: str, model: str) -> EmbeddingProvider:
 
 
 def reset_for_tests() -> None:
-    """Drop the cached entries (test fixture only)."""
+    """Drop the cached entries.
+
+    The autouse fixture in `tests/conftest.py` calls this between
+    tests so credential-missing flows stay reproducible.
+    """
     with _GET_FOR_LOCK:
         _GET_FOR_CACHE.clear()
 
@@ -86,8 +101,7 @@ class _PlaceholderEmbedder:
     """
 
     def __init__(self, provider: str, model: str, reason: str) -> None:
-        """Bind the placeholder to a (provider, model) and record
-        the underlying ConfigError reason for downstream messages.
+        """Bind to a (provider, model) and keep the ConfigError reason.
         """
         self.name = provider
         self.model = model
@@ -95,23 +109,28 @@ class _PlaceholderEmbedder:
         self._reason = reason
 
     def prepare(self) -> None:
-        """No-op: placeholder has no probe to run."""
+        """No-op: placeholder has no probe to run.
+        """
         return
 
     def available(self) -> bool:
-        """Always False; placeholder cannot probe an absent provider."""
+        """Always False; placeholder cannot probe an absent provider.
+        """
         return False
 
     def embed(self, text: str) -> list[float]:
-        """Raise EmbedCredentialError on any embed attempt."""
+        """Raise EmbedCredentialError on any embed attempt.
+        """
         raise EmbedCredentialError(
             f'embed provider {self.name!r} cannot run: {self._reason}')
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Raise EmbedCredentialError on any embed attempt."""
+        """Raise EmbedCredentialError on any embed attempt.
+        """
         raise EmbedCredentialError(
             f'embed provider {self.name!r} cannot run: {self._reason}')
 
     def unavailable_message(self) -> str:
-        """Return the underlying ConfigError reason."""
+        """Return the underlying ConfigError reason.
+        """
         return self._reason

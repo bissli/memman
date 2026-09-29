@@ -37,9 +37,22 @@ _DOW_ORDER: tuple[tuple[int, str], ...] = (
 def _parse(expr: str) -> tuple[set[int], set[int], set[int], set[int], set[int]]:
     """Split `expr` into 5 expanded sets; normalize dow `7` to `0`.
 
-    Raises ValueError when the field count is not exactly 5 or any
-    field fails to expand (out-of-range value, inverted range,
-    non-positive step, or non-integer token).
+    Parameters
+    ----------
+    expr : str
+        A 5-field cron expression.
+
+    Returns
+    -------
+    tuple[set[int], set[int], set[int], set[int], set[int]]
+        Minute, hour, day-of-month, month, day-of-week values.
+
+    Raises
+    ------
+    ValueError
+        When the field count is not exactly 5 or any field fails to
+        expand (out-of-range value, inverted range, non-positive step,
+        or non-integer token).
     """
     def expand(spec: str, lo: int, hi: int) -> set[int]:
         result: set[int] = set()
@@ -95,6 +108,23 @@ def cron_matches(expr: str, dt: datetime) -> bool:
     and dow are restricted (neither is `*`), a day matches on EITHER;
     otherwise the restricted field alone decides. `dt.weekday()`
     (Mon=0) maps to cron dow (Sun=0) via `(weekday + 1) % 7`.
+
+    Parameters
+    ----------
+    expr : str
+        A 5-field cron expression.
+    dt : datetime
+        Local time to test.
+
+    Returns
+    -------
+    bool
+        Whether `dt` matches `expr`.
+
+    Raises
+    ------
+    ValueError
+        When `expr` is malformed.
     """
     minute, hour, dom, month, dow = _parse(expr)
     fields = expr.split()
@@ -143,6 +173,21 @@ def cron_to_oncalendar(expr: str) -> str:
     and day-of-week are restricted, systemd evaluates them as AND
     (not the cron OR); `cron_matches` is the OR-correct path for
     serve mode.
+
+    Parameters
+    ----------
+    expr : str
+        A 5-field cron expression.
+
+    Returns
+    -------
+    str
+        The `OnCalendar=` value.
+
+    Raises
+    ------
+    ValueError
+        When `expr` is malformed.
     """
     minute, hour, dom, month, dow = _parse(expr)
     fields = expr.split()
@@ -159,12 +204,26 @@ def cron_to_oncalendar(expr: str) -> str:
 def cron_to_launchd(expr: str) -> dict[str, int] | list[dict[str, int]]:
     """Render a launchd `StartCalendarInterval` value from a cron expr.
 
-    Returns a single dict when every restricted field has one value,
-    or a list of dicts (the cartesian product) when any restricted
-    field has multiple values. `*` fields are omitted. When BOTH
-    day-of-month and day-of-week are restricted, a Day-keyed group and
-    a Weekday-keyed group are concatenated to preserve the cron OR
-    semantics. launchd `Weekday` uses 0=Sunday.
+    `*` fields are omitted. When BOTH day-of-month and day-of-week are
+    restricted, a Day-keyed group and a Weekday-keyed group are
+    concatenated to preserve the cron OR semantics. launchd `Weekday`
+    uses 0=Sunday.
+
+    Parameters
+    ----------
+    expr : str
+        A 5-field cron expression.
+
+    Returns
+    -------
+    dict[str, int] | list[dict[str, int]]
+        A single dict when every restricted field has one value, else
+        a list of dicts (the cartesian product).
+
+    Raises
+    ------
+    ValueError
+        When `expr` is malformed.
     """
     minute, hour, dom, month, dow = _parse(expr)
     fields = [f.strip() for f in expr.split()]
@@ -195,7 +254,8 @@ def cron_to_launchd(expr: str) -> dict[str, int] | list[dict[str, int]]:
 
 
 def _product(field_pairs: list[tuple[str, list[int]]]) -> list[dict[str, int]]:
-    """Cartesian product of `(key, values)` pairs into a list of dicts."""
+    """Cartesian product of `(key, values)` pairs into a list of dicts.
+    """
     dicts: list[dict[str, int]] = [{}]
     for key, values in field_pairs:
         expanded: list[dict[str, int]] = []

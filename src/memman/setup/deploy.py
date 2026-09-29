@@ -14,6 +14,14 @@ from pathlib import Path
 
 def symlink_asset(rel_path: str, dest: Path) -> None:
     """Create or replace a symlink at dest pointing at a shipped asset.
+
+    Parameters
+    ----------
+    rel_path : str
+        Asset path relative to `memman/setup/assets/`.
+    dest : Path
+        Symlink location. Missing parent directories are created, and
+        any existing file or symlink there is replaced.
     """
     target = Path(str(pkg_files('memman.setup.assets')
                       .joinpath(rel_path))).resolve()

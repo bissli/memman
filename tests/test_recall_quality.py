@@ -17,13 +17,15 @@ import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
 from memman.search.recall import run_recall
 from memman.store.model import Insight
-from tests.conftest import EMBEDDING_DIM, make_insight
+from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
+from tests.conftest import EMBEDDING_DIM, make_insight, set_created_at
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 def _insert_fillers(backend, count=8):
-    """Insert recent filler insights with no keyword overlap to test queries."""
+    """Insert recent fillers sharing no keyword with the test queries.
+    """
     for i in range(count):
         backend.nodes.insert(make_insight(
             id=f'filler-{i}',
@@ -31,7 +33,8 @@ def _insert_fillers(backend, count=8):
 
 
 def _find_result(results, insight_id):
-    """Return the result dict for a given insight ID, or None."""
+    """Return the result dict for a given insight ID, or None.
+    """
     for r in results:
         if r['insight'].id == insight_id:
             return r
@@ -39,10 +42,11 @@ def _find_result(results, insight_id):
 
 
 class TestKeywordSignal:
-    """Keyword-matching insight gets a positive keyword signal."""
+    """Keyword-matching insight gets a positive keyword signal.
+    """
 
     def test_keyword_match_has_positive_keyword_signal(self, backend):
-        """Insight with query keywords scores high keyword signal; others do not.
+        """A keyword match scores a high keyword signal; a miss does not.
 
         Mutation: computing `kw_score` from a fixed denominator
             instead of `len(query_tokens)`, or matching on the wrong
@@ -80,7 +84,8 @@ class TestKeywordSignal:
 
 
 class TestRelevanceOrderingSurvivesTheLimit:
-    """Nothing re-sorts after the limit slice."""
+    """Nothing re-sorts after the limit slice.
+    """
 
     def test_results_are_score_descending(self, backend):
         """Recall returns rows in descending score order.
@@ -91,7 +96,6 @@ class TestRelevanceOrderingSurvivesTheLimit:
         Oracle: the returned rows sorted by `-score` independently,
             compared as an id sequence.
         """
-        from tests.conftest import set_created_at
         _insert_fillers(backend)
         for i, word in enumerate(('rollback', 'schema', 'deploy')):
             backend.nodes.insert(make_insight(
@@ -119,7 +123,8 @@ _BACKEND_AGREEMENT_TOLERANCE = 0.05
 
 
 def _unit(vec: list) -> list:
-    """Normalize to unit length."""
+    """Normalize to unit length.
+    """
     norm = sum(x * x for x in vec) ** 0.5
     if norm <= 0:
         return vec
@@ -127,20 +132,23 @@ def _unit(vec: list) -> list:
 
 
 def _gaussian_unit(seed: int) -> list:
-    """Deterministic 512-dim unit Gaussian vector."""
+    """Deterministic 512-dim unit Gaussian vector.
+    """
     rng = random.Random(seed)
     return _unit([rng.gauss(0.0, 1.0) for _ in range(EMBEDDING_DIM)])
 
 
 def _perturb(vec: list, seed: int) -> list:
-    """Add small Gaussian noise then re-normalize."""
+    """Add small Gaussian noise then re-normalize.
+    """
     rng = random.Random(seed)
     noisy = [x + rng.gauss(0.0, _NOISE_SCALE) for x in vec]
     return _unit(noisy)
 
 
 def _populate_recall(backend, topic_centers: list) -> None:
-    """Insert 3 perturbed corpus vectors per topic."""
+    """Insert 3 perturbed corpus vectors per topic.
+    """
     for t_idx, center in enumerate(topic_centers):
         for k in range(_INSIGHTS_PER_TOPIC):
             ins_id = f't{t_idx:02d}-i{k}'
@@ -157,7 +165,8 @@ def _populate_recall(backend, topic_centers: list) -> None:
 
 
 def _topk_ids(backend, qvec, k) -> list:
-    """Return the top-k ids by intent-aware recall on the given backend."""
+    """Return the top-k ids by intent-aware recall on the given backend.
+    """
     result = run_recall(
         backend, query='topic insight',
         query_vec=qvec,
@@ -166,7 +175,8 @@ def _topk_ids(backend, qvec, k) -> list:
 
 
 def _recall_at_3(backend, topic_centers: list) -> float:
-    """Recall over 20 queries: (matches / 3) averaged."""
+    """Recall over 20 queries: (matches / 3) averaged.
+    """
     total = 0.0
     for t_idx, center in enumerate(topic_centers):
         ground_truth = {
@@ -179,16 +189,22 @@ def _recall_at_3(backend, topic_centers: list) -> float:
 
 
 class TestRecallAt10Gate:
-    """Cross-backend recall@10 regression gate."""
+    """Cross-backend recall@10 regression gate.
+    """
 
     pytestmark = pytest.mark.postgres
 
     def test_cross_backend_recall_at_10_gate(self, tmp_path, pg_dsn):
-        """Both backends recall >= 0.95 of ground truth, agreeing within 0.05.
+        """Verify both backends recall the topic clusters and agree.
+
+        Mutation: one backend's vector path returning wrong neighbors (an
+            unnormalized or transposed score), dropping its recall below the
+            floor or away from the other backend.
+        Oracle: ground-truth ids per topic (t<NN>-i0..2) built from the seeded
+            centers, with the floor and agreement tolerance constants.
         """
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
-        from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
         topic_centers = [_gaussian_unit(seed=i) for i in range(_N_TOPICS)]
 
@@ -197,10 +213,7 @@ class TestRecallAt10Gate:
         sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(sqlite_backend, topic_centers)
 
-        try:
-            drop_postgres_store('r10_test', pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store('r10_test', pg_dsn)
         postgres_backend = open_postgres_backend('r10_test', pg_dsn)
         postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(postgres_backend, topic_centers)
@@ -220,19 +233,7 @@ class TestRecallAt10Gate:
                 f'{postgres_recall:.3f} differ by {delta:.3f} > '
                 f'{_BACKEND_AGREEMENT_TOLERANCE}')
         finally:
-            try:
-                sqlite_backend.close()
-            except Exception:
-                pass
-            try:
-                drop_sqlite_store('r10', sqlite_data_dir)
-            except Exception:
-                pass
-            try:
-                postgres_backend.close()
-            except Exception:
-                pass
-            try:
-                drop_postgres_store('r10_test', pg_dsn)
-            except Exception:
-                pass
+            sqlite_backend.close()
+            drop_sqlite_store('r10', sqlite_data_dir)
+            postgres_backend.close()
+            drop_postgres_store('r10_test', pg_dsn)

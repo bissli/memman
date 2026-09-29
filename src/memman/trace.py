@@ -48,9 +48,9 @@ _DSN_PASSWORD_RE = re.compile(
 def redact_dsn(value: str) -> str:
     """Mask the password in a DSN of the form `scheme://user:pass@host`.
 
-    Pass-through for passwordless DSNs and strings that don't match.
-    Use at any log site that may carry a postgres connection string so
-    psycopg exception text or connection repr does not leak credentials.
+    A passwordless DSN, or a string that does not match, returns
+    unchanged. Call at any log site that may carry a postgres
+    connection string.
     """
     return _DSN_PASSWORD_RE.sub(r'\g<scheme>:***@', value)
 
@@ -58,11 +58,10 @@ def redact_dsn(value: str) -> str:
 def is_enabled() -> bool:
     """Return True when trace mode is on.
 
-    `MEMMAN_DEBUG` is a process-control var read directly from
-    `os.environ` -- it is never persisted to the env file. A truthy
-    value enables trace; anything else explicitly disables. When the
-    env var is unset, fall back to `~/.memman/debug.state` written by
-    `memman scheduler debug on`.
+    `MEMMAN_DEBUG` is read from `os.environ` alone; the env file is
+    ignored. A truthy value enables trace; any other non-empty value
+    disables it. When the variable is unset or empty, the answer is
+    `~/.memman/debug.state`, written by `memman scheduler debug on`.
     """
     raw = os.environ.get(config.DEBUG)
     if raw is not None and raw != '':
@@ -71,7 +70,8 @@ def is_enabled() -> bool:
 
 
 def _trace_path() -> Path:
-    """Resolve ~/.memman/logs/debug.log, honoring the current HOME."""
+    """Path of `~/.memman/logs/debug.log` under the current HOME.
+    """
     return Path.home() / '.memman' / LOG_DIR_NAME / TRACE_FILENAME
 
 
@@ -84,7 +84,8 @@ class JsonlFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        """Render the record as compact JSON."""
+        """Render the record as compact JSON.
+        """
         ts = datetime.fromtimestamp(
             record.created, tz=timezone.utc).isoformat()
         payload: dict[str, Any] = {
@@ -102,7 +103,8 @@ class JsonlFormatter(logging.Formatter):
 
 
 def _json_default(obj: Any) -> str:
-    """Fallback serializer for non-JSON-native objects in trace payloads."""
+    """Fallback serializer for non-JSON-native objects in trace payloads.
+    """
     try:
         return repr(obj)
     except Exception:
@@ -112,10 +114,9 @@ def _json_default(obj: Any) -> str:
 def setup() -> None:
     """Attach a rotating JSONL file handler to the 'memman' logger.
 
-    No-op when config.DEBUG is unset. Idempotent: repeated calls do not
-    attach duplicate handlers. The log file is chmod 600 immediately
-    after creation so raw memory content never lands at world-readable
-    permissions.
+    A no-op when tracing is disabled. Repeated calls attach no
+    duplicate handler. The log file is chmod 600 right after creation,
+    so raw memory content never sits at world-readable permissions.
     """
     if not is_enabled():
         return
@@ -149,7 +150,8 @@ def setup() -> None:
 
 
 def event(name: str, **fields: Any) -> None:
-    """Emit a structured trace event. No-op when tracing is disabled."""
+    """Emit a structured trace event. No-op when tracing is disabled.
+    """
     if not is_enabled():
         return
     logger = logging.getLogger('memman')

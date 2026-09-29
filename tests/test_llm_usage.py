@@ -6,12 +6,17 @@ directly, so attribution, retry accumulation, and the lock are all
 exercised where they live.
 """
 
+import ast
+import json
 import sys
 import threading
+from pathlib import Path
 
 import httpx
+import memman
 import pytest
 from memman import _http
+from memman.cli import cli
 from memman.llm import client as llm_client_mod
 from memman.llm import usage
 from memman.llm.client import MemmanLLMClient
@@ -23,8 +28,6 @@ def _install_fake_post(monkeypatch, responses):
     def _fake_post(url, headers=None, json=None, timeout=None):
         calls.append(json)
         spec = responses[min(len(calls) - 1, len(responses) - 1)]
-        # A dict is an HTTP-200 JSON body; a (status, body) tuple
-        # picks the status, with a str body sent as raw text.
         if isinstance(spec, tuple):
             status, body = spec
             if isinstance(body, str):
@@ -100,7 +103,6 @@ def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
     Oracle: exactly `MAX_RETRIES` calls and the summed prompt tokens
         of every empty body appear in the ledger after the raise.
     """
-    from memman._http import MAX_RETRIES
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     before = usage.snapshot()
     empty = {
@@ -112,8 +114,8 @@ def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
     with pytest.raises(RuntimeError):
         _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_PROBE]['calls'] == MAX_RETRIES
-    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 5 * MAX_RETRIES
+    assert d[usage.STAGE_PROBE]['calls'] == _http.MAX_RETRIES
+    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 5 * _http.MAX_RETRIES
 
 
 @pytest.mark.no_mock_llm
@@ -240,11 +242,6 @@ def test_all_call_sites_use_closed_set_stages():
         `.complete(` and `complete_parsed(` call, the two forwarders in
         `shared.py` aside.
     """
-    import ast
-    from pathlib import Path
-
-    import memman
-
     with pytest.raises(ValueError, match='unknown LLM stage'):
         usage.record('extractoin', None)
 
@@ -269,9 +266,8 @@ def test_all_call_sites_use_closed_set_stages():
         stage_kw = [k for k in node.keywords if k.arg == 'stage']
         assert stage_kw, f'{name}: LLM call missing stage='
         val = stage_kw[0].value
-        # `complete_parsed` forwards its own `stage` parameter to the
-        # client; the constant is named by whoever calls IT, and every
-        # such caller is scanned above.
+        # `complete_parsed` forwards its own `stage` parameter; its
+        # callers are scanned above.
         if (name == 'shared.py' and isinstance(val, ast.Name)
                 and val.id == 'stage'):
             forwarded += 1
@@ -300,10 +296,6 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
         11 prompt tokens; the drain JSON must carry exactly that
         per-stage delta.
     """
-    import json as _json
-
-    from memman.cli import cli
-
     def _stub_row(row, ctx):
         usage.record(
             usage.STAGE_ENRICHMENT,
@@ -319,7 +311,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
         '--data-dir', data_dir, 'scheduler', 'drain',
         '--limit', '5', '--timeout', '10'])
     assert res.exit_code == 0, res.output
-    data = _json.loads(res.output)
+    data = json.loads(res.output)
     assert data['processed'] == 1
     stage = data['llm_usage'][usage.STAGE_ENRICHMENT]
     assert stage['calls'] == 1

@@ -7,7 +7,8 @@ from tests.conftest import invoke, parse_remember
 
 
 def _seed(mm_runner, data_dir):
-    """Store one row and return its id and store name."""
+    """Store one row and return its id and store name.
+    """
     first = invoke(mm_runner, [
         'remember', 'the broker is kombu'])
     old = parse_remember(first, mm_runner)

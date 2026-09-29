@@ -1,9 +1,7 @@
 """Driver errors must reach callers as `BackendError`.
 
 memman's contract is that a backend raises `BackendError` and the CLI
-catches it. The Postgres layer had four `psycopg.Error` handlers
-against fourteen `_connection` blocks, so most driver failures
-surfaced as raw tracebacks.
+catches it.
 
 Translating inside `_connection` covers every statement run in its
 scope. A caller that branches on a driver type nests its handler at
@@ -15,6 +13,8 @@ import pytest
 from memman.store.errors import BackendError
 
 psycopg = pytest.importorskip('psycopg')
+
+from memman.store import postgres as pg  # noqa: E402
 
 DEAD_DSN = 'postgresql://u:p@127.0.0.1:1/nodb'
 
@@ -30,17 +30,14 @@ def test_connection_scope_translates_a_statement_error(monkeypatch):
     Oracle: `BackendError` out of a block whose statement raised
     `psycopg.OperationalError`, with `__cause__` preserved.
     """
-    from memman.store import postgres as pg
-
     class _Conn:
         def close(self):
             pass
 
     monkeypatch.setattr(pg, '_open_connection', lambda *a, **kw: _Conn())
 
-    with pytest.raises(BackendError) as caught:
-        with pg._connection(DEAD_DSN):
-            raise psycopg.OperationalError('statement blew up')
+    with pytest.raises(BackendError) as caught, pg._connection(DEAD_DSN):
+        raise psycopg.OperationalError('statement blew up')
 
     assert isinstance(caught.value.__cause__, psycopg.OperationalError)
 
@@ -49,18 +46,16 @@ def test_read_stored_dim_translates_a_non_missing_schema_error(
         monkeypatch):
     """Only "schema absent" is special-cased; other errors translate.
 
-    An earlier version passed `translate=False` for the whole block,
-    which let every driver error out raw -- a permission failure on
-    `meta` reached `open_postgres_backend` as a psycopg exception,
-    past the CLI's `except BackendError`.
+    A block-wide `translate=False` would let every driver error out
+    raw: a permission failure on `meta` would reach
+    `open_postgres_backend` as a psycopg exception, past the CLI's
+    `except BackendError`.
 
     Mutation: widening the statement handler to `psycopg.Error`, or
     restoring a block-wide opt-out.
     Oracle: `InsufficientPrivilege` from the statement arrives as
     `BackendError`, while `UndefinedTable` still yields None.
     """
-    from memman.store import postgres as pg
-
     class _Cur:
         def __enter__(self):
             return self
@@ -97,8 +92,6 @@ def test_read_stored_dim_still_returns_none_for_a_missing_schema(
     instead of reporting "no schema".
     Oracle: a stubbed connection raising UndefinedTable yields None.
     """
-    from memman.store import postgres as pg
-
     class _Cur:
         def __enter__(self):
             return self
@@ -133,10 +126,8 @@ def test_connect_failure_outside_a_scope_translates():
     `_open_connection` raw.
     Oracle: `pytest.raises(BackendError)` against a closed port.
     """
-    from memman.store.postgres import _open_connection
-
     with pytest.raises(BackendError):
-        _open_connection(DEAD_DSN, autocommit=True)
+        pg._open_connection(DEAD_DSN, autocommit=True)
 
 
 def test_open_postgres_backend_reports_a_dead_server_as_backend_error():
@@ -148,7 +139,5 @@ def test_open_postgres_backend_reports_a_dead_server_as_backend_error():
     Oracle: `pytest.raises(BackendError)` opening a store against a
     closed port.
     """
-    from memman.store.postgres import open_postgres_backend
-
     with pytest.raises(BackendError):
-        open_postgres_backend('shop', DEAD_DSN)
+        pg.open_postgres_backend('shop', DEAD_DSN)

@@ -31,6 +31,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import click
+from memman.embed import get_client
+from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.store.backend import Backend
 from memman.store.errors import BackendError
 
@@ -41,11 +43,11 @@ def active_store(
         unchecked: bool = False) -> Iterator[Backend]:
     """Yield the active Backend for one operation.
 
-    Dispatches on the per-store keys (`MEMMAN_BACKEND_<store>` with
-    fallback to `MEMMAN_DEFAULT_BACKEND`) via `factory.open_backend`,
-    seeds + asserts the embedding fingerprint, then yields the
-    Backend. Closes on exit even if the
-    body raises.
+    Opens the backend by the per-store keys (`MEMMAN_BACKEND_<store>`,
+    falling back to `MEMMAN_DEFAULT_BACKEND`) via
+    `factory.open_backend`, seeds and asserts the embedding
+    fingerprint, then yields it. The backend closes on exit even when
+    the body raises.
 
     Parameters
     ----------
@@ -67,23 +69,11 @@ def active_store(
     ------
     click.ClickException
         When the fingerprint check or the backend open via
-        `factory.open_backend` fails.
-
-    Notes
-    -----
-    - One `except` covers `ConfigError` from the runtime layer and
-      from the backend layer alike, because `store.errors.ConfigError`
-      subclasses `memman.exceptions.ConfigError`.
-    - `BackendError` is wrapped alongside it, so a store whose
-      on-disk state cannot be opened exits with a message instead of
-      a traceback.
-    - Imports for the fingerprint helpers are deferred to call time
-      so the test suite's monkeypatching of `memman.embed.fingerprint`
-      (autouse seed-then-assert) is observed.
+        `factory.open_backend` fails with `ConfigError` (runtime or
+        store layer) or `BackendError`, so an unopenable store exits
+        with a message instead of a traceback.
     """
     from memman.embed import fingerprint as fp_mod
-    from memman.embed import get_client
-    from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.store.factory import open_backend
 
     try:

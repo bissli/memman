@@ -1,58 +1,78 @@
 """Per-store env-key helpers for the routing plan.
 
-Slice 2.1: read-only helpers and validator extension. No call site
-dispatches on these keys yet; this slice only adds the data-shape
-surface and confirms the validator accepts per-store-suffixed keys.
+Read-only helpers and a validator that accepts per-store-suffixed
+keys.
 """
 
 import pytest
+from memman import config
+from memman.store.config import validate_all
+from memman.store.errors import ConfigError
+from tests.conftest import invoke
 
 
 def test_backend_for_builds_namespaced_key():
-    """BACKEND_FOR(store) -> 'MEMMAN_BACKEND_<store>'.
+    """Verify BACKEND_FOR builds 'MEMMAN_BACKEND_<store>'.
+
+    Mutation: dropping the store suffix or changing the prefix.
+    Oracle: hand-written key strings, including a hyphenated store.
     """
-    from memman import config
     assert config.BACKEND_FOR('main') == 'MEMMAN_BACKEND_main'
     assert config.BACKEND_FOR('shared-2') == 'MEMMAN_BACKEND_shared-2'
 
 
 def test_pg_dsn_for_builds_namespaced_key():
-    """PG_DSN_FOR(store) -> 'MEMMAN_POSTGRES_DSN_<store>'.
+    """Verify POSTGRES_DSN_FOR builds 'MEMMAN_POSTGRES_DSN_<store>'.
+
+    Mutation: changing the prefix, or dropping the store suffix.
+    Oracle: hand-written keys for a plain and a hyphenated store name.
     """
-    from memman import config
-    assert config.env_key_for('postgres', 'DSN', 'main') == 'MEMMAN_POSTGRES_DSN_main'
+    assert config.POSTGRES_DSN_FOR('main') == 'MEMMAN_POSTGRES_DSN_main'
+    assert config.POSTGRES_DSN_FOR('shared-2') == (
+        'MEMMAN_POSTGRES_DSN_shared-2')
 
 
 def test_default_backend_constant():
-    """`DEFAULT_BACKEND` and `DEFAULT_PG_DSN` use the documented names.
+    """Verify DEFAULT_BACKEND and DEFAULT_PG_DSN use the documented names.
+
+    Mutation: renaming either key, which orphans values operators already
+        wrote to their env files.
+    Oracle: the literal documented key strings.
     """
-    from memman import config
     assert config.DEFAULT_BACKEND == 'MEMMAN_DEFAULT_BACKEND'
     assert config.DEFAULT_PG_DSN == 'MEMMAN_DEFAULT_POSTGRES_DSN'
 
 
 def test_get_store_backend_returns_value_when_set(env_file):
-    """`get_store_backend` returns the per-store value or None.
+    """Verify get_store_backend returns the per-store value or None.
+
+    Mutation: returning another store's value, or a default string instead
+        of None for an unset store.
+    Oracle: one store set to 'postgres' and an unset store.
     """
-    from memman import config
     env_file('MEMMAN_BACKEND_main', 'postgres')
     assert config.get_store_backend('main') == 'postgres'
     assert config.get_store_backend('other') is None
 
 
 def test_get_store_pg_dsn_returns_value_when_set(env_file):
-    """`get_store_pg_dsn` returns the per-store DSN or None.
+    """Verify get_store_pg_dsn returns the per-store DSN or None.
+
+    Mutation: returning another store's DSN, or a default instead of None
+        for an unset store.
+    Oracle: one store set to a hand-written DSN and an unset store.
     """
-    from memman import config
     env_file('MEMMAN_POSTGRES_DSN_main', 'postgresql://example/x')
     assert config.get_store_pg_dsn('main') == 'postgresql://example/x'
     assert config.get_store_pg_dsn('other') is None
 
 
 def test_validator_accepts_per_store_pg_dsn_keys():
-    """`MEMMAN_POSTGRES_DSN_<store>` does not trip the postgres validator.
+    """Verify per-store DSN keys pass the postgres validator.
+
+    Mutation: rejecting a suffixed key as unknown.
+    Oracle: validate_all returning without ConfigError.
     """
-    from memman.store.config import validate_all
     validate_all({
         'MEMMAN_POSTGRES_DSN_main': 'postgresql://x',
         'MEMMAN_POSTGRES_DSN_shared': 'postgresql://y',
@@ -60,10 +80,12 @@ def test_validator_accepts_per_store_pg_dsn_keys():
 
 
 def test_validator_rejects_per_store_pg_key_with_invalid_suffix():
-    """An invalid suffix (slashes, spaces) is rejected.
+    """Verify a suffix with slashes is rejected.
+
+    Mutation: accepting any suffix, which lets a path-like store name
+        through.
+    Oracle: ConfigError for 'MEMMAN_POSTGRES_DSN_/etc/passwd'.
     """
-    from memman.store.config import validate_all
-    from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
         validate_all({
             'MEMMAN_POSTGRES_DSN_/etc/passwd': 'oops',
@@ -71,10 +93,12 @@ def test_validator_rejects_per_store_pg_key_with_invalid_suffix():
 
 
 def test_validator_rejects_unknown_per_store_canonical_key():
-    """A `MEMMAN_POSTGRES_<unknown>_<store>` key is still rejected.
+    """Verify an unknown per-store postgres key is still rejected.
+
+    Mutation: a suffix pattern loose enough to accept any
+        MEMMAN_POSTGRES_ key.
+    Oracle: ConfigError for 'MEMMAN_POSTGRES_FAKE_KEY_main'.
     """
-    from memman.store.config import validate_all
-    from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
         validate_all({
             'MEMMAN_POSTGRES_FAKE_KEY_main': 'value',
@@ -82,10 +106,11 @@ def test_validator_rejects_unknown_per_store_canonical_key():
 
 
 def test_config_set_per_store_backend(mm_runner):
-    """`config set MEMMAN_BACKEND_<store> postgres` writes the per-store
-    routing key without rejection.
+    """Verify `config set MEMMAN_BACKEND_<store> postgres` is accepted.
+
+    Mutation: the config-set validator rejecting the per-store routing key.
+    Oracle: exit code 0 and the 'set MEMMAN_BACKEND_work' message.
     """
-    from tests.conftest import invoke
     result = invoke(mm_runner, [
         'config', 'set', 'MEMMAN_BACKEND_work', 'postgres'])
     assert result.exit_code == 0, result.output
@@ -93,10 +118,11 @@ def test_config_set_per_store_backend(mm_runner):
 
 
 def test_config_set_per_store_pg_dsn(mm_runner):
-    """`config set MEMMAN_POSTGRES_DSN_<store> <url>` writes the per-store DSN
-    without rejection.
+    """Verify `config set MEMMAN_POSTGRES_DSN_<store> <url>` is accepted.
+
+    Mutation: the config-set validator rejecting the per-store DSN key.
+    Oracle: exit code 0.
     """
-    from tests.conftest import invoke
     result = invoke(mm_runner, [
         'config', 'set', 'MEMMAN_POSTGRES_DSN_work',
         'postgresql://localhost/x'])
@@ -104,10 +130,12 @@ def test_config_set_per_store_pg_dsn(mm_runner):
 
 
 def test_config_set_rejects_bare_memman_backend(mm_runner):
-    """The bare canonical `MEMMAN_BACKEND` is rejected with a hint
-    pointing at `MEMMAN_DEFAULT_BACKEND` and `MEMMAN_BACKEND_<store>`.
+    """Verify the bare `MEMMAN_BACKEND` key is rejected with a hint.
+
+    Mutation: accepting the bare key, or rejecting it without naming the
+        default and per-store forms.
+    Oracle: nonzero exit and both replacement key names in the output.
     """
-    from tests.conftest import invoke
     result = invoke(mm_runner, [
         'config', 'set', 'MEMMAN_BACKEND', 'postgres'])
     assert result.exit_code != 0
@@ -116,9 +144,12 @@ def test_config_set_rejects_bare_memman_backend(mm_runner):
 
 
 def test_config_set_rejects_bare_memman_pg_dsn(mm_runner):
-    """The bare canonical `MEMMAN_POSTGRES_DSN` is rejected.
+    """Verify the bare `MEMMAN_POSTGRES_DSN` key is rejected with a hint.
+
+    Mutation: accepting the bare key, or rejecting it without naming the
+        default and per-store forms.
+    Oracle: nonzero exit and both replacement key names in the output.
     """
-    from tests.conftest import invoke
     result = invoke(mm_runner, [
         'config', 'set', 'MEMMAN_POSTGRES_DSN', 'postgresql://x'])
     assert result.exit_code != 0
@@ -127,9 +158,12 @@ def test_config_set_rejects_bare_memman_pg_dsn(mm_runner):
 
 
 def test_config_set_rejects_unrecognized_key_with_hint(mm_runner):
-    """An unrecognized key produces the new shape-list hint.
+    """Verify an unrecognized key is rejected with the shape-list hint.
+
+    Mutation: accepting an unknown key, or rejecting it without listing
+        the accepted per-store shapes.
+    Oracle: nonzero exit and the hand-written hint fragments.
     """
-    from tests.conftest import invoke
     result = invoke(mm_runner, [
         'config', 'set', 'MEMMAN_NOT_A_KEY', 'value'])
     assert result.exit_code != 0

@@ -18,7 +18,8 @@ DEFAULT_ENDPOINT = 'https://api.voyageai.com'
 
 
 class Client:
-    """HTTP client for Voyage AI rerank API."""
+    """HTTP client for Voyage AI rerank API.
+    """
 
     name = 'voyage'
 
@@ -30,18 +31,18 @@ class Client:
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers with auth."""
+        """Build request headers with auth.
+        """
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
             }
 
     def available(self) -> bool:
-        """Return True when API key is set.
+        """True when the API key is set.
 
-        We do not probe the endpoint here because the rerank API costs
-        per call and a cheap probe would still bill. Treat the key as
-        the availability signal; failures surface at rerank time.
+        The endpoint is not probed: every rerank call bills, so the key
+        is the availability signal and failures surface at rerank time.
         """
         if self._availability_cache is not None:
             return self._availability_cache
@@ -50,10 +51,26 @@ class Client:
 
     def rerank(self, query: str, documents: list[str],
                top_k: int | None = None) -> list[tuple[int, float]]:
-        """Score (query, document) pairs via Voyage cross-encoder.
+        """Score (query, document) pairs with the Voyage cross-encoder.
 
-        Returns sorted (original_index, relevance_score) tuples.
-        Empty `documents` short-circuits without an HTTP call.
+        Parameters
+        ----------
+        query : str
+            Search text.
+        documents : list[str]
+            Candidates to score; empty returns [] with no HTTP call.
+        top_k : int or None, default None
+            Return only this many best pairs; None returns all.
+
+        Returns
+        -------
+        list[tuple[int, float]]
+            `(original_index, relevance_score)`, best first.
+
+        Raises
+        ------
+        RuntimeError
+            When the API answers with a non-200 status.
         """
         if not documents:
             return []
@@ -98,7 +115,8 @@ class Client:
             (int(d['index']), float(d['relevance_score'])) for d in items]
 
     def unavailable_message(self) -> str:
-        """Return error message when Voyage rerank is not available."""
+        """Return error message when Voyage rerank is not available.
+        """
         return (
             f'Voyage rerank not available at {self.endpoint}'
             f' -- set {config.VOYAGE_API_KEY} to enable reranking')

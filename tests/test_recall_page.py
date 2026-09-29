@@ -3,7 +3,7 @@
 `memman recall` prints `<id8> <score> <created_at> <author> <category> |
 <text>` per row in rank order, and `--basic` prints the same line
 without a score. The intent router, the meta block, the per-row signals
-and the deleted flags leave the page, and recall no longer counts
+and the deleted flags stay off the page, and recall counts no
 accesses.
 """
 
@@ -14,11 +14,13 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from importlib.resources import files as pkg_files
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.search.recall import run_recall
+from memman.store.backend import Backend
 from memman.store.db import open_db
 from memman.store.model import format_timestamp
 from memman.store.node import insert_insight
@@ -38,7 +40,8 @@ _LONG_CONTENT = 'zulu first line\nsecond line ' + 'y' * 300
 
 
 def _seed(data_dir: str, rows: list[tuple]) -> None:
-    """Insert `(insight, summary)` pairs into the default SQLite store."""
+    """Insert `(insight, summary)` pairs into the default SQLite store.
+    """
     db = open_db(str(pathlib.Path(data_dir) / 'data' / 'default'))
     try:
         for ins, summary in rows:
@@ -53,7 +56,8 @@ def _seed(data_dir: str, rows: list[tuple]) -> None:
 
 @pytest.fixture
 def page_rows(mm_runner):
-    """Four rows that each exercise one text rule of the page line."""
+    """Four rows that each exercise one text rule of the page line.
+    """
     _, data_dir = mm_runner
     _seed(data_dir, [
         (make_insight(
@@ -77,7 +81,8 @@ def page_rows(mm_runner):
 
 
 def _parse(stdout: str, pattern: re.Pattern) -> dict[str, dict]:
-    """Map each page line's id8 to its parsed fields, failing on a stray line."""
+    """Map each line's id8 to its parsed fields; fail on a stray line.
+    """
     rows: dict[str, dict] = {}
     for line in stdout.splitlines():
         match = pattern.match(line)
@@ -106,7 +111,7 @@ def test_scored_page_is_one_line_per_row_in_rank_order(page_rows):
 
 
 def test_page_text_prefers_the_summary(page_rows):
-    """Verify a row with a summary shows the summary, not its content.
+    """Verify a row with a summary shows the summary in place of its content.
 
     Mutation: always printing the content prefix.
     Oracle: the seeded summary string, which the content does not hold.
@@ -156,7 +161,7 @@ def test_page_joins_whitespace_inside_an_author(mm_runner):
         reads as author `Jane` and category `Doe`, and a line break in
         it splits the row across two lines.
     Oracle: hand-computed `Jane_Doe_Smith` from the seeded
-        `'Jane Doe\\nSmith'`, and the seeded category `fact`.
+        `'Jane Doe\nSmith'`, and the seeded category `fact`.
     """
     _, data_dir = mm_runner
     _seed(data_dir, [(make_insight(
@@ -283,8 +288,7 @@ def test_recall_return_carries_no_router_keys(backend):
     """Verify the recall return drops per-row intent and the router meta.
 
     Mutation: leaving `intent` on each row, `intent`, `intent_source`
-        or `hint` in meta, or the `traversed` count, which only ever
-        differed from `anchor_count` by the rows traversal added.
+        or `hint` in meta, or the `traversed` count.
     Oracle: the exact meta key set, and the absence of `intent` on the
         one returned row.
     """
@@ -298,7 +302,7 @@ def test_recall_return_carries_no_router_keys(backend):
 
 
 def test_insights_show_has_no_access_count(page_rows):
-    """Verify insights show no longer reports an access count.
+    """Verify insights show reports no access count.
 
     Mutation: leaving `access_count` in `insight_to_full_dict`.
     Oracle: the key set of one shown row.
@@ -310,7 +314,7 @@ def test_insights_show_has_no_access_count(page_rows):
 
 
 def test_log_stats_has_no_never_accessed(page_rows):
-    """Verify log list --stats no longer reports never-accessed rows.
+    """Verify log list --stats reports no never-accessed count.
 
     Mutation: leaving `never_accessed` in the stats printer or in
         `OpLogStats`.
@@ -323,12 +327,14 @@ def test_log_stats_has_no_never_accessed(page_rows):
 
 
 def _recall_lines(text: str) -> list[str]:
-    """Return the lines of `text` that name `memman recall`."""
+    """Return the lines of `text` that name `memman recall`.
+    """
     return [line for line in text.splitlines() if 'memman recall' in line]
 
 
 def _run_asset(name: str, payload: str, tmp_path: pathlib.Path) -> str:
-    """Run one shipped hook script and return its stdout."""
+    """Run one shipped hook script and return its stdout.
+    """
     script = str(pkg_files('memman.setup.assets').joinpath(f'claude/{name}'))
     done = subprocess.run(
         ['bash', script], check=True, input=payload,
@@ -384,8 +390,10 @@ def test_shipped_prose_names_no_deleted_recall_flag():
         assert not found, f'{name} names {found}'
 
 
-def _stamp(backend, insight_id: str, columns: dict) -> None:
-    """Test-only: set raw column values on one stored row."""
+def _stamp(
+        backend: Backend, insight_id: str, columns: dict[str, Any]) -> None:
+    """Test-only: set raw column values on one stored row.
+    """
     if isinstance(backend, SqliteBackend):
         assignments = ', '.join(f'{name} = ?' for name in columns)
         values = [

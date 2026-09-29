@@ -54,14 +54,10 @@ def model_notice(
         `UNROUTABLE_NOTICE` when no ZDR endpoint on a pinned vendor
         serves `model`; else `RETIRING_NOTICE` when `/models` carries an
         `expiration_date` for it; else ''.
-
-    Notes
-    -----
-    - A vendor slug is the ZDR tag before its first `/`, so
-      `google-vertex/us-south1` is `google-vertex`.
-    - An empty pin admits every vendor because the runtime client then
-      sends no `only` list.
     """
+    # A vendor slug is the ZDR tag before its first `/`, so
+    # `google-vertex/us-south1` is `google-vertex`. An empty pin admits
+    # every vendor because the runtime client then sends no `only` list.
     routed = any(
         endpoint['model_id'] == model
         and (not vendors or endpoint['tag'].split('/', 1)[0] in vendors)
@@ -185,14 +181,6 @@ def refresh_model_state(data_dir: str, *, force: bool) -> str | None:
         written.
     RuntimeError
         When a catalog carries no `data` list, raised the same way.
-
-    Notes
-    -----
-    - `model.state` holds `{model, checked_at, notice}`, `checked_at`
-      in epoch seconds.
-    - A failed fetch still restarts the clock, so an outage costs one
-      attempt per interval rather than one per drain. It keeps the
-      notice standing for this model and records '' for a new one.
     """
     endpoint = config.get_scoped(config.LLM_ENDPOINT, data_dir) or ''
     model = config.get_scoped(config.LLM_MODEL, data_dir)
@@ -207,6 +195,9 @@ def refresh_model_state(data_dir: str, *, force: bool) -> str | None:
     pin = config.get_scoped(config.LLM_PROVIDER_ONLY, data_dir) or ''
     vendors = frozenset(
         name.strip() for name in pin.split(',') if name.strip())
+    # A failed fetch still restarts the clock, so an outage costs one
+    # attempt per interval rather than one per drain. It keeps the
+    # standing notice for this model and records '' for a new one.
     notice = state.get('notice', '') if same_model else ''
     try:
         notice = fetch_model_notice(endpoint, model=model, vendors=vendors)

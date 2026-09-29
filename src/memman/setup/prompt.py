@@ -1,6 +1,8 @@
-"""Status output helpers for setup (ANSI-aware, non-interactive)."""
+"""Status output helpers for setup (ANSI-aware, non-interactive).
+"""
 
 import sys
+from typing import Any
 
 from memman.setup.detect import home_dir
 
@@ -8,15 +10,16 @@ COLOR_GREEN = '\033[32m'
 COLOR_DIM = '\033[2m'
 COLOR_RED = '\033[31m'
 COLOR_RESET = '\033[0m'
-SYM_OK = '✓'
-SYM_FAIL = '✗'
-SYM_DOT = '·'
+SYM_OK = '\u2713'
+SYM_FAIL = '\u2717'
+SYM_DOT = '\u00b7'
 
 _colors_inited = False
 
 
 def _init_colors() -> None:
-    """Clear ANSI codes when stdout is not a TTY."""
+    """Clear ANSI codes when stdout is not a TTY.
+    """
     global COLOR_GREEN, COLOR_DIM, COLOR_RED, COLOR_RESET, _colors_inited
     if _colors_inited:
         return
@@ -29,22 +32,25 @@ def _init_colors() -> None:
 
 
 def status_ok(label: str, detail: str) -> None:
-    """Print a green checkmark status line."""
+    """Print a green checkmark status line.
+    """
     _init_colors()
     print(f'  {COLOR_GREEN}{SYM_OK}{COLOR_RESET}'
           f' {label:<12s} {COLOR_DIM}{detail}{COLOR_RESET}')
 
 
 def status_updated(label: str, detail: str) -> None:
-    """Print a green checkmark with 'updated' note."""
+    """Print a green checkmark with 'updated' note.
+    """
     _init_colors()
     print(f'  {COLOR_GREEN}{SYM_OK}{COLOR_RESET}'
           f' {label:<12s} {COLOR_DIM}{detail}{COLOR_RESET}'
           f'  {COLOR_GREEN}updated{COLOR_RESET}')
 
 
-def status_error(label: str, err: object) -> None:
-    """Print a red cross status line."""
+def status_error(label: str, err: Any) -> None:
+    """Print a red cross status line.
+    """
     _init_colors()
     print(f'  {COLOR_RED}{SYM_FAIL}{COLOR_RESET}'
           f' {label:<12s} {COLOR_RED}{err}{COLOR_RESET}')
@@ -52,7 +58,8 @@ def status_error(label: str, err: object) -> None:
 
 def detection_line(detected: bool, display: str,
                    version: str, path: str) -> None:
-    """Print a detection result line."""
+    """Print a detection result line.
+    """
     _init_colors()
     display_path = path.replace(home_dir(), '~', 1)
     if detected:

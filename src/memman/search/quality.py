@@ -1,4 +1,5 @@
-"""Content quality signals for the remember pipeline."""
+"""Content quality signals for the remember pipeline.
+"""
 
 import re
 
@@ -20,7 +21,7 @@ TRANSIENT_PATTERNS: list[tuple[re.Pattern, str]] = [
         r'|redis|mysql|postgres|npm|yarn|docker|alpine|ubuntu'
         r'|debian|v?\d)\b)\w+:\d{2,}\b'),
         'function/symbol line reference'),
-    (re.compile(r'\d+→\d+'), 'line number correction'),
+    (re.compile(r'\d+\u2192\d+'), 'line number correction'),
     (re.compile(r'\bmemor(?:y|ies)\s*\[\s*\d+\s*\]', re.IGNORECASE),
         'back-reference'),
     (re.compile(r'\b[A-Z][A-Z _-]{4,}:\s+'),
@@ -33,7 +34,8 @@ TRANSIENT_PATTERNS: list[tuple[re.Pattern, str]] = [
 
 
 def check_content_quality(content: str) -> list[str]:
-    """Scan content for transient patterns and return warnings."""
+    """Scan content for transient patterns and return warnings.
+    """
     warnings = []
     for pattern, label in TRANSIENT_PATTERNS:
         if pattern.search(content):

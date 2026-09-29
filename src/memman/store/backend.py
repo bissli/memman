@@ -1,8 +1,8 @@
 """Backend Protocol surface.
 
 Defines `Backend`, the three sub-store Protocols (`NodeStore`,
-`MetaStore`, `Oplog`), and `RecallSession`. SQLite
-implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
+`MetaStore`, `Oplog`), and `RecallSession`. SQLite implements them in
+`store/sqlite.py`; Postgres in `store/postgres.py`.
 The work queue is process-global and SQLite-only (see
 `memman.queue`).
 
@@ -11,14 +11,14 @@ Distributed-shaping commitments baked into this Protocol surface:
 1. **Timestamp ownership at the boundary.** `nodes.insert(insight)`,
    `oplog.log(...)`, `nodes.stamp_enrich_attempted(id)`,
    `nodes.stamp_enriched(id)` accept no `created_at` argument.
-   Backends stamp these server-side -- SQLite via Python `datetime.now`,
-   Postgres via `now()`. Pipeline code never produces a timestamp that
-   lands in a database write.
+   Backends stamp these server-side: SQLite via Python `datetime.now`,
+   Postgres via `now()`, except `nodes.insert`, which takes the Python
+   clock on both. Pipeline code never produces a timestamp that lands
+   in a database write.
 
 2. **`Backend.transaction()` nesting contract.** Nested calls reuse
    the outer transaction (SAVEPOINT-like or no-op). Required by the
    nested `apply_all` write pattern.
-
 """
 
 import re
@@ -38,13 +38,21 @@ _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
 def _check_identifier(name: str) -> None:
-    """Reject SQL identifiers that are not safe to interpolate.
+    """Reject a name that is not a plain SQL identifier.
 
-    Some SQL constructs (`pragma table_info(<table>)` on SQLite, schema
-    and table names on Postgres) cannot be parameterized; the value is
-    interpolated as a literal. Reject anything that is not a plain
-    identifier so an unsanitized name cannot inject DDL. Shared by
-    both backends so the validation contract is one place.
+    Guards names that a query interpolates, since `pragma
+    table_info(<table>)` on SQLite and schema and table names on
+    Postgres cannot be parameterized.
+
+    Parameters
+    ----------
+    name : str
+        Candidate identifier.
+
+    Raises
+    ------
+    ConfigError
+        When `name` is not `[a-zA-Z_][a-zA-Z0-9_]*`.
     """
     if not _VALID_IDENTIFIER_RE.match(name):
         raise ConfigError(f'invalid SQL identifier: {name!r}')
@@ -52,7 +60,8 @@ def _check_identifier(name: str) -> None:
 
 @runtime_checkable
 class NodeStore(Protocol):
-    """Insight CRUD + lifecycle + statistics."""
+    """Insight CRUD + lifecycle + statistics.
+    """
 
     def insert(self, ins: Insight) -> None:
         """Insert a new insight. Backend stamps timestamps server-side.
@@ -60,11 +69,13 @@ class NodeStore(Protocol):
         ...
 
     def get(self, id: Id) -> Insight | None:
-        """Return one active insight by id, or None when absent."""
+        """Return one active insight by id, or None when absent.
+        """
         ...
 
     def get_include_deleted(self, id: Id) -> Insight | None:
-        """Return one insight by id, including soft-deleted rows."""
+        """Return one insight by id, including soft-deleted rows.
+        """
         ...
 
     def resolve_id(self, id_or_prefix: str) -> str:
@@ -79,22 +90,16 @@ class NodeStore(Protocol):
         -------
         str
             The full id when the argument is an exact id or a prefix
-            that matches exactly one row (including deleted and
-            replaced rows). Returns the argument unchanged when no
-            row matches, so the caller's existing not-found path fires.
+            that matches exactly one row, deleted and replaced rows
+            included. An exact id wins over a longer id it prefixes.
+            Returns the argument unchanged when no row matches, so the
+            caller's existing not-found path fires.
 
         Raises
         ------
         ValueError
             When the prefix matches two or more rows; the message names
             the prefix and the match count.
-
-        Notes
-        -----
-        - Exact match takes priority over prefix match: a full id that
-          is also a prefix of another row resolves to itself.
-        - Resolution scans all rows including deleted and replaced
-          ones; each command's own get applies its state filter.
         """
         ...
 
@@ -133,11 +138,9 @@ class NodeStore(Protocol):
 
         Notes
         -----
-        - The guard makes a row replaced at most once, which rules
-          out forks in the chain.
-        - A replaced row leaves every active read exactly as a
-          soft-deleted one does; `get_include_deleted` and
-          `has_row_with_queue_uuid` still see it.
+        - A replaced row leaves every active read as a soft-deleted
+          one does; `get_include_deleted` and `has_row_with_queue_uuid`
+          still see it.
         """
         ...
 
@@ -162,52 +165,58 @@ class NodeStore(Protocol):
         ...
 
     def update_enrichment(self, id: Id, *, summary: str) -> None:
-        """Store the enrichment summary for an insight."""
+        """Store the enrichment summary for an insight.
+        """
         ...
 
     def count_active(self) -> int:
-        """Count current insights: neither deleted nor replaced."""
+        """Count current insights: neither deleted nor replaced.
+        """
         ...
 
     def count_total(self) -> int:
-        """Count all insights, including soft-deleted."""
+        """Count all insights, including soft-deleted.
+        """
         ...
 
     def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
         """Return True if any insight, forgotten ones included, carries it.
 
-        The idempotency check for queue replays; runs unconditionally
-        for every drained row and answers "did this write land", so a
-        replaced or forgotten row counts. Backends implement it in
-        SQL so a null `queue_uuid` can never match.
+        Answers "did this write land" for queue replays, so a replaced
+        or forgotten row counts. Backends match in SQL, so a null
+        `queue_uuid` never matches.
         """
         ...
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
-        """Return (prompt_version, count) for active rows."""
+        """Return (prompt_version, count) for active rows.
+        """
         ...
 
     def get_all_active(self) -> list[Insight]:
-        """Return all active insights ordered by created_at desc."""
+        """Return all active insights ordered by created_at desc.
+        """
         ...
 
     def stats(self) -> NodeStats:
-        """Aggregate statistics."""
+        """Aggregate statistics.
+        """
         ...
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
-        """Persist an embedding vector + its model name.
+        """Persist an embedding vector and its model name.
 
         Backends bind the vector to their native storage type
-        (BLOB on SQLite via `serialize_vector`; pgvector(512) on
-        Postgres). `serialize_vector` / `deserialize_vector` stay
+        (BLOB on SQLite via `serialize_vector`; pgvector `vector(N)`
+        on Postgres). `serialize_vector` / `deserialize_vector` stay
         confined to the SqliteBackend.
         """
         ...
 
     def embedding_stats(self) -> tuple[int, int]:
-        """Return (total_active, embedded_count)."""
+        """Return (total_active, embedded_count).
+        """
         ...
 
     def enrichment_coverage(self) -> EnrichmentCoverage:
@@ -228,13 +237,12 @@ class NodeStore(Protocol):
         SQLite: keyed by `LENGTH(embedding)` byte count. Postgres:
         keyed by `vector_dims(embedding)` (the pgvector dim). A
         healthy store has one bucket. More than one bucket means a
-        dim mismatch -- the doctor consistency check flags this.
+        dim mismatch, which the doctor consistency check flags.
         """
         ...
 
     def stamp_enrich_attempted(self, id: Id) -> None:
-        """Mark an insight enrich-attempted. Backend stamps
-        `enrich_attempted_at` now.
+        """Mark an insight enrich-attempted, stamping `enrich_attempted_at`.
         """
         ...
 
@@ -257,20 +265,22 @@ class NodeStore(Protocol):
         ...
 
     def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
-        """Return ids of insights with NULL enrich_attempted_at."""
+        """Return ids of insights with NULL enrich_attempted_at.
+        """
         ...
 
     def get_active_ids(self) -> list[Id]:
-        """Return all active insight ids in creation order."""
+        """Return all active insight ids in creation order.
+        """
         ...
 
     def count_pending_enrich(self) -> int:
-        """Count active insights with NULL enrich_attempted_at."""
+        """Count active insights with NULL enrich_attempted_at.
+        """
         ...
 
     def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
-        """Return ids of attempted-but-unenriched (stranded) active
-        insights.
+        """Ids of stranded active insights: attempted, never enriched.
         """
         ...
 
@@ -286,38 +296,46 @@ class NodeStore(Protocol):
         ...
 
     def count_stale_insights(self, active_pv: str) -> int:
-        """Count the rows `iter_stale_insight_ids` returns."""
+        """Count the rows `iter_stale_insight_ids` returns.
+        """
         ...
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
-        """Clear enriched_at and enrich_attempted_at for the given ids."""
+        """Clear enriched_at and enrich_attempted_at for the given ids.
+        """
         ...
 
 
 @runtime_checkable
 class MetaStore(Protocol):
-    """Key-value metadata table."""
+    """Key-value metadata table.
+    """
 
     def get(self, key: str) -> str | None:
-        """Read a meta value, or None when absent."""
+        """Read a meta value, or None when absent.
+        """
         ...
 
     def set(self, key: str, value: str) -> None:
-        """Write a meta value."""
+        """Write a meta value.
+        """
         ...
 
     def delete(self, key: str) -> None:
-        """Remove a meta key entirely. No-op when absent."""
+        """Remove a meta key entirely. No-op when absent.
+        """
         ...
 
     def keys(self) -> list[str]:
-        """Return all meta keys in arbitrary order."""
+        """Return all meta keys in arbitrary order.
+        """
         ...
 
 
 @runtime_checkable
 class Oplog(Protocol):
-    """Operation log."""
+    """Operation log.
+    """
 
     def log(
             self, *, operation: str, insight_id: Id, detail: str,
@@ -334,21 +352,25 @@ class Oplog(Protocol):
         ...
 
     def maintenance_step(self) -> None:
-        """Per-store backend maintenance pass (vacuum/trim)."""
+        """Per-store backend maintenance pass (vacuum/trim).
+        """
         ...
 
     def trim_by_age(self) -> int:
-        """Delete oplog rows older than 180 days. Returns count."""
+        """Delete oplog rows past the retention window; return the count.
+        """
         ...
 
     def recent(
             self, *, limit: int = 20,
             since: str = '') -> list[OpLogEntry]:
-        """Return the most-recent N oplog entries."""
+        """Return the most-recent N oplog entries.
+        """
         ...
 
     def stats(self, *, since: str = '') -> OpLogStats:
-        """Operation counts plus the current insight count."""
+        """Operation counts plus the current insight count.
+        """
         ...
 
 
@@ -366,19 +388,15 @@ class RecallSession(Protocol):
     inside the `with recall_session()` block. SQLite serves it from
     an in-process embedding matrix built once per session; Postgres
     serves it via HNSW with `embedding <=>`. Similarity for
-    non-anchor nodes comes from `similarities` -- the pipeline never
-    holds a whole-store embedding dict. `keyword_counts` is the same story
-    for tokens: the pipeline never tokenizes the store.
+    non-anchor nodes comes from `similarities`, and `keyword_counts`
+    serves tokens. The pipeline holds neither a whole-store embedding
+    dict nor a whole-store tokenization.
 
     Notes
     -----
-    - There is deliberately no persisted read cache behind this
-      Protocol. A materialized snapshot shipped once and froze
-      permanently, because its writer stopped above a row cap while
-      its reader had no staleness check. Any future cache here needs
-      a refresh trigger on every mutation path AND a reader-side
-      validity check that detects drift, or it does not get to be
-      persisted.
+    - No persisted read cache sits behind this Protocol: a snapshot
+      goes stale once its writer stops, and a reader has no drift
+      check.
     """
 
     def vector_anchors(
@@ -386,16 +404,20 @@ class RecallSession(Protocol):
             k: int = 10) -> list[tuple[Id, float]]:
         """Top-k (id, similarity) anchors. Cosine in (0, 1].
 
-        Notes
-        -----
-        - Positives only, matching `similarities`: a row pointing
-          away from the query is not an entry point into the graph.
-          The sign boundary is the ONLY floor here, and it is the
-          only one that can be, because a fixed cosine means
-          different things under different embedding models while an
-          orthogonal row is orthogonal under all of them.
-        - So a store with fewer than k positive-cosine rows returns
-          fewer than k anchors, by design.
+        Parameters
+        ----------
+        query_vec : list[float]
+            Query embedding.
+        k : int
+            Maximum anchors returned.
+
+        Returns
+        -------
+        list[tuple[Id, float]]
+            Positive-cosine rows only, so a store with fewer than k of
+            them returns fewer than k anchors. The sign boundary is
+            the only floor: a fixed cosine floor would mean different
+            things under different embedding models.
         """
         ...
 
@@ -414,12 +436,6 @@ class RecallSession(Protocol):
             Cosine in (0, 1] per id. Non-positive similarities are
             omitted, so a missing key means "not similar", and
             callers read it with `.get(id, 0.0)`.
-
-        Notes
-        -----
-        - Computed where the vectors already live -- one matmul on
-          SQLite, one `embedding <=>` query on Postgres -- so the
-          pipeline never ships N x dim floats to compute N scalars.
         """
         ...
 
@@ -442,26 +458,17 @@ class RecallSession(Protocol):
 
         Notes
         -----
-        - The count is over the insight's content, the same set
-          `keyword.insight_tokens` builds, and it is the numerator of
-          `kw_score`. A backend that returns a
-          different count changes `signals.keyword` and the rerank
-          blend together.
-        - NON-ASCII TEXT DIVERGES ON SQLITE, deliberately and
-          measurably. `keyword._WORD_RE` is `[a-zA-Z0-9]+`, so it
-          splits a run at any other character; FTS5 `unicode61`
-          keeps a whole Unicode word. `naive` spelled with an
-          i-diaeresis is one FTS term and two Python tokens. A stored
-          row is affected only if it carries such a run, so the reach is narrow, but it is not nil. Postgres
-          matches Python exactly, and by construction rather than by
-          agreement: it stores the set `insight_tokens` built at
-          write time. Closing the gap means changing
-          `_WORD_RE`, which restales every stored `kw_tokens` set, so
-          it is its own change with its own sweep -- not this one.
-        - Counted where the text already lives -- k index probes on
-          SQLite, one indexed query on Postgres -- so the pipeline
-          never tokenizes the whole store to score one query, and
-          neither backend tokenizes a row at recall time at all.
+        - The count is over the same token set as
+          `keyword.insight_tokens` and is the numerator of
+          `kw_score`, so a backend that counts differently shifts
+          `signals.keyword` and the rerank blend.
+        - Non-ASCII text diverges on SQLite. `keyword._WORD_RE` is
+          `[a-zA-Z0-9]+` and splits a run at any other character,
+          while FTS5 `unicode61` keeps a whole Unicode word, so
+          `naive` with an i-diaeresis is one FTS term and two Python
+          tokens. Postgres matches Python exactly. Closing the gap
+          means changing `_WORD_RE`, which restales every stored
+          `kw_tokens` set.
         """
         ...
 
@@ -471,8 +478,8 @@ class Backend(Protocol):
     """Per-store handle exposing the verb surface.
 
     Yielded by `factory.open_backend(store, data_dir)`. Owns its own
-    connection (SQLite file / Postgres connection from a pool). Sub-stores
-    (`nodes`/`meta`/`oplog`) are bound to the same connection
+    connection (SQLite file or Postgres connection).
+    Sub-stores (`nodes`/`meta`/`oplog`) are bound to the same connection
     so they share the active transaction and read-after-write
     visibility.
     """
@@ -483,8 +490,9 @@ class Backend(Protocol):
 
     @property
     def path(self) -> str:
-        """Backend-specific identifier (file path on SQLite, DSN+schema
-        on Postgres). Used for log lines and `memman status`.
+        """Backend identifier: file path on SQLite, DSN and schema on Postgres.
+
+        Used for log lines and `memman status`.
         """
         ...
 
@@ -557,13 +565,12 @@ class Backend(Protocol):
         SQLite: `update insights set embedding = embedding_pending,
         embedding_pending = null`. Postgres: drop `embedding`,
         rename `embedding_pending` to `embedding` in one
-        transaction. Writes the new fingerprint as part of the
-        same transaction.
+        transaction. The caller writes the new fingerprint.
         """
         ...
 
     def swap_abort(self) -> None:
-        """Drop or null `embedding_pending` and clear all swap meta.
+        """Drop or null `embedding_pending`; the caller clears swap meta.
         """
         ...
 
@@ -583,21 +590,22 @@ class Backend(Protocol):
         `'integrity-check'` that detects a keyword index whose terms
         have drifted from the rows they index; a handle that cannot
         write reports the probe as not run rather than as drift.
-        Postgres: connectivity probe + schema-presence verification
+        Postgres: connectivity probe and schema-presence verification
         (HNSW index validity is checked separately at reindex time).
 
-        Returns a dict shaped `{'ok': bool, 'detail': str}` -- doctor
-        composes this with sub-store verbs to assemble its overall
-        report.
+        Returns a dict shaped `{'ok': bool, 'detail': str}`. Doctor
+        composes it with sub-store verbs to assemble its overall report.
         """
         ...
 
     def close(self) -> None:
-        """Close the backend's connection."""
+        """Close the backend's connection.
+        """
         ...
 
     def __enter__(self) -> Self:
-        """Return self so `with open_backend(...) as backend:` works."""
+        """Return self so `with open_backend(...) as backend:` works.
+        """
         ...
 
     def __exit__(
@@ -605,7 +613,8 @@ class Backend(Protocol):
             exc_type: type[BaseException] | None,
             exc: BaseException | None,
             tb: TracebackType | None) -> None:
-        """Close the backend on context exit."""
+        """Close the backend on context exit.
+        """
         ...
 
     def start_run(self) -> int | None:

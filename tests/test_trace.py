@@ -25,7 +25,8 @@ from memman.llm.client import MemmanLLMClient
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
-    """Redirect HOME + Path.home to a tmp_path (mirrors test_scheduler_setup)."""
+    """Redirect HOME + Path.home to a tmp_path (mirrors test_scheduler_setup).
+    """
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     return tmp_path
@@ -33,13 +34,15 @@ def fake_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def debug_on(monkeypatch):
-    """Turn trace mode on for the duration of the test."""
+    """Turn trace mode on for the duration of the test.
+    """
     monkeypatch.setenv('MEMMAN_DEBUG', '1')
 
 
 @pytest.fixture(autouse=True)
 def _reset_trace_state():
-    """Remove any trace handlers the previous test left on the memman logger."""
+    """Remove any trace handlers the previous test left on the memman logger.
+    """
     yield
     logger = logging.getLogger('memman')
     for h in list(logger.handlers):
@@ -212,7 +215,8 @@ def test_autouse_isolation_keeps_trace_log_off_the_real_home():
 
 
 class TestRedaction:
-    """redact_headers and redact_dsn strip secrets from trace output."""
+    """redact_headers and redact_dsn strip secrets from trace output.
+    """
 
     def test_redact_headers_strips_authorization(self):
         """Verify redact_headers() masks Authorization and keeps other headers.
@@ -262,7 +266,7 @@ class TestRedaction:
         assert out['Api-Key'] == '***REDACTED***'
 
     def test_redact_headers_does_not_mutate_input(self):
-        """Verify redact_headers() returns a new dict and leaves the input alone.
+        """Verify redact_headers() returns a new dict, input untouched.
 
         Mutation: masking values in place on the caller's dict, which corrupts
             the live request headers.

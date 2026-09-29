@@ -10,7 +10,8 @@ from memman.exceptions import ConfigError as _RuntimeConfigError
 
 
 class BackendError(Exception):
-    """Base class for all backend errors."""
+    """Base class for all backend errors.
+    """
 
 
 class ConfigError(BackendError, _RuntimeConfigError):

@@ -9,13 +9,20 @@ stores produce a clean exit message instead of a bare traceback.
 
 import pytest
 from click import ClickException
+from memman.embed import fingerprint as fp_mod
+from memman.embed import registry as ec_registry
 from memman.session import active_store
+from memman.store.factory import open_backend
 
 
 def test_active_store_wraps_backend_config_error_from_open(
         tmp_path, env_file, monkeypatch):
     """A misconfigured store (postgres backend, no DSN) raises
     `ClickException` instead of leaking the backend `ConfigError`.
+
+    Mutation: dropping `ConfigError` from the caught tuple in
+    `active_store`, so the missing-DSN error escapes as a traceback.
+    Oracle: `pytest.raises(ClickException)` naming the store or the DSN.
     """
     env_file('MEMMAN_BACKEND_oops', 'postgres')
     data_dir = str(tmp_path / 'memman')
@@ -50,13 +57,14 @@ def test_active_store_yields_store_bound_ec_per_store(
     """Two stores with different stored fingerprints in one process
     each yield their own bound embedder, regardless of env-active.
 
-    Per-store sovereignty: the env var
-    `MEMMAN_EMBED_PROVIDER` no longer drives recall/remember in an
-    existing store; the store's `meta.embed_fingerprint` does.
+    The store's `meta.embed_fingerprint` picks the embedder, never the
+    `MEMMAN_EMBED_PROVIDER` env var.
+
+    Mutation: `bound_embedder` resolving the provider from the env
+    instead of the store's fingerprint, so both stores get one client.
+    Oracle: two stores seeded with hand-picked fingerprints (8 and 16
+    dims); each bound embedder reports its own provider and dim.
     """
-    from memman.embed import fingerprint as fp_mod
-    from memman.embed import registry as ec_registry
-    from memman.store.factory import open_backend
 
     data_dir = str(tmp_path / 'memman')
 
@@ -95,7 +103,8 @@ def test_active_store_yields_store_bound_ec_per_store(
 
 
 class _StubEC:
-    """Minimal embed client stub for per-store binding tests."""
+    """Minimal embed client stub for per-store binding tests.
+    """
 
     def __init__(self, *, provider: str, model: str, dim: int) -> None:
         self.provider = provider

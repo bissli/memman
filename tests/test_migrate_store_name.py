@@ -12,8 +12,12 @@ migration touch a Postgres schema, so both must skip such names under
 import sqlite3
 from pathlib import Path
 
+import memman.migrate as mig
 import pytest
-from memman.store.db import _BASELINE_SCHEMA
+from memman.migrate import inspect_target_schemas
+from memman.store.backend import _check_identifier
+from memman.store.db import _BASELINE_SCHEMA, portable_store_name
+from memman.store.db import valid_store_name
 from memman.store.errors import ConfigError
 from tests.conftest import _set_env_file_value, invoke
 
@@ -26,7 +30,8 @@ def runner(mm_runner):
 
 
 def _seed_store(data_dir, name, dim=512):
-    """Create a migratable SQLite store carrying one insight."""
+    """Create a migratable SQLite store carrying one insight.
+    """
     sdir = Path(data_dir) / 'data' / name
     sdir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(sdir / 'memman.db'))
@@ -55,8 +60,6 @@ def _stub_postgres(monkeypatch, *, preflight=None):
     Without the DSN the command exits at its own missing-DSN gate,
     which would let these tests pass while the crash is untouched.
     """
-    import memman.migrate as mig
-
     _set_env_file_value('MEMMAN_DEFAULT_POSTGRES_DSN', FAKE_DSN)
     monkeypatch.setattr(
         mig, 'preflight', preflight or (lambda dsn: {'select_1': True}))
@@ -209,8 +212,6 @@ def test_leading_digit_store_name_is_also_unhostable(runner, monkeypatch):
     Oracle: `valid_store_name('9lives')` is True, so a guard keyed on
     anything but `_store_schema` lets it through.
     """
-    from memman.store.db import valid_store_name
-
     assert valid_store_name('9lives')
 
     _, data_dir = runner
@@ -258,8 +259,6 @@ def test_inspect_target_schemas_raises_before_it_connects():
     Oracle: ConfigError, raised against a DSN pointing at a closed
     port -- a connection attempt would surface OperationalError.
     """
-    from memman.migrate import inspect_target_schemas
-
     with pytest.raises(ConfigError):
         inspect_target_schemas(
             'postgresql://nobody@127.0.0.1:1/nodb', ['demo-v3'])
@@ -281,8 +280,6 @@ def test_migrate_to_sqlite_refuses_unhostable_name(runner, monkeypatch):
     Oracle: no migration plan is printed at all, and the message
     carries the portable suggestion `demo_v3`.
     """
-    from tests.conftest import _set_env_file_value
-
     _, data_dir = runner
     _set_env_file_value('MEMMAN_BACKEND_demo-v3', 'postgres')
     _set_env_file_value('MEMMAN_POSTGRES_DSN_demo-v3', FAKE_DSN)
@@ -304,15 +301,12 @@ def test_migrate_to_sqlite_refuses_unhostable_name(runner, monkeypatch):
 def test_portable_suggestion_is_always_creatable():
     """Every suggestion clears both name rules, not just the SQL one.
 
-    Mutation: rewriting only the hyphen (the first implementation),
-    which returned `default.bak` unchanged -- telling the operator to
-    create a name `memman store create` rejects.
+    Mutation: rewriting only the hyphen, which leaves `default.bak`
+    unchanged -- telling the operator to create a name `memman store
+    create` rejects.
     Oracle: `_check_identifier` and `valid_store_name` both accept
     the output for every input, including a dotted directory name.
     """
-    from memman.store.backend import _check_identifier
-    from memman.store.db import portable_store_name, valid_store_name
-
     for name in ['demo-v3', '9lives', 'default.bak', 'demo v3',
                  '_x', 'x.y-z 1', '']:
         suggestion = portable_store_name(name)
@@ -392,9 +386,9 @@ def test_refusal_quotes_the_actual_reason_not_a_guess(runner, monkeypatch):
     """A too-long name is refused for length, not for its characters.
 
     `_store_schema` rejects on character class AND on length. Asserting
-    a reason instead of quoting the raised one told the owner of a
-    60-character name that it failed a pattern it matches, and offered
-    the identical name as the remedy.
+    a guessed reason instead of quoting the raised one would tell the
+    owner of a 60-character name that it fails a pattern it matches,
+    and offer the identical name as the remedy.
 
     Mutation: hardcoding the refusal text rather than passing through
     the `ConfigError` message.

@@ -55,9 +55,8 @@ def json_out(result: subprocess.CompletedProcess[str]) -> dict:
 def _walk(data: Any, path: str) -> Any:
     """Walk a dotted/indexed path through nested dicts/lists.
 
-    Mirrors jq filters used in the bash script. `results.0.action` goes
-    `data['results'][0]['action']`. Raises KeyError/IndexError if the
-    path is absent (matches jq's failure mode under `-r`).
+    `results.0.action` reads `data['results'][0]['action']`. Raises
+    KeyError or IndexError if the path is absent.
     """
     cur = data
     for token in path.split('.'):

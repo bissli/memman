@@ -9,12 +9,9 @@ Notes
 - There is deliberately no derived read artifact on this path: a
   materialized copy needs its own staleness check, and without one
   recall serves deleted rows and hides live ones.
-- Vector work stays behind `RecallSession`: `vector_anchors` for the
-  top-k and `similarities` for the per-candidate cosine. This module
-  never holds a whole-store embedding dict.
-- Keyword work stays there too, behind `keyword_counts`. This module
-  never tokenizes the store: the count comes back per id and fills
-  `kw_score` directly.
+- Vector work (`vector_anchors`, `similarities`) and keyword work
+  (`keyword_counts`) stay behind `RecallSession`. This module never
+  holds a whole-store embedding dict and never tokenizes the store.
 """
 
 import logging
@@ -22,6 +19,7 @@ from collections import Counter
 from typing import Any
 
 from memman import trace
+from memman.rerank import voyage
 from memman.search.keyword import keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
@@ -38,16 +36,10 @@ MIN_RERANK_TOKENS = 2
 #   the weights sum to 1.0 and `score` spans one range. Both hold only
 #   to within a float ulp, and `sim_score` is an unclamped cosine that
 #   can exceed 1 by an ulp.
-# - The raw row is the four-weight table's GENERAL row with `w_ent`
-#   deleted and the survivors untouched. It carries that table's
-#   direction and is not a measured optimum.
+# - The raw row is not a measured optimum.
 # - The division is computed rather than written out because no
 #   quotient here has an exact float literal, and a rounded literal
 #   turns the row as well as scaling it.
-# - `score` is NOT comparable across the rerank shortlist boundary.
-#   When the pool exceeds `RERANK_SHORTLIST` the cross-encoder
-#   overwrites the head's scores while the tail keeps these blended
-#   values; a smaller pool is overwritten whole, leaving no tail.
 _RERANK_WEIGHTS_RAW: tuple[float, float, float] = (0.25, 0.45, 0.15)
 
 RERANK_WEIGHTS: tuple[float, float, float] = tuple(
@@ -73,41 +65,36 @@ def run_recall(
     limit : int
         Result cap; `limit <= 0` means unbounded.
     rerank : bool, default False
-        Re-score the shortlist with the cross-encoder (see Notes).
+        When True and the query has more than `MIN_RERANK_TOKENS`
+        tokens, the top `RERANK_SHORTLIST` candidates are re-scored by
+        the configured Voyage reranker. On reranker failure the
+        baseline ordering is kept.
 
     Returns
     -------
     dict[str, Any]
         `{'results': [...], 'meta': {...}}`. Each result carries
         `insight`, `score`, `via` and `signals`; `meta` carries
-        `anchor_count` and `reranked`.
+        `anchor_count` and `reranked`. Candidates are exactly the fused
+        anchors, in relevance order at every `limit`, so the first `n`
+        of a `limit`-`m` recall are the `limit`-`n` recall.
 
     Notes
     -----
-    - Reads live storage on every call: the candidate universe is
-      `nodes.get_all_active()`, so a row the store has deleted or
-      replaced cannot be returned and a row it holds as current
-      cannot be hidden.
-    - The candidates are exactly the fused anchors.
-    - The keyword and recency channels take `ANCHOR_TOP_K` rows each.
-      The vector channel takes at least `RERANK_SHORTLIST`, so the
-      reranker sees up to a full shortlist of query neighbors.
     - `signals['anchor']` is the min-max of the fused RRF score: the
       one term that carries recency into `score`, so a recent row with
       no keyword or vector match still outranks an older one.
-    - When `rerank=True` and the query has more than
-      `MIN_RERANK_TOKENS` tokens, the top `RERANK_SHORTLIST`
-      candidates by multi-signal score are re-scored by the
-      configured Voyage reranker. On reranker failure the baseline
-      ordering is preserved.
-    - Rows come back in relevance order at every `limit`, so the
-      first `n` of a `limit`-`m` recall are the `limit`-`n` recall.
-      Nothing re-sorts after the limit slice.
+    - `score` is NOT comparable across the rerank shortlist boundary.
+      When the pool exceeds `RERANK_SHORTLIST` the cross-encoder
+      overwrites the head's scores while the tail keeps the blended
+      values; a smaller pool is overwritten whole, leaving no tail.
     """
     # Hoisted once: `is_enabled` can fall through to a file read, so
     # calling it per event site is a hot-path regression.
     enabled = trace.is_enabled()
 
+    # The vector channel takes at least a full rerank shortlist, so the
+    # reranker sees up to a shortlist of query neighbors.
     anchor_k = ANCHOR_TOP_K
     vector_k = max(RERANK_SHORTLIST, anchor_k)
 
@@ -119,12 +106,8 @@ def run_recall(
     sim_cache: dict[str, float] = {}
     keyword_counts: dict[str, int] = {}
     with backend.recall_session() as session:
-        # Notes:
-        # - Counted where the text lives -- one FTS5 probe per token
-        #   on SQLite -- rather than tokenizing every active row
-        #   per request.
-        # - This IS `kw_score`'s numerator, so the scoring loop
-        #   needs no whole-store token cache.
+        # Counted where the text lives (one FTS5 probe per token on
+        # SQLite) so no request tokenizes every active row.
         try:
             keyword_counts = session.keyword_counts(query_tokens)
         except Exception as exc:
@@ -248,7 +231,6 @@ def run_recall(
         shortlist_size = min(RERANK_SHORTLIST, len(results))
         if shortlist_size >= 2:
             try:
-                from memman.rerank import voyage
                 rerank_client = voyage.Client()
                 shortlist = results[:shortlist_size]
                 docs = [r['insight'].content for r in shortlist]

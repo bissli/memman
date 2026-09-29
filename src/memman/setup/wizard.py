@@ -1,39 +1,27 @@
 """Interactive install wizard for `memman install`.
 
-Pure-click TUI -- no questionary / prompt_toolkit. Three visible
-features today:
+A click-only TUI that collects the values `memman install` needs and
+returns them for the env file. It never overrides an existing env-file
+value. `setup.claude.run_install` rejects flag-vs-file conflicts before
+the wizard runs.
 
-1. LLM endpoint selection. memman speaks one wire protocol (OpenAI's
-   `/chat/completions`). The wizard prompts for a single endpoint URL
-   (`MEMMAN_LLM_ENDPOINT`); OpenRouter is the default, and any other
-   OpenAI-compat endpoint (Anthropic at `/v1`, OpenAI, Gemini's
-   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. On
-   OpenRouter, `collect_install_knobs` seeds the shipped model from
-   `INSTALL_DEFAULTS` with no prompt; on any other endpoint the
-   operator types the model slug (no shared model catalog exists for
-   non-OR vendors).
-
-2. Mandatory-secret prompting. The embed provider's API key (when one
-   is required) and the LLM endpoint's API key (required for any
-   non-loopback endpoint) are prompted with masked input when missing
-   from both the env file and the shell.
-
-3. Backend selection (sqlite | postgres). Postgres is hidden until
-   the `memman[postgres]` extras are importable. Until then, only
-   sqlite is selectable -- the wizard skips the prompt entirely and
-   writes `MEMMAN_DEFAULT_BACKEND=sqlite` straight through, avoiding
-   a one-option confirmation prompt.
-
-The wizard writes per-store dispatch keys: `MEMMAN_DEFAULT_BACKEND`
-(and `MEMMAN_DEFAULT_POSTGRES_DSN` for postgres) plus
-`MEMMAN_BACKEND_default` (and `MEMMAN_POSTGRES_DSN_default` for postgres)
-for the freshly-created `default` store.
-
-Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips all
-prompts and uses flag values + defaults. The wizard never silently
-overrides an existing env-file value; flag-vs-file conflicts are
-handled by the caller in `setup.claude.run_install` before the wizard
-is invoked, with a clear message pointing at `memman config set`.
+Notes
+-----
+- LLM endpoint: one URL (`MEMMAN_LLM_ENDPOINT`) for any OpenAI-compatible
+  `/chat/completions` server. OpenRouter is the default and takes the
+  shipped model from `INSTALL_DEFAULTS` with no prompt. Any other
+  endpoint prompts for a model slug.
+- Secrets: the embed provider's API key (when one is required) and the
+  LLM endpoint's API key (required off loopback) are prompted with
+  masked input when both the env file and the shell lack them.
+- Backend: postgres is offered only when the `memman[postgres]` extras
+  import. Without them the wizard writes `MEMMAN_DEFAULT_BACKEND=sqlite`
+  with no prompt.
+- Output keys: `MEMMAN_DEFAULT_BACKEND` and `MEMMAN_BACKEND_default`,
+  plus `MEMMAN_DEFAULT_POSTGRES_DSN` and `MEMMAN_POSTGRES_DSN_default`
+  for postgres.
+- Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips every
+  prompt and uses flag values and defaults.
 """
 
 from __future__ import annotations
@@ -61,21 +49,29 @@ def run_wizard(
         no_wizard: bool = False) -> dict[str, str]:
     """Drive the install wizard and return values to merge into the env file.
 
-    The returned dict contains only keys the wizard chose / collected.
-    Caller is responsible for merging this dict into `~/.memman/env`
-    via `_write_env_keys` BEFORE `check_prereqs` runs, so the prereq
-    check sees the secrets in the file layer.
+    The caller merges the result into `~/.memman/env` with
+    `_write_env_keys` before `check_prereqs` runs, so the prereq check
+    sees the collected secrets.
 
-    Args:
-        data_dir: base data directory; the env file lives at <data_dir>/env.
-        backend: explicit `--backend` flag value, or None when unset.
-        pg_dsn: explicit `--pg-dsn` flag value, or None when unset.
-        llm_endpoint: explicit `--llm-endpoint` flag value, or None.
-        embed_provider: explicit `--embed-provider` flag value, or None.
-        no_wizard: when True, skip all prompts (use flags + defaults).
+    Parameters
+    ----------
+    data_dir : str
+        Base data directory; the env file lives at <data_dir>/env.
+    backend : str | None
+        Explicit `--backend` flag value, or None when unset.
+    pg_dsn : str | None
+        Explicit `--pg-dsn` flag value, or None when unset.
+    llm_endpoint : str | None
+        Explicit `--llm-endpoint` flag value, or None.
+    embed_provider : str | None
+        Explicit `--embed-provider` flag value, or None.
+    no_wizard : bool
+        True skips all prompts (flags and defaults only).
 
     Returns
-        Dict of env-file rows the wizard collected, e.g.
+    -------
+    dict[str, str]
+        Env-file rows the wizard collected, e.g.
         `{MEMMAN_DEFAULT_BACKEND: 'sqlite',
         MEMMAN_BACKEND_default: 'sqlite'}`.
     """
@@ -113,7 +109,7 @@ def run_wizard(
             interactive=interactive)
         if dsn:
             out[config.DEFAULT_PG_DSN] = dsn
-            out[config.env_key_for('postgres', 'DSN', 'default')] = dsn
+            out[config.POSTGRES_DSN_FOR('default')] = dsn
 
     if interactive and not out:
         click.echo(click.style(
@@ -129,16 +125,24 @@ def _collect_secrets(
         interactive: bool) -> dict[str, str]:
     """Prompt for missing embed-side mandatory secrets when interactive.
 
-    Skips silently when the file has the key OR when the shell exports
-    the MEMMAN-prefixed name (which seeds the file via
-    `collect_install_knobs` anyway). When only the vendor-native name
-    is exported (e.g. `VOYAGE_API_KEY`), the wizard announces the
-    detection and shows a masked prompt with the native value as the
-    default -- never silently captures cross-tool shell variables.
-    Non-interactive runs return an empty dict and let the existing
-    prereq check raise `<KEY> is required ...`. The set of mandatory
-    keys is computed from `required_install_keys(embed)`; experimental
-    providers return an empty set (no prompts).
+    Parameters
+    ----------
+    file_values : dict[str, str]
+        The env file as parsed before the wizard ran.
+    embed : str
+        Embed provider; `required_install_keys(embed)` names the
+        mandatory keys. An experimental provider has none.
+    interactive : bool
+        False returns `{}`, and the prereq check raises
+        `<KEY> is required ...` later.
+
+    Returns
+    -------
+    dict[str, str]
+        Secrets the user typed. A key already in the file, or exported
+        in the shell under its MEMMAN-prefixed name, is skipped. A key
+        exported only under its vendor-native name (e.g.
+        `VOYAGE_API_KEY`) gets a masked prompt defaulting to that value.
     """
     out: dict[str, str] = {}
     if not interactive:
@@ -161,12 +165,11 @@ def _collect_secrets(
 
 
 def _native_only_value(key: str) -> str:
-    """Return the shell value of `key`'s native fallback when MEMMAN- is unset.
+    """Shell value of `key`'s vendor-native fallback variable.
 
-    Returns '' when the key has no registered native fallback or when
-    the native shell variable is empty. The MEMMAN-prefixed shell var
-    is NOT consulted -- callers must do that check first and treat a
-    set MEMMAN- value as a silent-skip case.
+    Returns '' when the key has no registered native fallback or the
+    native variable is empty. The MEMMAN-prefixed shell variable is not
+    consulted, so a caller checks it first.
     """
     native_name = config.NATIVE_INSTALL_KEY_FALLBACKS.get(key)
     if not native_name:
@@ -181,18 +184,25 @@ def _prompt_with_native_default(
         source_key: str | None = None) -> str:
     """Announce a detected native shell key and prompt with it as default.
 
-    `key` is the memman-prefixed env name being collected (shown in the
-    prompt). `source_key` is the memman-prefixed name whose native
-    fallback supplied `native_value`; defaults to `key` for the common
-    direct-mapping case (`MEMMAN_VOYAGE_API_KEY` <- `VOYAGE_API_KEY`).
-    The OpenRouter LLM cascade passes `source_key=OPENROUTER_API_KEY`
-    because the detected native key (`OPENROUTER_API_KEY`) seeds a
-    different memman key (`MEMMAN_LLM_API_KEY`).
+    The prompt is masked. The printed hint names the native variable, so
+    a blank Enter is auditable.
 
-    Caller has already verified `native_value` is non-empty and the
-    MEMMAN-prefixed name is unset. The prompt stays masked so the
-    default value isn't echoed; the printed hint names the detected
-    native variable so a blank Enter is auditable.
+    Parameters
+    ----------
+    key : str
+        MEMMAN-prefixed env name being collected, shown in the prompt.
+    native_value : str
+        Non-empty native shell value, offered as the default.
+    source_key : str | None
+        MEMMAN-prefixed name whose native fallback supplied
+        `native_value`. None means `key`. The OpenRouter cascade passes
+        `OPENROUTER_API_KEY` because that native key seeds
+        `MEMMAN_LLM_API_KEY`.
+
+    Returns
+    -------
+    str
+        The stripped value the user entered or accepted.
     """
     native_name = config.NATIVE_INSTALL_KEY_FALLBACKS[source_key or key]
     click.echo('')
@@ -210,14 +220,21 @@ def _select_llm_endpoint(
         flag: str | None,
         file_values: dict[str, str],
         interactive: bool) -> tuple[str, bool]:
-    """Resolve the LLM endpoint URL and report whether the user supplied it.
+    """Resolve the LLM endpoint URL: flag, then file, then prompt or default.
 
-    Returns `(endpoint, user_supplied)`. `user_supplied` is True when
-    the value came from `--llm-endpoint` or an interactive prompt --
-    i.e., something the wizard should persist to the env file as
-    `MEMMAN_LLM_ENDPOINT`. False when the value already lived in the
-    file or when the wizard is just naming the default headlessly (in
-    which case `INSTALL_DEFAULTS` writes it later in the install flow).
+    Returns
+    -------
+    tuple[str, bool]
+        `(endpoint, user_supplied)`. `user_supplied` is True for the
+        `--llm-endpoint` flag or a prompt answer, which the wizard
+        persists as `MEMMAN_LLM_ENDPOINT`. False for a file value or the
+        headless default, which `INSTALL_DEFAULTS` writes later.
+
+    Raises
+    ------
+    click.ClickException
+        The flag is not an http(s) URL, or the prompt fails
+        `ENDPOINT_MAX_ATTEMPTS` times.
     """
     if flag:
         if not _is_http_url(flag):
@@ -249,11 +266,11 @@ def _select_llm_endpoint(
             raise click.ClickException(
                 'gave up resolving a valid endpoint URL after'
                 f' {ENDPOINT_MAX_ATTEMPTS} attempts')
-    raise click.ClickException('unreachable')
 
 
 def _is_http_url(value: str) -> bool:
-    """Lightweight `http(s)://` prefix check used by the endpoint prompt."""
+    """True when value starts with `http://` or `https://`.
+    """
     lowered = value.lower()
     return lowered.startswith(('http://', 'https://'))
 
@@ -265,12 +282,30 @@ def _collect_llm_api_key(
         interactive: bool) -> dict[str, str]:
     """Prompt for `MEMMAN_LLM_API_KEY` when interactive and not already set.
 
-    Loopback endpoints (Ollama, local vLLM, LiteLLM proxy) may omit the
-    key; non-loopback endpoints re-prompt up to `API_KEY_MAX_ATTEMPTS`
-    times if the user enters a blank value before refusing the install.
-    When the endpoint is OpenRouter and `MEMMAN_OPENROUTER_API_KEY` is
-    already present, `collect_install_knobs` auto-fills `LLM_API_KEY`
-    from it -- the wizard skips the prompt in that case.
+    Returns `{}` when the file or shell has the key. On OpenRouter it
+    also returns `{}` when `MEMMAN_OPENROUTER_API_KEY` is present, since
+    `collect_install_knobs` fills `LLM_API_KEY` from it.
+
+    Parameters
+    ----------
+    file_values : dict[str, str]
+        The env file as parsed before the wizard ran.
+    endpoint : str
+        The LLM endpoint the install uses. A loopback endpoint may
+        leave the key blank.
+    interactive : bool
+        False returns `{}`.
+
+    Returns
+    -------
+    dict[str, str]
+        `{MEMMAN_LLM_API_KEY: <key>}`, or `{}`.
+
+    Raises
+    ------
+    click.ClickException
+        A non-loopback endpoint gets a blank key `API_KEY_MAX_ATTEMPTS`
+        times.
     """
     out: dict[str, str] = {}
     if not interactive:
@@ -318,7 +353,6 @@ def _collect_llm_api_key(
             raise click.ClickException(
                 f'gave up collecting {config.LLM_API_KEY} after'
                 f' {API_KEY_MAX_ATTEMPTS} attempts')
-    return out
 
 
 def _collect_llm_model(
@@ -341,15 +375,14 @@ def _collect_llm_model(
     -------
     dict[str, str]
         `{MEMMAN_LLM_MODEL: <id>}`, or `{}` when a value exists, the
-        session is headless, or the endpoint is OpenRouter.
+        session is headless, or the endpoint is OpenRouter. A headless
+        install on a non-OpenRouter endpoint with no model is refused by
+        `collect_install_knobs`.
 
-    Notes
-    -----
-    - OpenRouter asks nothing: `collect_install_knobs` seeds the
-      shipped model from `INSTALL_DEFAULTS`.
-    - Any other endpoint has no shipped model, so the operator types the
-      slug. A headless install there with no model is refused by
-      `collect_install_knobs`.
+    Raises
+    ------
+    click.ClickException
+        The user enters a blank slug `ENDPOINT_MAX_ATTEMPTS` times.
     """
     out: dict[str, str] = {}
     if not interactive:
@@ -382,14 +415,15 @@ def _select_embed_provider(
         flag: str | None,
         file_values: dict[str, str],
         interactive: bool) -> tuple[str, bool]:
-    """Resolve the embed provider and report whether the user supplied it.
+    """Resolve the embed provider: flag, then file, then prompt or default.
 
-    Returns `(chosen, user_supplied)`. `user_supplied` is True when the
-    value came from a `--embed-provider` flag or an interactive prompt --
-    i.e., something the wizard should persist to the env file as
-    `MEMMAN_EMBED_PROVIDER`. False when the value already lived in the
-    file or when the wizard is just naming the default headlessly (in
-    which case `INSTALL_DEFAULTS` writes it later in the install flow).
+    Returns
+    -------
+    tuple[str, bool]
+        `(chosen, user_supplied)`. `user_supplied` is True for the
+        `--embed-provider` flag or a prompt answer, which the wizard
+        persists as `MEMMAN_EMBED_PROVIDER`. False for a file value or
+        the headless default, which `INSTALL_DEFAULTS` writes later.
     """
     if flag:
         return flag, True
@@ -417,23 +451,26 @@ def _select_backend(
         backend: str | None,
         file_values: dict[str, str],
         interactive: bool) -> tuple[str, bool]:
-    """Resolve the backend choice and report whether the user supplied it.
+    """Resolve the backend: flag, then file, then prompt or default.
 
-    Returns `(chosen_backend, user_supplied)`. `user_supplied` is True
-    when the value came from a flag, an existing file row, or an
-    interactive prompt -- i.e., something the wizard should persist back
-    to the env file as `MEMMAN_DEFAULT_BACKEND`. False when the wizard
-    is just naming the default (`'sqlite'`) and `INSTALL_DEFAULTS` will
-    write it later in the install flow.
+    Returns
+    -------
+    tuple[str, bool]
+        `(chosen_backend, user_supplied)`. `user_supplied` is True for
+        the flag or a prompt answer, which the wizard persists as
+        `MEMMAN_DEFAULT_BACKEND`. False for a file value or the
+        `'sqlite'` default, which `INSTALL_DEFAULTS` writes later.
     """
     if backend:
         return backend, True
     file_backend = file_values.get(config.DEFAULT_BACKEND, '').strip()
     if file_backend:
         return file_backend, False
-    options = _selectable_backends()
-    if len(options) <= 1 or not interactive:
-        return (options[0] if options else 'sqlite'), False
+    options = ['sqlite']
+    if extras.is_available('postgres'):
+        options.append('postgres')
+    if len(options) == 1 or not interactive:
+        return options[0], False
     click.echo('')
     click.echo(click.style('Choose a memman storage backend:', bold=True))
     for opt in options:
@@ -445,32 +482,30 @@ def _select_backend(
     return chosen, True
 
 
-def _selectable_backends() -> list[str]:
-    """Return the list of backends the wizard can offer.
-
-    Sqlite is always available. Postgres is included only when
-    `memman[postgres]` extras are importable.
-    """
-    out = ['sqlite']
-    if extras.is_available('postgres'):
-        out.append('postgres')
-    return out
-
-
 def _collect_dsn(
         *,
         pg_dsn: str | None,
         file_values: dict[str, str],
         interactive: bool) -> str | None:
-    """Resolve a Postgres DSN: flag > file > interactive prompt + probe.
+    """Resolve a Postgres DSN: flag, then file, then prompt and probe.
 
-    The probe is `psycopg.connect(dsn, connect_timeout=N).close()`.
-    Re-prompts up to `DSN_MAX_ATTEMPTS` on failure, then exits 1.
-    Non-interactive runs require `pg_dsn` or a file value -- otherwise
-    they error out telling the user to pass `--pg-dsn`.
+    Returns
+    -------
+    str | None
+        The DSN to persist, or None when the file already holds one.
+
+    Raises
+    ------
+    click.ClickException
+        The flag DSN fails the probe, a headless run has neither flag
+        nor file value, or the prompt fails `DSN_MAX_ATTEMPTS` times.
     """
     if pg_dsn:
-        _probe_dsn_or_die(pg_dsn)
+        try:
+            _probe_dsn(pg_dsn)
+        except Exception as exc:
+            raise click.ClickException(
+                f'postgres connection failed: {exc}')
         return pg_dsn
     if file_values.get(config.DEFAULT_PG_DSN, '').strip():
         return None
@@ -497,23 +532,22 @@ def _collect_dsn(
                     f'gave up after {DSN_MAX_ATTEMPTS} attempts')
 
 
-def _probe_dsn_or_die(dsn: str) -> None:
-    """Probe a DSN; raise click.ClickException on failure."""
-    try:
-        _probe_dsn(dsn)
-    except Exception as exc:
-        raise click.ClickException(f'postgres connection failed: {exc}')
-
-
 def _probe_dsn(dsn: str) -> None:
-    """Open + verify pgvector + emit PgBouncer hint on remote DSN.
+    """Connect, verify the pgvector extension, and hint PgBouncer.
 
-    Asserts `select 1` and `pg_extension where extname = 'vector'`;
-    non-localhost URLs emit a PgBouncer recommendation. Raises on
-    hard failure (cannot connect, pgvector missing).
+    A non-localhost DSN also prints a PgBouncer recommendation.
 
-    Lazy-imports `psycopg` so users without `memman[postgres]` are
-    not blocked from importing the wizard module itself.
+    Parameters
+    ----------
+    dsn : str
+        Postgres connection string.
+
+    Raises
+    ------
+    RuntimeError
+        The pgvector extension is not installed in the target database.
+    Exception
+        Any connection failure from the driver.
     """
     from memman.store.postgres import _connection
     with _connection(
@@ -538,14 +572,14 @@ def _probe_dsn(dsn: str) -> None:
 
 
 def _is_remote_dsn(dsn: str) -> bool:
-    """Best-effort detection of a non-localhost host in a DSN.
+    """True when the DSN names a host other than localhost.
 
-    Handles both `host=...` keyword form and `postgresql://host/...`
-    URI form. Returns False on parse failure (defensive: don't
-    spam the hint for parse-edge-case DSNs).
+    Handles the `host=...` keyword form and the `postgresql://host/...`
+    URI form. A DSN with neither form counts as local.
     """
     lowered = dsn.lower()
-    for marker in ('host=localhost', 'host=127.0.0.1', '@localhost', '@127.0.0.1'):
-        if marker in lowered:
-            return False
-    return bool('host=' in lowered or '://' in lowered)
+    local_markers = (
+        'host=localhost', 'host=127.0.0.1', '@localhost', '@127.0.0.1')
+    if any(marker in lowered for marker in local_markers):
+        return False
+    return 'host=' in lowered or '://' in lowered

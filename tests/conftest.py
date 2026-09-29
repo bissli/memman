@@ -24,8 +24,7 @@ import click.testing
 import pytest
 from click.testing import CliRunner
 from memman import config
-from memman.cli import _reset_heartbeat_state as _reset_cli_heartbeat
-from memman.cli import cli
+from memman.cli import _LAST_HEARTBEAT_AT, cli
 from memman.embed import fingerprint as fp_mod
 from memman.embed import get_client
 from memman.embed import registry as _embed_registry
@@ -56,7 +55,8 @@ EMBEDDING_DIM = 512
 
 def pytest_collection_modifyitems(
         config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Auto-skip @pytest.mark.postgres tests when psycopg is not installed."""
+    """Auto-skip @pytest.mark.postgres tests when psycopg is not installed.
+    """
     if _POSTGRES_AVAILABLE:
         return
     skip_pg = pytest.mark.skip(reason='postgres extras not installed')
@@ -66,7 +66,8 @@ def pytest_collection_modifyitems(
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register --live flag for real API calls."""
+    """Register --live flag for real API calls.
+    """
     parser.addoption(
         '--live', action='store_true', default=False,
         help='Use real Haiku LLM and Voyage embedding APIs')
@@ -96,7 +97,7 @@ def logger_state() -> Iterator[logging.Logger]:
 @pytest.fixture(autouse=True)
 def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                  request: pytest.FixtureRequest):
-    """Pin MEMMAN_DATA_DIR and the home directory to tmp and seed the env file.
+    """Pin MEMMAN_DATA_DIR and HOME to tmp and seed the env file.
 
     Prevents the user's real `~/.memman/env` from leaking into the
     config resolver during unit tests. The home redirect keeps a live
@@ -246,9 +247,9 @@ def _reset_heartbeat_state():
     tests share it. Reset before AND after each test to prevent
     cross-test contamination if a future fixture reuses a data_dir.
     """
-    _reset_cli_heartbeat()
+    _LAST_HEARTBEAT_AT.clear()
     yield
-    _reset_cli_heartbeat()
+    _LAST_HEARTBEAT_AT.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -306,6 +307,8 @@ _AUTO_DRAIN_TRIGGERS = ('remember', 'replace')
 
 
 def _args_target_write(args: list[str] | None) -> bool:
+    """True when the CLI args name `remember` or `replace`.
+    """
     if not args:
         return False
     for arg in args:
@@ -315,6 +318,8 @@ def _args_target_write(args: list[str] | None) -> bool:
 
 
 def _args_data_dir(args: list[str] | None) -> str | None:
+    """The value after `--data-dir` in the CLI args, or None.
+    """
     if not args:
         return None
     seq = list(args)
@@ -463,7 +468,8 @@ def _mock_llm_complete(self: Any, system: str, user: str, *,
 
 
 def _mock_enrichment(content: str) -> str:
-    """Generate realistic enrichment response."""
+    """Canned enrichment JSON whose summary is the first 100 characters.
+    """
     return json.dumps({'summary': content[:100]})
 
 
@@ -482,7 +488,8 @@ def _mock_rerank(self: Any, query: str, documents: list[str],
 
 def _mock_embed_batch(
         self: Any, texts: list[str]) -> list[list[float]]:
-    """Batch variant of `_mock_embed`. One vector per input."""
+    """Batch variant of `_mock_embed`. One vector per input.
+    """
     return [_mock_embed(self, t) for t in texts]
 
 
@@ -573,7 +580,8 @@ def _backend_params() -> list:
 
 @pytest.fixture(params=_backend_params())
 def backend_kind(request) -> str:
-    """The backend identifier for this parametrization slot."""
+    """The backend identifier for this parametrization slot.
+    """
     return request.param
 
 
@@ -699,7 +707,8 @@ def set_created_at(backend: Any, insight_id: str, when: datetime) -> None:
 
 
 def make_insight(**overrides: Any) -> Insight:
-    """Factory for test Insight instances."""
+    """Factory for test Insight instances.
+    """
     now = datetime.now(timezone.utc)
     defaults = {
         'id': 'test-id',
@@ -728,7 +737,8 @@ def insert_pending(db: Any, insight_id: str, content: str = 'test content',
 
 @pytest.fixture
 def queue_conn(tmp_path: Path):
-    """Fresh queue.db connection for direct queue helper tests."""
+    """Fresh queue.db connection for direct queue helper tests.
+    """
     conn = open_queue_db(str(tmp_path))
     yield conn
     conn.close()
@@ -835,7 +845,8 @@ def invoke(runner_tuple: tuple, args: list[str]) -> click.testing.Result:
 
 
 def queued_contents(data_dir: str) -> list[str]:
-    """Return the content of every queue row, in insert order."""
+    """Return the content of every queue row, in insert order.
+    """
     with queue_db(data_dir) as conn:
         return [r[0] for r in conn.execute(
             'select content from queue order by id').fetchall()]

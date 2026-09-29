@@ -1,19 +1,21 @@
 """Replacement reads identically to a soft delete, for the same history.
 
-The active predicate gains a second clause at roughly ninety sites.
-Enumerating them in tests would pin the list, not the property. This
-builds the same store twice, replaces the predecessor in one and
-soft-deletes it in the other, and asserts every read and count
-agrees. One predicate site left on `deleted_at is null` alone makes
-the two stores diverge somewhere below.
+The active predicate has a second clause at many sites. Rather than
+enumerate them, this builds the same store twice, replaces the
+predecessor in one and soft-deletes it in the other, and asserts every
+read and count agrees. One predicate site left on `deleted_at is null`
+alone makes the two stores diverge somewhere below.
 """
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
 from memman.search.recall import run_recall
-from tests.conftest import _mock_embed, make_insight, set_created_at
+from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
+from tests.conftest import _mock_embed, _safe_store_name, make_insight
+from tests.conftest import set_created_at
 
 _ROWS = [
     ('p-1', 'alpha service moved to the kombu broker'),
@@ -28,11 +30,10 @@ _ROWS = [
 
 @pytest.fixture
 def twin_backends(request, backend_kind, tmp_path):
-    """Two isolated backends of one kind, torn down together."""
-    from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+    """Two isolated backends of one kind, torn down together.
+    """
     opened = []
     if backend_kind == 'sqlite':
-        from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
         data_dir = str(tmp_path / 'memman')
         opened.extend(
             (name, open_sqlite_backend(name, data_dir))
@@ -41,15 +42,11 @@ def twin_backends(request, backend_kind, tmp_path):
     else:
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
-        from tests.conftest import _safe_store_name
         pg_dsn = request.getfixturevalue('pg_dsn')
         base = _safe_store_name(request.node.name)
         for suffix in ('a', 'b'):
             name = f'{base}_{suffix}'
-            try:
-                drop_postgres_store(name, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(name, pg_dsn)
             opened.append((name, open_postgres_backend(name, pg_dsn)))
         cleanup = [lambda n=n: drop_postgres_store(n, pg_dsn) for n, _ in opened]
     for _, b in opened:
@@ -58,19 +55,14 @@ def twin_backends(request, backend_kind, tmp_path):
         yield opened[0][1], opened[1][1]
     finally:
         for _, b in opened:
-            try:
-                b.close()
-            except Exception:
-                pass
+            b.close()
         for fn in cleanup:
-            try:
-                fn()
-            except Exception:
-                pass
+            fn()
 
 
 def _build(backend, *, replace):
-    """Seed rows, vectors, enrichment and edges, then retire `p-1`."""
+    """Seed rows, vectors, enrichment and edges, then retire `p-1`.
+    """
     embedder = SimpleNamespace(dim=512)
     # Distinct, fixed timestamps: the anchor pool orders on
     # created_at, and SQLite stamps whole seconds, so two stores
@@ -92,7 +84,8 @@ def _build(backend, *, replace):
 
 
 def _recall_view(backend, query):
-    """Ids and scores of one recall, rounded for comparison."""
+    """Ids and scores of one recall, rounded for comparison.
+    """
     resp = run_recall(backend, query, None, 10)
     rows = [(r['insight'].id, round(r['score'], 9),
              {k: round(v, 9) for k, v in r['signals'].items()})

@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from memman import config
+from memman import queue as _queue
+from memman.store import db as _db
 from memman.store.backend import Backend
 from memman.store.config import validate_all
 from memman.store.errors import ConfigError
@@ -28,9 +30,18 @@ logger = logging.getLogger('memman')
 class BackendDescriptor:
     """Registry record for one storage backend.
 
-    `open_backend` opens a live `Backend`. `list_stores_keys`
-    enumerates store names this backend knows about given the env
-    file values. `drop_store_fn` removes one store's storage.
+    Attributes
+    ----------
+    name : str
+        Registry key.
+    open_backend : Callable[..., Backend]
+        Opens a live `Backend`.
+    list_stores_keys : Callable[[str, dict[str, str]], set[str]]
+        Store names this backend knows, given the env file values.
+    drop_store_fn : Callable[[str, str], None]
+        Removes one store's storage.
+    extras_packages : tuple[str, ...]
+        Packages of the optional extra this backend needs.
     """
 
     name: str
@@ -41,13 +52,10 @@ class BackendDescriptor:
 
 
 def resolve_store_backend(store: str, data_dir: str) -> str:
-    """Return the backend kind for `store`: per-store, then default.
+    """Return the backend kind for `store`, lower-cased.
 
-    Reads `MEMMAN_BACKEND_<store>`, falling back to
-    `MEMMAN_DEFAULT_BACKEND`, then to `'sqlite'`. Centralized so each
-    of `open_backend` / `list_stores` / `drop_store` agrees on
-    resolution order. Public name -- doctor and other module-level
-    callers may import this directly.
+    Reads `MEMMAN_BACKEND_<store>`, then `MEMMAN_DEFAULT_BACKEND`,
+    then falls back to `'sqlite'`.
     """
     raw = (
         config.get_store_backend(store, data_dir)
@@ -66,7 +74,8 @@ def resolve_store_pg_dsn(store: str, data_dir: str) -> str | None:
 
 
 def _build_sqlite_descriptor() -> BackendDescriptor:
-    """Lazy-import sqlite implementations into a descriptor."""
+    """Build the sqlite descriptor.
+    """
 
     def _open(
             store: str, data_dir: str, *,
@@ -78,7 +87,6 @@ def _build_sqlite_descriptor() -> BackendDescriptor:
     def _list(
             data_dir: str,
             env_values: dict[str, str]) -> set[str]:
-        from memman.store import db as _db
         return set(_db.list_local_store_dirs(data_dir))
 
     def _drop(store: str, data_dir: str) -> None:
@@ -94,12 +102,10 @@ def _build_sqlite_descriptor() -> BackendDescriptor:
 
 
 def _build_postgres_descriptor() -> BackendDescriptor:
-    """Lazy-import postgres implementations into a descriptor.
+    """Build the postgres descriptor.
 
-    The `psycopg` import lives inside `_open`/`_list`/`_drop`
-    bodies so the postgres extra is only required when a postgres
-    backend is actually addressed -- pure-sqlite users do not need
-    `psycopg` installed.
+    The postgres extra is needed only once a postgres store is
+    addressed.
     """
 
     def _open(
@@ -110,7 +116,7 @@ def _build_postgres_descriptor() -> BackendDescriptor:
         if not dsn:
             raise ConfigError(
                 f'no DSN for postgres-backed store {store!r};'
-                f' set {config.env_key_for("postgres", "DSN", store)} or'
+                f' set {config.POSTGRES_DSN_FOR(store)} or'
                 f' {config.DEFAULT_PG_DSN}')
         return open_postgres_backend(
             store, dsn, read_only=read_only)
@@ -123,9 +129,8 @@ def _build_postgres_descriptor() -> BackendDescriptor:
         for key, value in env_values.items():
             if not value:
                 continue
-            if key == config.DEFAULT_PG_DSN:
-                dsns.add(value)
-            elif key.startswith('MEMMAN_POSTGRES_DSN_'):
+            if (key == config.DEFAULT_PG_DSN
+                    or key.startswith('MEMMAN_POSTGRES_DSN_')):
                 dsns.add(value)
         if not dsns:
             return names
@@ -146,7 +151,6 @@ def _build_postgres_descriptor() -> BackendDescriptor:
                 logger.warning(
                     'postgres store probe failed for dsn %r: %s',
                     dsn, exc)
-                continue
         return names
 
     def _drop(store: str, data_dir: str) -> None:
@@ -180,24 +184,42 @@ def descriptor(name: str) -> BackendDescriptor:
 
 
 def known_backends() -> frozenset[str]:
-    """Return the set of registered backend names."""
+    """Return the set of registered backend names.
+    """
     return frozenset(BACKENDS.keys())
 
 
 def all_descriptors() -> list[BackendDescriptor]:
-    """Return descriptors in registration order."""
+    """Return descriptors in registration order.
+    """
     return list(BACKENDS.values())
 
 
 def open_backend(
         store: str, data_dir: str, *,
         read_only: bool = False) -> Backend:
-    """Open the per-store backend for `store`.
+    """Open the backend that `store` resolves to.
 
-    Resolves the backend kind from `MEMMAN_BACKEND_<store>` (with
-    fallback to `MEMMAN_DEFAULT_BACKEND`), validates the namespaced
-    env keys for that backend, and dispatches via the static
-    registry. Two stores in one process can pick distinct backends.
+    Parameters
+    ----------
+    store : str
+        Store name.
+    data_dir : str
+        Base memman data directory. The store's files live under it.
+    read_only : bool
+        Open without write access.
+
+    Returns
+    -------
+    Backend
+        A live backend. Two stores in one process can use distinct
+        backends.
+
+    Raises
+    ------
+    ConfigError
+        On an unknown backend name, a bad `MEMMAN_POSTGRES_*` key, or
+        a postgres store with no DSN.
     """
     name = resolve_store_backend(store, data_dir)
     desc = descriptor(name)
@@ -208,13 +230,10 @@ def open_backend(
 
 
 def list_stores(data_dir: str) -> list[str]:
-    """Union of stores reachable across registered backends.
+    """Sorted, de-duplicated store names across all backends.
 
-    Each descriptor's `list_stores_keys` enumerates the names it
-    knows about; results de-duplicate by name. SQLite enumerates
-    directory entries; Postgres enumerates `pg_namespace` for any
-    discoverable DSN. Backends whose probe fails (missing extras,
-    unreachable DSN) log a warning and contribute nothing.
+    A backend whose probe fails (missing extra, unreachable DSN)
+    contributes nothing.
     """
     file_values = config.parse_env_file(
         config.env_file_path(data_dir))
@@ -233,25 +252,24 @@ def drop_store(store: str, data_dir: str) -> None:
     Purges the store's rows from the local SQLite queue once the
     backend has dropped the storage.
 
+    Parameters
+    ----------
+    store : str
+        Store name.
+    data_dir : str
+        Base memman data directory. The store's files live under it.
+
     Notes
     -----
-    - The purge follows a clean drop and is skipped when the drop
-      raises. Running it unconditionally deleted the queued writes of
-      a store that still existed, so an unreachable Postgres or a
-      name the backend rejected cost pending memories outright.
-    - A drop that fails part way (an `rmtree` stopped by a permission
-      error) can therefore leave rows behind. That is the cheaper
-      failure: the rows stay readable and a repeated
-      `memman store remove` clears them, whereas a deleted row is
-      gone.
-    - A purge that fails after a clean drop stays a warning. The
-      storage is already gone, so raising would report failure for
-      finished work and invite a retry that cannot help.
+    - A drop that fails part way can leave queue rows behind. A
+      repeated `memman store remove` clears them.
+    - A purge failure after a clean drop logs a warning. Raising
+      would report failure for finished work.
     """
-    from memman import queue as _queue
-
     name = resolve_store_backend(store, data_dir)
     desc = descriptor(name)
+    # Purge only after a clean drop: an unconditional purge would
+    # delete the queued writes of a store that still exists.
     desc.drop_store_fn(store, data_dir)
     try:
         with _queue.queue_db(data_dir) as conn:

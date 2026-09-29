@@ -16,7 +16,7 @@ def test_parse_json_response_reads_the_object_after_prose():
     """Verify a paragraph of reasoning before the JSON does not hide it.
 
     Mutation: trying only the whole text and the whole text with its
-        fences stripped (the pre-0.34.0 reader), which returns None here.
+        fences stripped, which returns None here.
     Oracle: the hand-written object.
     """
     raw = ('Looking at the existing memories, memory [0] is contradicted '

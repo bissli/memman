@@ -1,11 +1,9 @@
 """Cross-backend `memman store {list,create,use,remove}` tests.
 
-The 0.14.1 implementation used a sqlite-only `store_exists`
-filesystem gate, so a postgres-only store was invisible to
-`store list`, `store use`, and -- worst -- `store remove`, which
-returned "store does not exist" while leaving the postgres schema
-intact. F.1 swaps every gate to `factory.list_stores` and every
-removal to `factory.drop_store`. These tests lock that contract.
+Every existence gate goes through `factory.list_stores` and every
+removal through `factory.drop_store`, so a postgres-only store is
+visible to `store list`, `store use`, and `store remove`. These tests
+lock that contract.
 
 Postgres-marked tests use the `pg_dsn` fixture from
 `tests/fixtures/postgres.py`; they're skipped when psycopg /
@@ -18,6 +16,7 @@ import json
 
 import pytest
 from click.testing import CliRunner
+from memman import config
 from memman.cli import cli
 from tests.conftest import invoke
 
@@ -27,8 +26,6 @@ def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
 
     Returns the standard `(runner, data_dir)` tuple.
     """
-    from memman import config
-
     data_dir = tmp_path / 'memman'
     data_dir.mkdir(parents=True, exist_ok=True)
     env_path = config.env_file_path(str(data_dir))
@@ -48,10 +45,11 @@ def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
 
 
 def test_store_remove_uses_factory(monkeypatch, tmp_path, mm_runner):
-    """`store remove` calls `factory.drop_store`, not raw rmtree.
+    """Verify `store remove` calls factory.drop_store.
 
-    This test does not need postgres -- the contract is observable
-    by patching `factory.drop_store` and asserting the call.
+    Mutation: removing the store directory directly (rmtree), which leaves
+        a postgres schema in place.
+    Oracle: a spy on factory.drop_store recording the store name.
     """
     invoke(mm_runner, ['store', 'create', 'doomed'])
 
@@ -70,12 +68,11 @@ def test_store_remove_uses_factory(monkeypatch, tmp_path, mm_runner):
 
 @pytest.mark.postgres
 def test_store_list_includes_postgres_only_store(tmp_path, pg_dsn):
-    """A store routed to postgres appears in `store list` output.
+    """Verify a store routed to postgres appears in `store list`.
 
-    Pre-F.1: `cli.list_stores` was the sqlite-only filesystem
-    scanner, so a postgres-only store never appeared. Now the import
-    is `factory.list_stores`, which unions sqlite dirs with
-    `pg_namespace`.
+    Mutation: listing only sqlite directories, so a postgres-only store is
+        invisible.
+    Oracle: the JSON stores list from a real postgres container.
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     create = runner.invoke(
@@ -90,11 +87,11 @@ def test_store_list_includes_postgres_only_store(tmp_path, pg_dsn):
 
 @pytest.mark.postgres
 def test_store_use_accepts_postgres_only_store(tmp_path, pg_dsn):
-    """`store use` accepts a store visible only via postgres.
+    """Verify `store use` accepts a store visible only through postgres.
 
-    Pre-F.1: gated on `store_exists` (sqlite filesystem only) so the
-    command rejected the name with "does not exist" even though the
-    schema was present in the DB.
+    Mutation: gating on a sqlite filesystem check, rejecting the name as
+        nonexistent.
+    Oracle: the exact payload {'action': 'set', 'store': 'work'}.
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     runner.invoke(
@@ -108,10 +105,10 @@ def test_store_use_accepts_postgres_only_store(tmp_path, pg_dsn):
 
 @pytest.mark.postgres
 def test_store_remove_drops_postgres_schema(tmp_path, pg_dsn):
-    """`store remove` actually drops the postgres schema.
+    """Verify `store remove` drops the postgres schema.
 
-    Pre-F.1: rejected as "does not exist", silently leaving the
-    remote schema. This is the headline data-loss bug being fixed.
+    Mutation: reporting success but leaving the store_work schema behind.
+    Oracle: pg_namespace queried before and after the remove.
     """
     import psycopg
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
@@ -135,11 +132,11 @@ def test_store_remove_drops_postgres_schema(tmp_path, pg_dsn):
 
 @pytest.mark.postgres
 def test_store_create_rejects_duplicate_postgres_store(tmp_path, pg_dsn):
-    """A postgres-routed store cannot be re-created.
+    """Verify a postgres-routed store cannot be created twice.
 
-    Pre-F.1: the duplicate gate also went through `store_exists`, so
-    repeat-create silently passed and re-bootstrapped the schema. The
-    new gate routes through `factory.list_stores`.
+    Mutation: a duplicate gate that misses postgres stores, so a repeat
+        create re-bootstraps the schema.
+    Oracle: nonzero exit and 'already exists' in the second output.
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     first = runner.invoke(

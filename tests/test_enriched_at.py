@@ -1,7 +1,11 @@
-"""Tests for enriched_at column lifecycle in enrich_pending."""
+"""Tests for enriched_at column lifecycle in enrich_pending.
+"""
 
+import logging
 from unittest.mock import MagicMock
 
+from memman.embed.fingerprint import bound_embedder
+from memman.pipeline import enrich as enrich_mod
 from memman.pipeline.enrich import enrich_pending
 from memman.store.node import insert_insight
 from tests.conftest import insert_pending as _insert_pending
@@ -9,39 +13,44 @@ from tests.conftest import make_insight
 
 
 class TestEnrichedAtColumn:
-    """enriched_at column exists and is backfilled from migration."""
+    """enriched_at column exists and starts equal to enrich_attempted_at.
+    """
 
     def test_column_exists(self, tmp_db):
-        """Fresh DB has enriched_at column."""
+        """Verify a fresh DB has the enriched_at column.
+
+        Mutation: dropping enriched_at from the baseline schema.
+        Oracle: the column names reported by pragma table_info.
+        """
         cols = tmp_db._conn.execute(
-            'PRAGMA table_info(insights)').fetchall()
+            'pragma table_info(insights)').fetchall()
         col_names = {row[1] for row in cols}
         assert 'enriched_at' in col_names
 
-    def test_backfill_from_enrich_attempted_at(self, tmp_db):
-        """Insights with enrich_attempted_at get enriched_at backfilled.
+    def test_new_insight_has_no_enrichment_stamps(self, tmp_db):
+        """Verify a new insight has NULL enriched_at and enrich_attempted_at.
 
         Mutation: insert_insight stamping enrich_attempted_at at
             insert time, silently opting a new row out of enrichment
             while enriched_at stays NULL.
-        Oracle: enriched_at and enrich_attempted_at read back equal
-            (both NULL) right after insert.
+        Oracle: enriched_at and enrich_attempted_at both read back
+            NULL right after insert.
         """
         insert_insight(tmp_db, make_insight(
             id='bf-1', content='backfill test'))
         row = tmp_db._conn.execute(
-            'SELECT enriched_at, enrich_attempted_at FROM insights'
-            " WHERE id = 'bf-1'").fetchone()
-        assert row[0] == row[1]
+            'select enriched_at, enrich_attempted_at from insights'
+            " where id = 'bf-1'").fetchone()
+        assert tuple(row) == (None, None)
 
 
 class TestEnrichedAtOnEnrichPending:
-    """enrich_pending sets enriched_at only when LLM enrichment succeeds."""
+    """enrich_pending sets enriched_at only when LLM enrichment succeeds.
+    """
 
     def test_no_llm_sets_enrich_attempted_at_only(
             self, tmp_db, tmp_backend, monkeypatch):
-        """An unreachable LLM sets enrich_attempted_at but leaves
-        enriched_at NULL.
+        """Verify an unreachable LLM stamps only enrich_attempted_at.
 
         Mutation: dropping the `if enrichment and new_vec is not
             None` guard before stamp_enriched, so a row with no
@@ -49,22 +58,20 @@ class TestEnrichedAtOnEnrichPending:
         Oracle: enrich_attempted_at not-None and enriched_at None
             read back after get_llm_client raises.
         """
-        from memman.pipeline import enrich as enrich_mod
-
         def _unavailable(*args, **kwargs):
             raise RuntimeError('no LLM credential')
 
         monkeypatch.setattr(enrich_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'nl-1', 'test without llm')
         tmp_db._conn.execute(
-            'UPDATE insights SET enriched_at = NULL'
-            " WHERE id = 'nl-1'")
+            'update insights set enriched_at = NULL'
+            " where id = 'nl-1'")
 
         enrich_pending(tmp_backend)
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at, enriched_at FROM insights'
-            " WHERE id = 'nl-1'").fetchone()
+            'select enrich_attempted_at, enriched_at from insights'
+            " where id = 'nl-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None
 
@@ -77,12 +84,10 @@ class TestEnrichedAtOnEnrichPending:
         Oracle: the enriched_at column after one pass with a working
             LLM and embedder.
         """
-        from memman.embed.fingerprint import bound_embedder
-
         _insert_pending(tmp_db, 'ls-1', 'test with llm enrichment')
         tmp_db._conn.execute(
-            'UPDATE insights SET enriched_at = NULL'
-            " WHERE id = 'ls-1'")
+            'update insights set enriched_at = NULL'
+            " where id = 'ls-1'")
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"summary": "test"}'
@@ -92,15 +97,14 @@ class TestEnrichedAtOnEnrichPending:
             embed_client=bound_embedder(tmp_backend))
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at, enriched_at FROM insights'
-            " WHERE id = 'ls-1'").fetchone()
+            'select enrich_attempted_at, enriched_at from insights'
+            " where id = 'ls-1'").fetchone()
         assert row[0] is not None
         assert row[1] is not None
 
     def test_reembed_failure_skips_stamp_enriched(
             self, tmp_db, tmp_backend, monkeypatch, caplog):
-        """A re-embed failure mid-pass leaves enriched_at NULL and
-        logs a warning.
+        """Verify a re-embed failure leaves enriched_at NULL and warns.
 
         Mutation: dropping the `new_vec is not None` guard so
             stamp_enriched runs despite the failed embed, or logging
@@ -110,12 +114,10 @@ class TestEnrichedAtOnEnrichPending:
             enriched_at read back NULL while enrich_attempted_at is
             not.
         """
-        import logging
-
         _insert_pending(tmp_db, 'rf-1', 'reembed-fail content')
         tmp_db._conn.execute(
-            'UPDATE insights SET enriched_at = NULL'
-            " WHERE id = 'rf-1'")
+            'update insights set enriched_at = NULL'
+            " where id = 'rf-1'")
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"summary": "s"}'
@@ -137,8 +139,8 @@ class TestEnrichedAtOnEnrichPending:
         assert warned
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at, enriched_at FROM insights'
-            " WHERE id = 'rf-1'").fetchone()
+            'select enrich_attempted_at, enriched_at from insights'
+            " where id = 'rf-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None, (
             'enriched_at must stay NULL when the re-embed failed')
@@ -155,8 +157,8 @@ class TestEnrichedAtOnEnrichPending:
         """
         _insert_pending(tmp_db, 'sk-1', 'skipped embed content')
         tmp_db._conn.execute(
-            'UPDATE insights SET enriched_at = NULL'
-            " WHERE id = 'sk-1'")
+            'update insights set enriched_at = NULL'
+            " where id = 'sk-1'")
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"summary": "s"}'
@@ -168,8 +170,8 @@ class TestEnrichedAtOnEnrichPending:
             embed_client=unavailable)
 
         row = tmp_db._conn.execute(
-            'SELECT enrich_attempted_at, enriched_at FROM insights'
-            " WHERE id = 'sk-1'").fetchone()
+            'select enrich_attempted_at, enriched_at from insights'
+            " where id = 'sk-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None
 
@@ -184,14 +186,12 @@ class TestEnrichedAtOnEnrichPending:
         Oracle: the store's embedding set, which lacks the row before
             the pass.
         """
-        from memman.embed.fingerprint import bound_embedder
-
         _insert_pending(tmp_db, 'nv-1', 'vectorless content')
         tmp_db._conn.execute(
-            'UPDATE insights SET enriched_at = NULL'
-            " WHERE id = 'nv-1'")
+            'update insights set enriched_at = NULL'
+            " where id = 'nv-1'")
         before = tmp_db._conn.execute(
-            "SELECT embedding FROM insights WHERE id = 'nv-1'").fetchone()
+            "select embedding from insights where id = 'nv-1'").fetchone()
         assert before[0] is None
 
         mock_llm = MagicMock()
@@ -202,5 +202,5 @@ class TestEnrichedAtOnEnrichPending:
             embed_client=bound_embedder(tmp_backend))
 
         after = tmp_db._conn.execute(
-            "SELECT embedding FROM insights WHERE id = 'nv-1'").fetchone()
+            "select embedding from insights where id = 'nv-1'").fetchone()
         assert after[0] is not None

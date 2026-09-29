@@ -1,4 +1,5 @@
-"""Environment detection for LLM CLI integrations."""
+"""Environment detection for LLM CLI integrations.
+"""
 
 import logging
 import os
@@ -10,12 +11,14 @@ logger = logging.getLogger('memman')
 
 
 def home_dir() -> str:
-    """Return the user's home directory."""
+    """Return the user's home directory.
+    """
     return str(Path.home())
 
 
 def clean_version(v: str) -> str:
-    """Strip parenthesized suffixes like '(Claude Code)' from version strings."""
+    """Strip parenthesized suffixes like '(Claude Code)' from version strings.
+    """
     idx = v.find(' (')
     if idx > 0:
         return v[:idx]

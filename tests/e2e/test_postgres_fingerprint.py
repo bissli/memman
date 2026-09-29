@@ -4,16 +4,17 @@ The fingerprint contract: every store stamps `meta.embed_fingerprint`
 with `{provider, model, dim}` of the embedding client used at seed
 time. On reopen, a different active client surfaces a mismatch.
 
-The e2e check exercises the contract at the Backend Protocol layer
-(`backend.meta.set` / `.get`) and compares to a `Fingerprint`
-parsed from the stored JSON -- the same shape `assert_consistent`
-checks once the application-layer loads the row.
+The tests exercise the contract at the Backend Protocol layer
+(`backend.meta.set` / `.get`) and compare to a `Fingerprint`
+parsed from the stored JSON, the same shape `assert_consistent`
+checks once the application layer loads the row.
 """
 
 from __future__ import annotations
 
 import pytest
-from memman.embed.fingerprint import META_KEY, Fingerprint
+from memman.embed.fingerprint import META_KEY, EmbedFingerprintError
+from memman.embed.fingerprint import Fingerprint
 from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 
@@ -22,12 +23,14 @@ pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 
 def test_stored_fingerprint_round_trips_through_backend_meta(
         pg_dsn, request):
-    """Backend.meta.set + .get round-trips a Fingerprint JSON value."""
+    """Verify a Fingerprint survives Postgres meta set and get.
+
+    Mutation: the meta store truncating, re-encoding, or dropping
+        the JSON value, or `Fingerprint.from_json` losing a field.
+    Oracle: the `Fingerprint` written equals the one parsed back.
+    """
     store = _safe(request.node.name)
-    try:
-        drop_postgres_store(store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(store, pg_dsn)
     backend = open_postgres_backend(store, pg_dsn)
     try:
         target = Fingerprint(
@@ -46,18 +49,16 @@ def test_stored_fingerprint_round_trips_through_backend_meta(
 
 def test_active_vs_stored_fingerprint_mismatch_is_observable(
         pg_dsn, request):
-    """A different active fingerprint compares unequal to the stored.
+    """Verify a stored fingerprint differs from a different active one.
 
-    Drives the production refusal path in spirit: when the active
-    client is `voyage:voyage-3-lite:512` and the store carries
-    `voyage:voyage-large:1024`, the equality check that powers
-    `assert_consistent` returns False and a refusal is warranted.
+    Mutation: the stored fingerprint reading back as the active
+        one (wrong key, stale value), or `Fingerprint` equality
+        ignoring model or dim.
+    Oracle: the seeded `voyage-3-lite` 512 compared with a
+        hand-built `voyage-large` 1024.
     """
     store = _safe(request.node.name)
-    try:
-        drop_postgres_store(store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(store, pg_dsn)
     backend = open_postgres_backend(store, pg_dsn)
     try:
         seeded = Fingerprint(
@@ -81,20 +82,16 @@ def test_active_vs_stored_fingerprint_mismatch_is_observable(
 
 
 def test_corrupt_fingerprint_json_raises(pg_dsn, request):
-    """A meta row whose value is not valid Fingerprint JSON raises.
+    """Verify a corrupt fingerprint meta value raises on parse.
 
-    The hard failure on corruption is part of the contract:
-    `Fingerprint.from_json` raises `EmbedFingerprintError`, which
-    `assert_consistent` propagates so the operator runs
-    `memman embed reembed` rather than silently misindexing.
+    Mutation: `Fingerprint.from_json` swallowing a decode error and
+        returning a default, so a corrupt store is silently
+        misindexed.
+    Oracle: `EmbedFingerprintError` for the value `{not valid json`
+        read back from Postgres.
     """
-    from memman.embed.fingerprint import EmbedFingerprintError
-
     store = _safe(request.node.name)
-    try:
-        drop_postgres_store(store, pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store(store, pg_dsn)
     backend = open_postgres_backend(store, pg_dsn)
     try:
         backend.meta.set(META_KEY, '{not valid json')

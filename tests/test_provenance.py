@@ -1,16 +1,18 @@
-"""Tests for B4 provenance columns (prompt_version, embedding_model).
+"""Provenance columns `prompt_version` and `embedding_model`.
 
-Covers: the migration adds the two columns; insert_insight persists
-them when the Insight dataclass carries them; compute_prompt_version()
-hashes the write-path system prompts and is stable across calls; the
-`remember` pipeline stamps every newly-inserted row.
+The baseline schema carries both, `insert_insight` persists them,
+`compute_prompt_version` is stable across calls, and `remember` stamps
+every new row.
 """
 
 import json
+import sqlite3
 from pathlib import Path
 
 from memman.cli import cli
+from memman.pipeline import enrich
 from memman.pipeline.remember import compute_prompt_version
+from memman.queue import queue_db
 from memman.store.db import open_db
 from memman.store.model import Insight
 from memman.store.node import insert_insight
@@ -51,8 +53,8 @@ def test_insert_insight_persists_provenance(tmp_path):
             embedding_model='voyage-3-lite')
         insert_insight(db, ins)
         row = db._conn.execute(
-            'SELECT prompt_version, embedding_model'
-            ' FROM insights WHERE id = ?',
+            'select prompt_version, embedding_model'
+            ' from insights where id = ?',
             (ins.id,)).fetchone()
         assert row == ('pv_abc123', 'voyage-3-lite')
     finally:
@@ -72,8 +74,8 @@ def test_insert_insight_tolerates_null_provenance(tmp_path):
         ins = Insight(id='null-prov', content='no stamp')
         insert_insight(db, ins)
         row = db._conn.execute(
-            'SELECT prompt_version, embedding_model'
-            ' FROM insights WHERE id = ?',
+            'select prompt_version, embedding_model'
+            ' from insights where id = ?',
             (ins.id,)).fetchone()
         assert row == (None, None)
     finally:
@@ -82,6 +84,11 @@ def test_insert_insight_tolerates_null_provenance(tmp_path):
 
 def test_compute_prompt_version_is_stable():
     """compute_prompt_version returns the same hash on repeated calls.
+
+    Mutation: folding a per-process value (a clock reading, an object
+    id, or a set's iteration order) into the hash, so every run
+    reports every row stale.
+    Oracle: two calls equal, and a 16-character lowercase hex string.
     """
     a = compute_prompt_version()
     b = compute_prompt_version()
@@ -105,7 +112,6 @@ def test_compute_prompt_version_changes_with_prompt(monkeypatch):
     """
     original = compute_prompt_version()
     compute_prompt_version.cache_clear()
-    from memman.pipeline import enrich
     monkeypatch.setattr(
         enrich, 'ENRICHMENT_SYSTEM_PROMPT',
         enrich.ENRICHMENT_SYSTEM_PROMPT + '\n# mutated for test')
@@ -134,9 +140,6 @@ def test_remember_stamps_provenance(mm_runner):
     data = json.loads(result.output)
     queue_id = data['queue_id']
 
-    import sqlite3
-
-    from memman.queue import queue_db
     with queue_db(data_dir) as qconn:
         queue_uuid = qconn.execute(
             'select queue_uuid from queue where id = ?',
@@ -145,8 +148,8 @@ def test_remember_stamps_provenance(mm_runner):
     conn = sqlite3.connect(str(store_path))
     try:
         prompt_v, embed_model = conn.execute(
-            'SELECT prompt_version, embedding_model'
-            ' FROM insights WHERE queue_uuid = ?',
+            'select prompt_version, embedding_model'
+            ' from insights where queue_uuid = ?',
             (queue_uuid,)).fetchone()
     finally:
         conn.close()

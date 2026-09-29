@@ -1,23 +1,30 @@
 """Tests that opening a store binds the right per-store embedder.
 
-The runtime authority for which embedder is used moves from the
-env-resolved global provider to the store's stored fingerprint.
-`_StoreContext` is the natural attachment point: it reads
+A store's stored fingerprint, not the env-resolved global provider,
+decides which embedder the store uses. `_StoreContext` reads
 `meta.embed_fingerprint`, calls `registry.get_for(provider, model)`,
 and exposes the bound client as `ctx.ec`.
 """
 
+from memman import embed as embed_mod
+from memman.cli import _StoreContext
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.store.db import open_db, store_dir
 from memman.store.sqlite import SqliteBackend
 
 
 class TestStoreContextBinding:
-    """`_StoreContext` resolves `ec` from the store's stored fingerprint."""
+    """`_StoreContext` resolves `ec` from the store's stored fingerprint.
+    """
 
     def test_voyage_store_binds_voyage_embedder(self, tmp_path):
-        """A voyage-fingerprinted store binds a voyage client."""
-        from memman.cli import _StoreContext
+        """A voyage-fingerprinted store binds a voyage client.
+
+        Mutation: `_StoreContext` binding the env-resolved default
+            client instead of the stored fingerprint's, or ignoring the
+            stored model.
+        Oracle: the fingerprint's provider and model written by the test.
+        """
         sdir = store_dir(str(tmp_path), 'voy')
         db = open_db(sdir)
         try:
@@ -35,12 +42,16 @@ class TestStoreContextBinding:
 
     def test_two_stores_get_their_own_embedders(
             self, tmp_path, monkeypatch, env_file):
-        """Two stores in one data dir with different (provider, model)
-        fingerprints: one process opens both sequentially; each
-        receives an embedder bound to its own fingerprint, even when
-        the env-resolved active provider points elsewhere.
+        """Two stores with different fingerprints each bind their own embedder.
+
+        One process opens both in turn. The env-resolved provider points
+        elsewhere.
+
+        Mutation: `_StoreContext` caching one client per process, or
+            binding the env provider, so store `b` gets the voyage
+            client.
+        Oracle: each store's own fingerprint provider and model.
         """
-        from memman.cli import _StoreContext
 
         class _FakeStubClient:
             name = 'stub'
@@ -65,7 +76,6 @@ class TestStoreContextBinding:
             def unavailable_message(self):
                 return 'never'
 
-        from memman import embed as embed_mod
         monkeypatch.setitem(embed_mod.PROVIDERS, 'stub', _FakeStubClient)
 
         for name, fp in (

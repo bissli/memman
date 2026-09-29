@@ -30,7 +30,8 @@ from dataclasses import dataclass
 
 from memman import config
 from memman.embed import EmbeddingProvider
-from memman.embed.fingerprint import Fingerprint, write_fingerprint
+from memman.embed.fingerprint import Fingerprint, stored_fingerprint
+from memman.embed.fingerprint import write_fingerprint
 from memman.store.backend import Backend
 
 logger = logging.getLogger('memman')
@@ -113,10 +114,30 @@ def abort_swap(backend: Backend) -> None:
 def run_swap(
         backend: Backend, ec_new: EmbeddingProvider, plan: SwapPlan,
         ) -> SwapProgress:
-    """Run the full swap workflow end-to-end. Idempotent + resumable.
+    """Run the whole swap: start or resume, backfill, then cut over.
 
-    Reads existing progress; if no swap is in flight starts a new
-    one. Continues backfilling until exhausted, then cuts over.
+    Idempotent and resumable.
+
+    Parameters
+    ----------
+    backend : Backend
+        Store to swap.
+    ec_new : EmbeddingProvider
+        Embedder for the target model, used to re-embed each row.
+    plan : SwapPlan
+        Target fingerprint.
+
+    Returns
+    -------
+    SwapProgress
+        Final progress, always in the done state.
+
+    Raises
+    ------
+    RuntimeError
+        When an in-flight swap targets a different fingerprint, the
+        recorded state is unknown, or `embed_batch` returns the wrong
+        number of vectors.
     """
     batch_size = batch_size_from_env()
     progress = read_progress(backend)
@@ -124,15 +145,15 @@ def run_swap(
         provider=plan.target_provider,
         model=plan.target_model,
         dim=plan.target_dim)
+    done = SwapProgress(
+        state=STATE_DONE,
+        cursor='',
+        target_provider=plan.target_provider,
+        target_model=plan.target_model,
+        target_dim=plan.target_dim)
     if progress.state == '':
-        from memman.embed.fingerprint import stored_fingerprint
         if stored_fingerprint(backend) == target:
-            return SwapProgress(
-                state=STATE_DONE,
-                cursor='',
-                target_provider=plan.target_provider,
-                target_model=plan.target_model,
-                target_dim=plan.target_dim)
+            return done
         backend.swap_prepare(plan.target_dim)
         with backend.transaction():
             backend.meta.set(META_STATE, STATE_BACKFILLING)
@@ -160,7 +181,6 @@ def run_swap(
             ' required')
 
     if progress.state in {'', STATE_BACKFILLING}:
-        total_filled = 0
         while True:
             cursor = backend.meta.get(META_CURSOR) or ''
             rows = backend.iter_for_swap(cursor, batch_size)
@@ -177,7 +197,6 @@ def run_swap(
             with backend.transaction():
                 backend.write_swap_batch(items)
                 backend.meta.set(META_CURSOR, last_id)
-            total_filled += len(items)
 
     with backend.transaction():
         backend.meta.set(META_STATE, STATE_CUTOVER)
@@ -186,9 +205,4 @@ def run_swap(
         write_fingerprint(backend, target)
         for key in _META_KEYS:
             backend.meta.delete(key)
-    return SwapProgress(
-        state=STATE_DONE,
-        cursor='',
-        target_provider=plan.target_provider,
-        target_model=plan.target_model,
-        target_dim=plan.target_dim)
+    return done

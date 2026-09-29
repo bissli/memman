@@ -1,4 +1,5 @@
-"""Unit tests for the deferred-write queue."""
+"""Unit tests for the deferred-write queue.
+"""
 
 import sqlite3
 import time
@@ -52,13 +53,21 @@ def test_claim_fifo_order(queue_conn):
 
 
 def test_claim_returns_none_when_empty(queue_conn):
-    """Claim returns None when no pending rows exist.
+    """Verify claim returns None when the queue holds no pending row.
+
+    Mutation: claim building a QueueRow from an empty result and raising
+        TypeError.
+    Oracle: An empty queue and the None return.
     """
     assert claim(queue_conn, worker_pid=1) is None
 
 
 def test_claim_bumps_attempts(queue_conn):
-    """Each claim increments the row's attempts counter.
+    """Verify each claim increments the row attempts counter.
+
+    Mutation: claim leaving `attempts` at 0, so the MAX_ATTEMPTS cap never
+        trips.
+    Oracle: A first claim of a fresh row reads attempts == 1, hand-counted.
     """
     rid, _ = enqueue(queue_conn, 'main', 'x')
     r = claim(queue_conn, worker_pid=1)
@@ -67,7 +76,11 @@ def test_claim_bumps_attempts(queue_conn):
 
 
 def test_claim_hides_freshly_claimed_rows(queue_conn):
-    """A claimed row is not re-claimable before stale timeout.
+    """Verify a claimed row is not claimable again inside the stale window.
+
+    Mutation: The claim predicate ignoring `claimed_at`, so two workers take
+        the same row.
+    Oracle: The second worker gets None for the only row.
     """
     enqueue(queue_conn, 'main', 'a')
     first = claim(queue_conn, worker_pid=1)
@@ -92,7 +105,10 @@ def test_stale_claim_reclaimable_after_timeout(queue_conn, monkeypatch):
 
 
 def test_store_filter(queue_conn):
-    """Claim honors the stores filter argument.
+    """Verify claim honors the `stores` filter.
+
+    Mutation: claim ignoring `stores`, so it takes the older alpha row.
+    Oracle: The claimed row is beta, though alpha was queued first.
     """
     enqueue(queue_conn, 'alpha', 'a')
     enqueue(queue_conn, 'beta', 'b')
@@ -206,7 +222,11 @@ def test_claim_does_not_hold_a_write_behind_an_unrelated_backoff(
 
 
 def test_mark_done_sets_status_and_clears_claim(queue_conn):
-    """mark_done transitions a row to status=done and frees the claim.
+    """Verify mark_done sets status done and clears the claim.
+
+    Mutation: mark_done leaving `claimed_at` set, or not stamping
+        `processed_at`.
+    Oracle: The row read back after the call.
     """
     enqueue(queue_conn, 'main', 'a')
     r = claim(queue_conn, worker_pid=1)
@@ -218,20 +238,18 @@ def test_mark_done_sets_status_and_clears_claim(queue_conn):
 
 
 def test_mark_failed_below_threshold_backs_off(queue_conn, monkeypatch):
-    """mark_failed reschedules claimed_at into the past so the row
-    becomes reclaimable exactly `backoff_seconds` from now.
+    """Verify a first failure back-dates the claim by the 60 s backoff.
 
-    On attempt 1 the backoff is 60 s; the row is still PENDING with a
-    claim timestamp `STALE_CLAIM_SECONDS - 60` seconds in the past, so
-    a stale-claim reclaim with the default timeout is held off until
-    that wait elapses but a zero-timeout reclaim succeeds immediately.
+    The row stays pending with `claimed_at` at `now - STALE_CLAIM_SECONDS +
+    60`. A default-timeout reclaim is held off, and a zero-timeout reclaim
+    succeeds.
 
-    Mutation: `mark_failed` clearing `claimed_at` (an instant retry) or
-        leaving it at the claim time (a full stale window) instead of
-        back-dating it to unlock after the backoff.
-    Oracle: hand-computed `claimed_at` within a second of
-        `now - STALE_CLAIM_SECONDS + 60`, a default-timeout reclaim held
-        off, and a zero-timeout reclaim that succeeds.
+    Mutation: mark_failed clearing `claimed_at` (an instant retry) or leaving
+        it at the claim time (a full stale window) instead of back-dating it to
+        unlock after the backoff.
+    Oracle: Hand-computed `claimed_at` within a second of `now -
+        STALE_CLAIM_SECONDS + 60`, a default-timeout reclaim held off, and a
+        zero-timeout reclaim that succeeds.
     """
     enqueue(queue_conn, 'main', 'a')
     r = claim(queue_conn, worker_pid=1)
@@ -253,18 +271,15 @@ def test_mark_failed_below_threshold_backs_off(queue_conn, monkeypatch):
 
 
 def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
-    """Attempt 1 unlocks at +60s, 2 at +120s, 3 at +240s, capped at 600s.
+    """Verify backoff runs 60, 120, 240, 480 s, then the row fails.
 
-    `claim` reclaims immediately regardless of the real backoff by
-    monkeypatching `STALE_CLAIM_SECONDS` to 0 for the claim alone, then
-    restoring the real value before `mark_failed` computes the next
-    backoff -- otherwise the same constant that gates `claim`'s
-    reclaim window would also flatten the backoff formula under test.
+    STALE_CLAIM_SECONDS is patched to 0 only while claim runs. mark_failed then
+    computes each backoff from the real value.
 
-    Mutation: a constant backoff, or an off-by-one exponent in
-        `60 * 2**(attempts-1)`.
-    Oracle: hand-computed unlock times of 60, 120, 240 and 480 seconds
-        under a frozen clock.
+    Mutation: A constant backoff, or an off-by-one exponent in `60 *
+        2**(attempts-1)`.
+    Oracle: Hand-computed unlock times under a frozen clock, and status failed
+        at MAX_ATTEMPTS.
     """
     fixed_now = 1_000_000
     monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
@@ -293,21 +308,14 @@ def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
 
 def test_mark_failed_backoff_caps_at_stale_claim_seconds(
         queue_conn, monkeypatch):
-    """Backoff never exceeds `STALE_CLAIM_SECONDS`.
+    """Verify backoff never exceeds `STALE_CLAIM_SECONDS`.
 
-    The cap is `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)`.
+    STALE_CLAIM_SECONDS is patched to 0, so the cap binds from the first
+    attempt. MAX_ATTEMPTS is raised so the loop never reaches the failed state.
 
-    `STALE_CLAIM_SECONDS` is monkeypatched to 0, so the cap fires from
-    the first attempt and `claim` reclaims at once on every iteration;
-    `MAX_ATTEMPTS` is raised so the loop never reaches the
-    failed-state branch.
-
-    Mutation: dropping the `min()` cap, so `claimed_at` drifts away
-        from `fixed_now` by the ever-growing uncapped backoff instead
-        of holding at it.
-    Oracle: hand-computed `claimed_at == fixed_now` at every observed
-        attempt, which only holds when the cap holds the backoff at
-        the monkeypatched `STALE_CLAIM_SECONDS == 0`.
+    Mutation: Dropping the `min()` cap, so `claimed_at` drifts from `fixed_now`
+        by the growing uncapped backoff.
+    Oracle: Hand-computed `claimed_at == fixed_now` on every attempt.
     """
     fixed_now = 1_000_000
     monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
@@ -368,14 +376,23 @@ def test_retry_row_resurrects_failed_row(queue_conn, monkeypatch):
 
 
 def test_retry_row_noop_on_non_failed(queue_conn):
-    """retry_row returns False for rows that are not failed.
+    """Verify retry_row returns False for a row that is not failed.
+
+    Mutation: retry_row resetting a live pending row, or returning True
+        unconditionally.
+    Oracle: The False return for a fresh pending row.
     """
     rid, _ = enqueue(queue_conn, 'main', 'a')
     assert not retry_row(queue_conn, rid)
 
 
 def test_stats_reports_counts_and_oldest_age(queue_conn):
-    """Stats aggregates by status and reports oldest pending age.
+    """Verify stats counts rows by status and reports the oldest age.
+
+    Mutation: stats swapping the pending and done counts, or omitting the
+        oldest pending age.
+    Oracle: Hand-counted 1 pending, 1 done, 0 failed after two enqueues and one
+        completion.
     """
     enqueue(queue_conn, 'main', 'a')
     enqueue(queue_conn, 'main', 'b')
@@ -442,7 +459,11 @@ def test_purge_done_keeps_rows_inside_retention(queue_conn):
 
 
 def test_list_rows_returns_preview(queue_conn):
-    """list_rows returns dicts with truncated content preview.
+    """Verify list_rows cuts the content preview to 80 characters.
+
+    Mutation: The preview carrying the full content, so a long write floods the
+        listing.
+    Oracle: A 200-character write yields a preview of at most 80.
     """
     enqueue(queue_conn, 'main', 'a' * 200)
     rows = list_rows(queue_conn)
@@ -451,7 +472,11 @@ def test_list_rows_returns_preview(queue_conn):
 
 
 def test_list_rows_status_filter(queue_conn):
-    """list_rows(status=...) filters rows by status.
+    """Verify list_rows(status=...) returns only rows of that status.
+
+    Mutation: list_rows ignoring the status argument, or filtering on the wrong
+        column.
+    Oracle: One done and one pending row; each filter returns its own.
     """
     enqueue(queue_conn, 'main', 'x')
     enqueue(queue_conn, 'main', 'y')
@@ -466,7 +491,11 @@ def test_list_rows_status_filter(queue_conn):
 
 
 def test_concurrent_claim_across_two_connections(tmp_path):
-    """Atomic claim: two connections racing never claim the same row twice.
+    """Verify two connections never claim the same row.
+
+    Mutation: claim selecting and updating in separate steps, or leaving its
+        update uncommitted, so the other connection claims the row again.
+    Oracle: Ten rows drained by alternating connections give ten distinct ids.
     """
     with queue_db(str(tmp_path)) as conn_a, \
             queue_db(str(tmp_path)) as conn_b:
@@ -487,8 +516,11 @@ def test_concurrent_claim_across_two_connections(tmp_path):
 
 
 def test_queue_db_context_manager_closes_on_exit(tmp_path):
-    """`with queue_db(...)` closes the connection on scope exit."""
-    import sqlite3
+    """Verify `with queue_db(...)` closes the connection on exit.
+
+    Mutation: queue_db yielding without closing the connection on exit.
+    Oracle: ProgrammingError from a query on the connection after the block.
+    """
     with queue_db(str(tmp_path)) as conn:
         enqueue(conn, 'main', 'hi')
         assert conn.execute(
@@ -498,18 +530,13 @@ def test_queue_db_context_manager_closes_on_exit(tmp_path):
 
 
 def test_open_queue_db_wraps_unreadable_file_as_backend_error(tmp_path):
-    """A non-database `queue.db` fails as `BackendError`, never raw sqlite3.
+    """Verify a non-database `queue.db` fails as BackendError.
 
-    Mutation: dropping the `sqlite3.Error` translation around the pragma
-        and migrate block, so the driver error leaves this function on a
-        queue file a mid-write crash corrupted. `memman remember` no
-        longer prints a traceback for that -- the root group catches
-        `sqlite3.Error` too -- but it would lose the message naming the
-        queue file, and every non-CLI caller would see the driver
-        type.
-    Oracle: `sqlite3.connect` is lazy, so garbage bytes surface at the
-        first pragma as `sqlite3.DatabaseError`, a type outside
-        `BackendError`.
+    Mutation: Dropping the `sqlite3.Error` translation around the pragma and
+        migrate block, so the driver error escapes and the message that names
+        the queue file is lost.
+    Oracle: `sqlite3.connect` is lazy, so garbage bytes surface at the first
+        pragma as `sqlite3.DatabaseError`, a type outside BackendError.
     """
     (tmp_path / 'queue.db').write_bytes(b'not a sqlite database' * 8)
     with pytest.raises(BackendError) as excinfo:
@@ -560,8 +587,6 @@ def test_open_queue_db_closes_the_connection_when_open_fails(
         `DatabaseError` on these bytes instead, so the probe
         discriminates on the type, not on the query succeeding.
     """
-    from memman import queue as queue_mod
-
     captured = []
     real_connect = queue_mod.sqlite3.connect
 
@@ -591,8 +616,6 @@ def test_open_queue_db_closes_the_connection_on_a_non_sqlite_error(
         captured connection is probed after the raise -- a closed
         handle raises `ProgrammingError`, a leaked one answers.
     """
-    from memman import queue as queue_mod
-
     captured = []
     real_connect = queue_mod.sqlite3.connect
 

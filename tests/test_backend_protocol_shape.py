@@ -1,7 +1,6 @@
-"""Backend integrity-check and introspection behavior tests.
+"""Backend integrity-check and introspection tests.
 
-Asserts the architectural commitments that static typing cannot
-verify on its own:
+Pins the commitments that static typing cannot verify:
 
 1. `Insight.created_at`, `Insight.updated_at` carry no
    `default_factory` -- backends stamp these server-side. A PR
@@ -20,7 +19,11 @@ from memman.store.model import Insight, OpLogEntry
 
 
 def test_insight_timestamp_fields_have_no_default_factory():
-    """Insight.created_at and Insight.updated_at: no default_factory.
+    """Verify Insight created_at and updated_at have no default_factory.
+
+    Mutation: adding default_factory=datetime.now to either field, which
+        would stamp client-side and break server-side now() parity.
+    Oracle: dataclasses.fields metadata, compared to MISSING.
     """
     fields = {f.name: f for f in dataclasses.fields(Insight)}
     assert (
@@ -30,7 +33,12 @@ def test_insight_timestamp_fields_have_no_default_factory():
 
 
 def test_oplog_entry_created_at_is_required():
-    """OpLogEntry.created_at: no default (DB-stamped on read)."""
+    """Verify OpLogEntry.created_at has neither a default nor a factory.
+
+    Mutation: giving created_at a default value or default_factory, so the
+        entry is stamped client-side instead of by the database.
+    Oracle: dataclasses.fields metadata, compared to MISSING.
+    """
     fields = {f.name: f for f in dataclasses.fields(OpLogEntry)}
     assert (
         fields['created_at'].default_factory is dataclasses.MISSING)
@@ -38,7 +46,11 @@ def test_oplog_entry_created_at_is_required():
 
 
 def test_node_update_embedding_takes_vec_not_blob():
-    """update_embedding signature uses vec, not blob (list[float])."""
+    """Verify NodeStore.update_embedding takes vec and no blob parameter.
+
+    Mutation: reverting the signature to the older blob parameter.
+    Oracle: inspect.signature of the Protocol method.
+    """
     sig = inspect.signature(NodeStore.update_embedding)
     assert 'vec' in sig.parameters
     assert 'blob' not in sig.parameters
@@ -57,10 +69,16 @@ def test_no_layer_keeps_storage_summary(backend):
 
 
 class TestBackendIntrospection:
-    """Backend.integrity_check behavior."""
+    """Backend.integrity_check behavior.
+    """
 
     def test_integrity_check_returns_ok_on_fresh_store(self, backend):
-        """integrity_check returns {'ok': True, ...} on a healthy fresh store."""
+        """Verify integrity_check reports ok with a detail on a fresh store.
+
+        Mutation: integrity_check returning a failure or omitting the detail
+            key on a healthy store.
+        Oracle: the literal result keys and True for a new backend.
+        """
         result = backend.integrity_check()
         assert isinstance(result, dict)
         assert result.get('ok') is True

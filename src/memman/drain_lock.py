@@ -6,7 +6,7 @@ or crash), so no stale-lock recovery is needed.
 
 Caveats:
 - SIGSTOP / `docker pause` / cgroup freezer hold the lock until the
-  process actually dies. This is the kernel's behavior, not ours.
+  process actually dies.
 - Assumes a local filesystem. The lock lives at `<data_dir>/`, which
   is the base data dir (typically `~/.memman/`), not the per-store
   directory under `data/`.
@@ -17,7 +17,8 @@ from pathlib import Path
 
 
 class DrainLockBusy(Exception):
-    """Another drain is already running on this data_dir."""
+    """Another drain is already running on this data_dir.
+    """
 
 
 def acquire(data_dir: str) -> int:

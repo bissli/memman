@@ -1,7 +1,7 @@
 """SQLite implementation of the Backend Protocol surface.
 
-Thin facade. Each Protocol verb binds 1:1 to an existing free
-function in `store/{node,oplog,db}.py`.
+Thin facade. Most Protocol verbs bind 1:1 to a free function in
+`store/{node,oplog,db}.py`.
 
 The recall path goes through `Backend.recall_session()`, which yields
 a `SqliteRecallSession` holding one in-process embedding matrix for
@@ -30,6 +30,7 @@ from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.migrate import Artifact, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
 from memman.migrate import sanitize_identifier
+from memman.setup.archive import archive_store_dir
 from memman.store import db as _db
 from memman.store import node as _node
 from memman.store import oplog as _oplog
@@ -201,7 +202,8 @@ group by length(embedding)
 
 
 class SqliteMetaStore(MetaStore):
-    """Bindings from MetaStore Protocol verbs to `store.db` get/set."""
+    """Bindings from MetaStore Protocol verbs to `store.db` get/set.
+    """
 
     def __init__(self, db: DB) -> None:
         self._db = db
@@ -221,7 +223,8 @@ class SqliteMetaStore(MetaStore):
 
 
 class SqliteOplog(Oplog):
-    """Bindings from Oplog Protocol verbs to `store.oplog` functions."""
+    """Bindings from Oplog Protocol verbs to `store.oplog` functions.
+    """
 
     def __init__(self, db: DB) -> None:
         self._db = db
@@ -279,34 +282,21 @@ class SqliteRecallSession(RecallSession):
 
     Notes
     -----
-    - The matrix is float64 because cosine similarity is computed at
-      float64 precision throughout the store. The speed comes from
-      `np.frombuffer` over `struct.unpack`, not from a narrower
-      dtype.
-    - Rows whose blob width differs from the store's modal width are
-      left out of the matrix, so a half-finished `embed swap` scores
-      them 0.0 instead of raising on a ragged `np.array`.
+    - A row scores only against a query of its own blob width and
+      scores 0.0 against any other, so a half-finished `embed swap`
+      never raises on a ragged `np.array`.
     """
 
     db: DB
     _groups: dict[int, tuple[list[Id], Any, Any]] | None = None
 
     def close(self) -> None:
-        """Drop the matrices so they do not outlive the request."""
+        """Drop the matrices so they do not outlive the request.
+        """
         self._groups = None
 
     def _load(self) -> None:
         """Build one embedding matrix per stored width, once.
-
-        Notes
-        -----
-        - Grouped by width rather than reduced to a single modal
-          width: a store mid-`embed reembed` holds two widths, and
-          scoring only the modal group would blank the whole vector
-          channel for a query at the other width -- including the
-          rows that query CAN score. Each row is compared only
-          against a query of its own width: a dimension mismatch
-          scores 0.0, applied per row rather than per store.
         """
         if self._groups is not None:
             return
@@ -333,9 +323,13 @@ where deleted_at is null and replaced_by is null and embedding is not null
                 f' of float64 values and were skipped; run'
                 f' `memman embed reembed` to repair')
 
+        # One matrix per width: a store mid-`embed reembed` holds two
+        # widths, and scoring only the modal one would blank the
+        # vector channel for a query at the other width.
         groups: dict[int, tuple[list[Id], Any, Any]] = {}
         for width, entries in by_width.items():
             dim = width // 8
+            # float64 matches the precision cosines use store-wide.
             matrix = np.empty((len(entries), dim), dtype=np.float64)
             for row, (rid, blob) in enumerate(entries):
                 matrix[row] = np.frombuffer(blob, dtype='<f8')
@@ -370,7 +364,8 @@ where deleted_at is null and replaced_by is null and embedding is not null
 
     def similarities(
             self, query_vec: list[float]) -> dict[Id, float]:
-        """Cosine per id, positives only. See the Protocol docstring."""
+        """Cosine per id, positives only. See the Protocol docstring.
+        """
         row_ids, sims = self._cosines(query_vec)
         return {
             row_ids[row]: float(sims[row])
@@ -381,23 +376,8 @@ where deleted_at is null and replaced_by is null and embedding is not null
             self, query_tokens: set[str]) -> dict[Id, int]:
         """Match count per active insight id, from FTS5 probes.
 
-        See the Protocol docstring for the contract.
-
-        Notes
-        -----
-        - Agrees with `keyword.insight_tokens` on ASCII text and
-          diverges on non-ASCII; see the Protocol docstring for the
-          class. Do not "fix" it here -- the tokenizers differ by
-          construction.
-        - One probe per token rather than one `OR` expression: the
-          combined form returns the union of the rows but not which
-          token matched which row, and the per-token count IS
-          `kw_score`'s numerator. The two forms cost the same.
-        - The probe expression is built here and never from user
-          text: FTS5 `match` takes a query language, and 8 of 11
-          realistic queries handed to it raw raise a syntax error.
-          Quoting the token costs nothing and makes the probe hold
-          even if `tokenize` ever stops guaranteeing `[a-zA-Z0-9]+`.
+        The contract, including the non-ASCII divergence from
+        `keyword.insight_tokens`, is in the Protocol docstring.
         """
         if not query_tokens:
             return {}
@@ -408,6 +388,14 @@ join insights i on i.rowid = f.rowid
 where insights_fts match ? and i.deleted_at is null and i.replaced_by is null
 """
         counts: dict[Id, int] = {}
+        # Notes:
+        # - One probe per token: an `OR` expression returns the union
+        #   of rows but not which token matched which row, and the
+        #   per-token count is `kw_score`'s numerator.
+        # - The match expression is built from the token alone, never
+        #   from user text, since FTS5 `match` takes a query language.
+        #   The quotes keep the probe valid if `tokenize` stops
+        #   guaranteeing `[a-zA-Z0-9]+`.
         for token in query_tokens:
             for (iid,) in self.db._query(sql, (f'"{token}"',)):
                 counts[iid] = counts.get(iid, 0) + 1
@@ -432,10 +420,7 @@ where insights_fts match ? and i.deleted_at is null and i.replaced_by is null
 class SqliteBackend(Backend):
     """Per-store backend wrapping a SQLite `DB`.
 
-    Construction takes an already-open `DB`. `open_sqlite_backend`
-    calls `_db.open_db(...)` and wraps the result; tests / cli code
-    that already have a `DB` can wrap it directly:
-    `SqliteBackend(db)`.
+    Wraps an already-open `DB`; `open_sqlite_backend` opens one.
     """
 
     nodes: SqliteNodeStore
@@ -450,8 +435,7 @@ class SqliteBackend(Backend):
 
     @property
     def path(self) -> str:
-        """Backing file path. SQLite-specific; pipeline code that needs
-        a directory derives it via `pathlib.Path(backend.path).parent`.
+        """Path of the `memman.db` file.
         """
         return self._db.path
 
@@ -482,62 +466,52 @@ class SqliteBackend(Backend):
 
     @contextmanager
     def reembed_lock(self, name: str) -> Iterator[bool]:
-        """Always yields True on SQLite (single-process by definition).
-
-        Postgres acquires `pg_try_advisory_lock` on a dedicated
-        connection so concurrent sweeps fail-fast instead of
-        racing.
+        """Yield True: SQLite runs single-process, so the lock is free.
         """
         yield True
 
     @contextmanager
     def swap_lock(self) -> Iterator[bool]:
-        """Always yields True on SQLite (single-process by definition).
-
-        `_require_stopped('swap')` already excludes the drain at the
-        CLI boundary. Postgres acquires `pg_try_advisory_lock` on
-        the `embed_swap:<schema>` key so cross-process swaps fail-
-        fast instead of racing.
+        """Yield True: `_require_stopped('swap')` already excludes the drain.
         """
         yield True
 
     def swap_prepare(self, target_dim: int) -> None:
-        """No-op on SQLite; `embedding_pending` blob is in the baseline
-        schema. Dim is not enforced at the column level on SQLite.
+        """No-op: `embedding_pending` is in the baseline schema.
         """
         return
 
     def iter_for_swap(
             self, cursor: str, batch: int) -> list[tuple[str, str]]:
-        """Return rows still needing `embedding_pending`."""
+        """Return rows still needing `embedding_pending`.
+        """
         return _node.iter_for_swap(self._db, cursor, batch)
 
     def write_swap_batch(
             self, items: list[tuple[str, list[float]]]) -> None:
-        """Bulk-update `embedding_pending` for the given (id, vec) items."""
+        """Bulk-update `embedding_pending` for the given (id, vec) items.
+        """
         blobs = [(rid, serialize_vector(vec)) for (rid, vec) in items]
         _node.write_swap_batch(self._db, blobs)
 
     def swap_cutover(self, target: Fingerprint) -> None:
         """Copy `embedding_pending` into `embedding`, set model, null shadow.
-        Runs in its own transaction; orchestrator records cutover state
-        before invoking and writes the fingerprint after.
+
+        Runs in its own transaction. The caller writes the fingerprint
+        afterward.
         """
         with self.transaction():
             _node.swap_cutover_sqlite(self._db, target.model)
 
     def swap_abort(self) -> None:
-        """Null `embedding_pending` on every row."""
+        """Null `embedding_pending` on every row.
+        """
         with self.transaction():
             _node.swap_abort_sqlite(self._db)
 
     @contextmanager
     def recall_session(self) -> Iterator[SqliteRecallSession]:
-        """Yield a SqliteRecallSession for one recall request.
-
-        The session builds its embedding matrix from the live
-        database, so there is no stored artifact whose embedding model
-        could disagree with the caller's.
+        """Yield a session that reads the live database.
         """
         session = SqliteRecallSession(db=self._db)
         try:
@@ -557,24 +531,22 @@ class SqliteBackend(Backend):
 
         Notes
         -----
-        - The rank-1 form is the only one that reads the content
-          table: `pragma integrity_check` and FTS5's own default
-          `'integrity-check'` both pass on an index whose terms have
-          drifted from the rows they index. Measured on a store
-          edited behind the index -- both blind, rank 1 raises.
-        - It scans every indexed row, so it belongs here in the
+        - The probe scans every indexed row, so it belongs in the
           `doctor` path and never on the recall path.
-        - The probe needs a write transaction, so a read-only handle
-          or a busy writer makes it raise without saying anything
-          about the index. Those arrive as `OperationalError` while
-          real drift arrives as `DatabaseError`, which is why the
-          two are caught separately -- reporting "not run" beats
-          reporting corruption that is not there.
         """
         row = self._db._query('pragma integrity_check').fetchone()
         result = row[0] if row else 'unknown'
         if result != 'ok':
             return {'ok': False, 'detail': result}
+        # Notes:
+        # - Rank 1 is the only form that reads the content table:
+        #   `pragma integrity_check` and the default FTS5
+        #   `'integrity-check'` both pass on a drifted index.
+        # - The probe needs a write transaction, so a read-only handle
+        #   or a busy writer raises `OperationalError` and says
+        #   nothing about the index. Real drift raises
+        #   `DatabaseError`. Reporting "not run" beats reporting
+        #   corruption that is not there.
         try:
             self._db._query(
                 "insert into insights_fts(insights_fts, rank)"
@@ -600,15 +572,18 @@ class SqliteBackend(Backend):
         return None
 
     def beat_run(self, run_id: int | None) -> None:
-        """No-op for SQLite mode."""
+        """No-op for SQLite mode.
+        """
         return
 
     def finish_run(self, run_id: int | None) -> None:
-        """No-op for SQLite mode."""
+        """No-op for SQLite mode.
+        """
         return
 
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
-        """No-op: SQLite drain has no per-store worker_runs table."""
+        """No-op: SQLite drain has no per-store worker_runs table.
+        """
         return []
 
     def close(self) -> None:
@@ -623,17 +598,6 @@ class SqliteBackend(Backend):
             exc: BaseException | None,
             tb: TracebackType | None) -> None:
         self.close()
-
-
-def open_ro_db(sdir: str) -> DB:
-    """Open the SQLite store at `sdir` in read-only mode.
-
-    cli-internal helper that puts the only `open_read_only` literal
-    inside the SQLite backend module. Callers that need a raw DB
-    handle reach this instead of importing
-    `store.db.open_read_only` directly.
-    """
-    return _db.open_read_only(sdir)
 
 
 def open_sqlite_backend(
@@ -652,7 +616,8 @@ def open_sqlite_backend(
 
 
 def drop_sqlite_store(store: str, data_dir: str) -> None:
-    """Remove the SQLite store directory for `store` if it exists."""
+    """Remove the SQLite store directory for `store` if it exists.
+    """
     sdir = _db.store_dir(data_dir, store)
     if Path(sdir).is_dir():
         shutil.rmtree(sdir)
@@ -702,10 +667,11 @@ class SqliteMigrator(Migrator):
             `BackendError`, so an untranslated driver error reaches
             the operator as a traceback.
         """
-        # Percent-encode, and probe with a read that forces the header:
-        # `connect` is lazy, so corrupt bytes surface at the first
-        # statement, and an unescaped `#` or `?` in the path would
-        # silently open a different file read-write.
+        # Notes:
+        # - The probe read forces the header: `connect` is lazy, so
+        #   corrupt bytes surface only at the first statement.
+        # - The path is percent-encoded: an unescaped `#` or `?` would
+        #   silently open a different file read-write.
         uri = f'file:{quote(str(path))}?mode=ro'
         conn = None
         try:
@@ -875,9 +841,8 @@ order by id
 
                 max_oplog_id = 0
                 for op in payload.oplog:
-                    desired_id = op.legacy_id
                     row = (
-                        desired_id, op.operation, op.insight_id,
+                        op.legacy_id, op.operation, op.insight_id,
                         op.detail,
                         format_timestamp(op.created_at),
                         json.dumps(op.before)
@@ -891,7 +856,7 @@ order by id
                             ' created_at, before, after)'
                             ' values (?, ?, ?, ?, ?, ?, ?)',
                             row)
-                        max_oplog_id = max(max_oplog_id, desired_id)
+                        max_oplog_id = max(max_oplog_id, op.legacy_id)
                     except sqlite3.IntegrityError:
                         conn.execute(
                             'insert into oplog ('
@@ -918,8 +883,6 @@ order by id
                     conn.execute('rollback')
                 except sqlite3.Error:
                     pass
-                if isinstance(exc, MigrateError):
-                    raise
                 raise MigrateError(
                     f'sqlite apply for store {store!r} failed:'
                     f' {type(exc).__name__}: {exc}') from exc
@@ -927,7 +890,6 @@ order by id
             db.close()
 
     def archive(self, store: str, data_dir: str) -> Artifact:
-        from memman.setup.archive import archive_store_dir
         path = archive_store_dir(data_dir, store)
         if path is None:
             return Artifact(kind='none', location=None)

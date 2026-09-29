@@ -1,4 +1,5 @@
-"""Tests for the daily check that the configured OpenRouter model routes."""
+"""Tests for the daily check that the configured OpenRouter model routes.
+"""
 
 import json
 import os

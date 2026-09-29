@@ -1,22 +1,31 @@
 """Tests for memman.cli - Click CLI commands via CliRunner.
 
-All tests use real Haiku LLM and Voyage embedding APIs.
-Requires OPENROUTER_API_KEY and VOYAGE_API_KEY in environment.
+The LLM and embedding clients are the autouse mocks from conftest.
 """
 
 import json
+import logging
 import pathlib
 import re
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from memman import config
+from memman import embed as embed_mod
 from memman.cli import cli
-from memman.embed.fingerprint import seed_default_fingerprint
+from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
+from memman.embed.fingerprint import write_fingerprint
 from memman.embed.vector import serialize_vector
-from memman.store.db import store_exists
+from memman.pipeline.remember import compute_prompt_version
+from memman.queue import enqueue, list_rows, open_queue_db
+from memman.setup.scheduler import _write_env_keys
+from memman.store.db import open_db, open_read_only, store_dir, store_exists
+from memman.store.db import write_active
 from memman.store.errors import BackendError
 from memman.store.node import insert_insight, update_embedding
+from memman.store.node import update_enrichment
+from memman.store.sqlite import SqliteBackend
 from tests.conftest import invoke, make_insight, parse_remember
 
 _SCORED_LINE = re.compile(
@@ -28,10 +37,19 @@ _BASIC_LINE = re.compile(
 
 
 def _parse_recall_lines(output: str, basic: bool = False) -> list[dict]:
-    """Parse a recall page into one field dict per line, id8-keyed order kept.
+    """Parse a recall page into one field dict per line.
 
-    Mutation: a caller comparing against the deleted JSON envelope
-        instead of this plain-text line shape.
+    Parameters
+    ----------
+    output : str
+        Plain-text recall output, one row per line.
+    basic : bool
+        Match the scoreless `--basic` line format.
+
+    Returns
+    -------
+    list[dict]
+        Named groups of each line, in page order.
     """
     pattern = _BASIC_LINE if basic else _SCORED_LINE
     rows = []
@@ -44,15 +62,22 @@ def _parse_recall_lines(output: str, basic: bool = False) -> list[dict]:
 
 @pytest.fixture
 def runner(mm_runner):
-    """CliRunner + data_dir tuple (delegates to conftest `mm_runner`)."""
+    """CliRunner + data_dir tuple (delegates to conftest `mm_runner`).
+    """
     return mm_runner
 
 
 class TestRemember:
-    """`memman remember` happy paths and validation."""
+    """`memman remember` happy paths and validation.
+    """
 
     def test_remember_basic(self, runner):
-        """Store a basic insight."""
+        """Verify `remember` queues a row and reports its content.
+
+        Mutation: returning the payload without the stored content, or an
+            action outside the add/update vocabulary.
+        Oracle: the drained row read back by `parse_remember`.
+        """
         result = invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         assert result.exit_code == 0
@@ -80,7 +105,11 @@ class TestRemember:
         assert shown['category'] == 'decision'
 
     def test_remember_invalid_category(self, runner):
-        """Invalid category is rejected."""
+        """Verify an unknown --cat value is rejected.
+
+        Mutation: dropping the category validation so `bogus` is stored.
+        Oracle: non-zero exit for a category outside the valid set.
+        """
         result = invoke(runner, [
             'remember', 'Go uses SQLite for storage', '--cat', 'bogus'])
         assert result.exit_code != 0
@@ -88,7 +117,7 @@ class TestRemember:
     def test_remember_rejects_general(self, runner):
         """Verify `--cat general` exits non-zero and names the valid set.
 
-        Mutation: `general` accepted as a category (the 0.33.x set).
+        Mutation: `general` accepted as a category.
         Oracle: the exit code and the message listing the valid categories.
         """
         result = invoke(runner, [
@@ -110,7 +139,6 @@ class TestRemember:
         invoke(runner, [
             'remember', 'Redis cache eviction uses LRU algorithm'])
 
-        from unittest.mock import patch
         with patch('memman.pipeline.enrich.enrich_pending',
                    side_effect=AssertionError(
                        'enrich_pending called from remember')) as mock_lp:
@@ -120,7 +148,12 @@ class TestRemember:
             mock_lp.assert_not_called()
 
     def test_remember_quality_warnings(self, runner):
-        """Content with quality warnings is queued; warnings populated as hints."""
+        """Verify transient content is queued with named quality warnings.
+
+        Mutation: dropping a warning pattern (instance id, deployment
+            receipt), or rejecting the write instead of queueing it.
+        Oracle: content holding an instance id and a deploy phrase.
+        """
         result = invoke(runner, [
             'remember', 'i-0c220c2402a5245bc deployed via Terraform'])
         assert result.exit_code == 0
@@ -130,7 +163,11 @@ class TestRemember:
         assert 'deployment receipt' in data['quality_warnings']
 
     def test_remember_no_quality_warnings(self, runner):
-        """Durable content produces empty quality_warnings."""
+        """Verify durable content carries an empty warning list.
+
+        Mutation: a warning pattern that matches ordinary decision text.
+        Oracle: a decision sentence with no transient marker.
+        """
         result = invoke(runner, [
             'remember', 'SQLite chosen for single-node simplicity and embedded operation'])
         assert result.exit_code == 0
@@ -138,7 +175,13 @@ class TestRemember:
         assert raw['quality_warnings'] == []
 
     def test_remember_quality_warnings_populate(self, runner):
-        """Quality warnings populate as hints but never block the write."""
+        """Verify warnings never block a write.
+
+        Mutation: rejecting content that draws warnings, or dropping the
+            warning list from the payload.
+        Oracle: a two-warning sentence queued, and a long incident sentence
+            stored with exactly one warning.
+        """
         result = invoke(runner, [
             'remember', 'Stack deployed via Terraform. 32 resources total.'])
         data = json.loads(result.output)
@@ -154,10 +197,15 @@ class TestRemember:
 
 
 class TestRecall:
-    """`memman recall` smart and basic modes."""
+    """`memman recall` smart and basic modes.
+    """
 
     def test_recall_basic(self, runner):
-        """Recall after remembering."""
+        """Verify `recall` exits 0 after a `remember`.
+
+        Mutation: recall raising on a store that holds one fresh row.
+        Oracle: the exit code alone.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', 'Go SQLite storage'])
@@ -175,7 +223,6 @@ class TestRecall:
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
 
-        from unittest.mock import patch
         with patch('memman.pipeline.enrich.enrich_pending',
                    side_effect=AssertionError('enrich_pending called')) as mock_lp:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
@@ -184,19 +231,19 @@ class TestRecall:
 
     def test_recall_logs_when_query_embed_fails(
             self, runner, caplog, monkeypatch):
-        """A raising `ec.embed` for the recall query is now warned, not
-        swallowed silently. The recall still degrades to the keyword
-        path and returns successfully.
+        """Verify a failing query embed is logged and recall still succeeds.
+
+        Mutation: swallowing the embed error without a warning, or letting
+            it abort the command instead of degrading to keyword recall.
+        Oracle: a patched embed that raises, and the captured WARNING record.
         """
-        import logging
 
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
 
-        from memman import embed as embed_mod
         real_ec = embed_mod.get_client()
 
-        def _boom(self, text):
+        def _boom(self, text: str) -> None:
             raise RuntimeError('forced query embed failure')
 
         monkeypatch.setattr(type(real_ec), 'embed', _boom)
@@ -301,13 +348,16 @@ class TestRecall:
             mock_re.assert_not_called()
 
     def test_recall_rerank_failure_falls_back_gracefully(self, runner):
-        """Reranker errors must not break recall; falls back to baseline."""
+        """Verify a reranker error does not break recall.
+
+        Mutation: letting the rerank exception escape the recall command.
+        Oracle: a patched rerank raising RuntimeError, called exactly once.
+        """
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions']:
             invoke(runner, ['remember', fact])
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=RuntimeError('voyage 503')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
@@ -317,7 +367,7 @@ class TestRecall:
     def test_recall_basic_mode(self, runner):
         """Basic recall prints a scoreless page line per matching row.
 
-        Mutation: keeping the deleted `{results, meta}` JSON envelope.
+        Mutation: printing a `{results, meta}` JSON envelope.
         Oracle: the basic-line regex, matched against every printed
             line.
         """
@@ -331,7 +381,7 @@ class TestRecall:
     def test_recall_basic_returns_envelope(self, runner):
         """Recall --basic prints a line whose text names the stored content.
 
-        Mutation: keeping the deleted `{results: [...]}` envelope.
+        Mutation: printing a `{results: [...]}` JSON envelope.
         Oracle: the parsed page line's `text` field containing the
             stored word.
         """
@@ -439,10 +489,16 @@ class TestRecall:
 
 
 class TestForget:
-    """`memman forget` happy paths and missing-id error."""
+    """`memman forget` happy paths and missing-id error.
+    """
 
     def test_forget_basic(self, runner):
-        """Forget an insight by ID."""
+        """Verify `forget` deletes an insight by id.
+
+        Mutation: reporting a status other than deleted, or failing on a
+            live id.
+        Oracle: the id returned by `remember`.
+        """
         result = invoke(runner, [
             'remember', 'Redis cache eviction policy uses LRU by default'])
         data = parse_remember(result, runner)
@@ -453,7 +509,11 @@ class TestForget:
         assert fdata['status'] == 'deleted'
 
     def test_forget_writes_oplog(self, runner):
-        """Forget command writes an oplog entry atomically."""
+        """Verify `forget` leaves a `forget` oplog entry.
+
+        Mutation: deleting the row without writing the oplog record.
+        Oracle: `log list --stats` operation counts.
+        """
         result = invoke(runner, [
             'remember', 'PostgreSQL uses MVCC for transaction isolation'])
         data = parse_remember(result, runner)
@@ -465,71 +525,88 @@ class TestForget:
         assert 'forget' in log_data['operation_counts']
 
     def test_forget_nonexistent_fails(self, runner):
-        """Forget with nonexistent ID returns error."""
+        """Verify `forget` on an unknown id exits non-zero.
+
+        Mutation: reporting success for an id that does not exist.
+        Oracle: exit code for a made-up id.
+        """
         result = invoke(runner, ['forget', 'nonexistent-id-12345'])
         assert result.exit_code != 0
 
 
 class TestStore:
-    """`memman store` admin: list, create, set, remove."""
+    """`memman store` admin: list, create, set, remove.
+    """
 
     def test_store_list(self, runner):
-        """Store list emits a JSON envelope with stores[] and active."""
-        import json as _json
+        """Verify `store list` emits stores and active keys.
+
+        Mutation: dropping either key from the envelope.
+        Oracle: the parsed JSON keys.
+        """
         result = invoke(runner, ['store', 'list'])
         assert result.exit_code == 0
-        payload = _json.loads(result.output)
+        payload = json.loads(result.output)
         assert 'stores' in payload
         assert 'active' in payload
 
     def test_store_create(self, runner):
-        """Create a new store; JSON reports action='created'."""
-        import json as _json
+        """Verify `store create` reports action=created and the name.
+
+        Mutation: reporting the wrong action or an empty store name.
+        Oracle: hand-set `created` and `test-store`.
+        """
         result = invoke(runner, ['store', 'create', 'test-store'])
         assert result.exit_code == 0
-        payload = _json.loads(result.output)
+        payload = json.loads(result.output)
         assert payload['action'] == 'created'
         assert payload['store'] == 'test-store'
 
     def test_store_create_duplicate(self, runner):
-        """Duplicate store name is rejected."""
+        """Verify creating an existing store fails.
+
+        Mutation: dropping the exists check so the second create succeeds.
+        Oracle: exit code of the second `store create dup`.
+        """
         invoke(runner, ['store', 'create', 'dup'])
         result = invoke(runner, ['store', 'create', 'dup'])
         assert result.exit_code != 0
 
     def test_store_set(self, runner):
-        """Set active store; JSON reports action='set'."""
-        import json as _json
+        """Verify `store use` reports action=set and the name.
+
+        Mutation: switching the store without reporting it, or reporting
+            the previous store.
+        Oracle: hand-set `set` and `work`.
+        """
         invoke(runner, ['store', 'create', 'work'])
         result = invoke(runner, ['store', 'use', 'work'])
         assert result.exit_code == 0
-        payload = _json.loads(result.output)
+        payload = json.loads(result.output)
         assert payload['action'] == 'set'
         assert payload['store'] == 'work'
 
     def test_store_remove_yes(self, runner):
-        """Remove a non-active store with --yes skips prompt."""
-        import json as _json
+        """Verify `store remove --yes` skips the prompt and removes.
+
+        Mutation: prompting despite --yes, or removing without reporting.
+        Oracle: exit 0 with no input and action=removed.
+        """
         invoke(runner, ['store', 'create', 'temp'])
         result = invoke(runner, ['store', 'remove', '--yes', 'temp'])
         assert result.exit_code == 0
-        payload = _json.loads(result.output)
+        payload = json.loads(result.output)
         assert payload['action'] == 'removed'
         assert payload['store'] == 'temp'
 
     def test_store_remove_purges_queue(self, runner):
-        """Removing a store also drops its in-flight queue rows.
+        """Verify removing a store drops its queue rows.
 
-        Regression: the old `store remove` flow rmtreed the data dir
-        but left queue rows orphaned, so the worker would re-attempt
-        them against a missing store dir. The purge now happens
-        inside `factory.drop_store`, which is what `store remove`
-        invokes; the test asserts the observable contract (no
-        survivor queue rows) regardless of where the purge fires.
+        Mutation: removing the data dir but leaving queue rows, which the
+            worker then retries against a missing store dir.
+        Oracle: queue rows for the store counted before and after removal.
         """
-        import json as _json
 
-        from memman.queue import enqueue, list_rows, open_queue_db
         _, data_dir = runner
         invoke(runner, ['store', 'create', 'doomed'])
         qconn = open_queue_db(data_dir)
@@ -544,7 +621,7 @@ class TestStore:
             qconn.close()
         result = invoke(runner, ['store', 'remove', '--yes', 'doomed'])
         assert result.exit_code == 0
-        payload = _json.loads(result.output)
+        payload = json.loads(result.output)
         assert payload['action'] == 'removed'
         qconn = open_queue_db(data_dir)
         try:
@@ -558,23 +635,21 @@ class TestStore:
             qconn.close()
 
     def test_store_remove_purges_per_store_env_keys(self, runner):
-        """Removing a store drops its per-store keys from the env file.
+        """Verify removing a store drops its per-store env keys only.
 
         Mutation: dropping the `removes=` cleanup, which leaves
-        `MEMMAN_BACKEND_doomed` and the store's Postgres DSN (password
-        included) in the env file after the store is gone.
-        Oracle: the parsed env file -- every PER_STORE_KEY_SPECS prefix
-        for the removed store absent, and the same prefixes for a
-        surviving store plus the global key still present.
+            `MEMMAN_BACKEND_doomed` and the store's Postgres DSN (password
+            included) in the env file after the store is gone.
+        Oracle: the parsed env file. Every PER_STORE_KEY_SPECS prefix for
+            the removed store is absent, and the same prefixes for a
+            surviving store plus the global key remain.
         """
-        from memman import config
-        from memman.setup.scheduler import _write_env_keys
         _, data_dir = runner
         invoke(runner, ['store', 'create', 'doomed'])
         invoke(runner, ['store', 'create', 'keeper'])
         value_for = {
             'MEMMAN_BACKEND_': 'sqlite',
-            config._pg_dsn_prefix(): 'postgresql://u:p@127.0.0.1:1/db',
+            'MEMMAN_POSTGRES_DSN_': 'postgresql://u:p@127.0.0.1:1/db',
             'MEMMAN_RERANK_ENABLED_': 'false',
             }
         doomed_keys = {
@@ -603,7 +678,11 @@ class TestStore:
         assert 'MEMMAN_LOG_LEVEL' in after
 
     def test_store_remove_prompts_without_yes(self, runner):
-        """Without --yes, remove prompts; typing 'n' aborts."""
+        """Verify answering `n` to the prompt aborts the removal.
+
+        Mutation: removing the store despite a negative answer.
+        Oracle: non-zero exit and `store_exists` still true.
+        """
         r, data_dir = runner
         invoke(runner, ['store', 'create', 'temp2'])
         result = r.invoke(
@@ -613,21 +692,30 @@ class TestStore:
         assert store_exists(data_dir, 'temp2')
 
     def test_store_remove_prompts_accept(self, runner):
-        """Without --yes, typing 'y' at the prompt completes the delete."""
-        import json as _json
+        """Verify answering `y` to the prompt completes the removal.
+
+        Mutation: aborting on a positive answer, or omitting the JSON
+            payload after the prompt echo.
+        Oracle: exit 0 and action=removed in the payload.
+        """
         r, data_dir = runner
         invoke(runner, ['store', 'create', 'temp3'])
         result = r.invoke(
             cli, ['--data-dir', data_dir, 'store', 'remove', 'temp3'],
             input='y\n')
         assert result.exit_code == 0, result.output
-        # The confirm prompt echoes before the JSON payload; find the payload.
+        # The confirm prompt echoes before the JSON payload.
         payload_start = result.output.find('{')
-        payload = _json.loads(result.output[payload_start:])
+        payload = json.loads(result.output[payload_start:])
         assert payload['action'] == 'removed'
 
     def test_store_auto_create_from_env(self, runner, monkeypatch):
-        """MEMMAN_STORE env var silently creates a non-existent store."""
+        """Verify MEMMAN_STORE creates a missing store on first use.
+
+        Mutation: failing on an unknown store name from the env var, or
+            creating no directory.
+        Oracle: the store directory on disk and the name in `store list`.
+        """
         r, data_dir = runner
         monkeypatch.setenv('MEMMAN_STORE', 'auto-created')
 
@@ -646,10 +734,15 @@ class TestStore:
 
 
 class TestStatus:
-    """`memman status` and `memman doctor` smoke."""
+    """`memman status` and `memman doctor` smoke.
+    """
 
     def test_status_basic(self, runner):
-        """Status returns JSON."""
+        """Verify `status` emits JSON with total_insights.
+
+        Mutation: dropping the total from the status payload.
+        Oracle: the parsed JSON key.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['status'])
@@ -658,9 +751,10 @@ class TestStatus:
         assert 'total_insights' in data
 
     def test_doctor_basic(self, runner):
-        """Doctor returns JSON with checks and status.
+        """Verify `doctor` emits JSON with status, checks, and total_active.
 
-        Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+        Mutation: dropping a top-level key from the doctor report.
+        Oracle: the parsed JSON keys; exit 0 or 1 per environment.
         """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
@@ -673,10 +767,15 @@ class TestStatus:
 
 
 class TestLog:
-    """`memman log` smoke."""
+    """`memman log` smoke.
+    """
 
     def test_log_basic(self, runner):
-        """Log shows recent operations."""
+        """Verify `log list` exits 0 after a write.
+
+        Mutation: raising on a store that holds oplog rows.
+        Oracle: the exit code alone.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['log', 'list'])
@@ -684,7 +783,8 @@ class TestLog:
 
 
 class TestInsightsReview:
-    """`memman insights review` flags transient content."""
+    """`memman insights review` flags transient content.
+    """
 
     def test_review_flags_transient_content(self, runner):
         """A stored instance id is flagged; a durable decision is not.
@@ -709,7 +809,11 @@ class TestInsightsReview:
         assert any('i-0c220c2402a5245bc' in c.lower() for c in flagged)
 
     def test_review_clean_store_flags_nothing(self, runner):
-        """A store of durable content returns zero flagged."""
+        """Verify durable content draws no review flag.
+
+        Mutation: a review pattern that matches ordinary decision text.
+        Oracle: total_flagged of 0 for one decision sentence.
+        """
         invoke(runner, [
             'remember', 'SQLite chosen for simplicity and embedded operation'])
         result = invoke(runner, ['insights', 'review'])
@@ -719,10 +823,15 @@ class TestInsightsReview:
 
 
 class TestReplace:
-    """`memman replace` happy paths, metadata, oplog."""
+    """`memman replace` happy paths, metadata, oplog.
+    """
 
     def test_replace_basic(self, runner):
-        """Replace an insight, verify old soft-deleted, new exists."""
+        """Verify `replace` reports the action and the replaced id.
+
+        Mutation: reporting action=add, or a wrong replaced_id.
+        Oracle: the id returned by the first `remember`.
+        """
         result = invoke(runner, [
             'remember', 'Redis cache configured with 512MB memory limit', '--cat', 'fact'])
         old_id = parse_remember(result, runner)['id']
@@ -785,7 +894,11 @@ class TestReplace:
         assert shown['category'] == 'decision'
 
     def test_replace_nonexistent_id(self, runner):
-        """Replace a nonexistent ID produces error."""
+        """Verify replacing an unknown id fails with a not-found message.
+
+        Mutation: creating a new row for an id that does not exist.
+        Oracle: non-zero exit and the `not found` text.
+        """
         result = invoke(runner, [
             'replace', 'nonexistent-id',
             'Redis configured for cluster mode replication'])
@@ -837,7 +950,11 @@ class TestReplace:
         assert [row['id'] for row in active] == [new_id[:8]]
 
     def test_replace_oplog_entries(self, runner):
-        """Replace logs both replace and remember ops."""
+        """Verify a replace logs both a replace and a remember op.
+
+        Mutation: writing only one of the two oplog entries.
+        Oracle: both operation names in `log list` output.
+        """
         result = invoke(runner, [
             'remember', 'Prometheus alerting rules configured for SLO monitoring'])
         old_id = parse_remember(result, runner)['id']
@@ -853,7 +970,12 @@ class TestReplace:
         assert 'remember' in result.output
 
     def test_replace_quality_warnings_populate(self, runner):
-        """Replace path also passes quality warnings as hints, never blocks."""
+        """Verify the replace path passes warnings as hints without blocking.
+
+        Mutation: rejecting replacement text that draws warnings, or
+            skipping the warning scan on the replace path.
+        Oracle: a two-warning sentence, accepted with warnings listed.
+        """
         result = invoke(runner, [
             'remember', 'Kafka chosen for event streaming due to partition tolerance'])
         old_id = parse_remember(result, runner)['id']
@@ -867,7 +989,8 @@ class TestReplace:
 
 
 class TestSingleTierEnrichment:
-    """Remember runs enrichment inline on the drain worker."""
+    """Remember runs enrichment inline on the drain worker.
+    """
 
     def test_output_has_enrichment_dict(self, runner):
         """Verify the drain stores the enrichment summary on the row.
@@ -879,7 +1002,6 @@ class TestSingleTierEnrichment:
         Oracle: the autouse mock LLM, which echoes the content's first
             100 characters as the summary.
         """
-        from memman.store.db import open_read_only, store_dir
 
         content = ('Redis cache configured with LRU eviction policy, '
                    'replicated across three availability zones for '
@@ -893,7 +1015,7 @@ class TestSingleTierEnrichment:
         db = open_read_only(store_dir(data_dir, 'default'))
         try:
             row = db._query(
-                'SELECT summary FROM insights WHERE id = ?',
+                'select summary from insights where id = ?',
                 (iid,)).fetchone()
         finally:
             db.close()
@@ -909,7 +1031,6 @@ class TestSingleTierEnrichment:
         Oracle: the row's `enrich_attempted_at` column read back
             through a read-only handle, not-None.
         """
-        from memman.store.db import open_read_only
 
         result = invoke(runner, [
             'remember', 'Consul service mesh enables secure service communication'])
@@ -920,7 +1041,7 @@ class TestSingleTierEnrichment:
         _, data_dir = runner
         ro = open_read_only(data_dir + '/data/default')
         row = ro._conn.execute(
-            'SELECT enrich_attempted_at FROM insights WHERE id = ?',
+            'select enrich_attempted_at from insights where id = ?',
             (iid,)).fetchone()
         ro.close()
         assert row is not None
@@ -937,7 +1058,6 @@ class TestSingleTierEnrichment:
             --dry-run` JSON (which reports total active rows, not
             the pending count).
         """
-        from memman.store.db import open_read_only
 
         invoke(runner, [
             'remember', 'Kafka event streaming configured for microservices'])
@@ -953,8 +1073,12 @@ class TestSingleTierEnrichment:
         assert row[0] == 0
 
     def test_enriched_at_stamped_after_remember(self, runner):
-        """enriched_at is non-NULL after remember returns."""
-        from memman.store.db import open_read_only
+        """Verify enriched_at is set once `remember` returns.
+
+        Mutation: the drain worker never stamping `enriched_at`, so a
+            written row stays eligible for re-enrichment.
+        Oracle: the column read back through a read-only handle.
+        """
 
         result = invoke(runner, [
             'remember', 'Elasticsearch full-text search with custom analyzers'])
@@ -965,7 +1089,7 @@ class TestSingleTierEnrichment:
         _, data_dir = runner
         ro = open_read_only(data_dir + '/data/default')
         row = ro._conn.execute(
-            'SELECT enriched_at FROM insights WHERE id = ?',
+            'select enriched_at from insights where id = ?',
             (iid,)).fetchone()
         ro.close()
         assert row is not None
@@ -986,7 +1110,6 @@ def test_data_dir_flag_moves_implicit_env_resolution(tmp_path):
         eagerly calls `get_client()`) must fail naming the flag's
         directory's unregistered provider.
     """
-    from memman import config
 
     other_dir = tmp_path / 'other'
     other_dir.mkdir()
@@ -1025,7 +1148,8 @@ def test_enrich_is_top_level_and_graph_rebuild_is_gone(tmp_path):
 
 @pytest.mark.scheduler_stopped
 class TestEnrich:
-    """`enrich` command tests - dry-run, live."""
+    """`enrich` command tests - dry-run, live.
+    """
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
         """Dry run reports total insights without modifying DB.
@@ -1039,16 +1163,13 @@ class TestEnrich:
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path / 'memman')
         store_path = tmp_path / 'memman' / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
         db = open_db(str(store_path))
         for i in range(3):
             insert_insight(db, make_insight(
                 id=f'rd-{i}', content=f'Test insight {i}'))
             db._conn.execute(
-                'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
-                ' WHERE id = ?',
+                'update insights set enrich_attempted_at = ?, enriched_at = ?'
+                ' where id = ?',
                 ('2024-01-01T00:00:00+00:00',
                  '2024-01-01T00:00:00+00:00', f'rd-{i}'))
         db.close()
@@ -1063,8 +1184,8 @@ class TestEnrich:
 
         db = open_db(str(store_path))
         row = db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE enriched_at IS NOT NULL').fetchone()
+            'select count(*) from insights'
+            ' where enriched_at is not null').fetchone()
         assert row[0] == 3, 'dry-run must not clear enriched_at'
         db.close()
 
@@ -1082,9 +1203,6 @@ class TestEnrich:
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path / 'memman')
         store_path = tmp_path / 'memman' / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
             id='rs-1', content=(
@@ -1097,11 +1215,11 @@ class TestEnrich:
                 'nightly across every regional replica before the '
                 'reporting jobs start')))
         db._conn.execute(
-            "UPDATE insights"
-            " SET enrich_attempted_at = '2024-01-01T00:00:00+00:00',"
+            "update insights"
+            " set enrich_attempted_at = '2024-01-01T00:00:00+00:00',"
             "     enriched_at = '2024-01-01T00:00:00+00:00',"
             "     summary = ''"
-            " WHERE id IN ('rs-1', 'rs-2')")
+            " where id in ('rs-1', 'rs-2')")
         db.close()
 
         runner = CliRunner()
@@ -1113,8 +1231,8 @@ class TestEnrich:
 
         db = open_db(str(store_path))
         row = db._conn.execute(
-            "SELECT summary, enriched_at FROM insights"
-            " WHERE id = 'rs-1'").fetchone()
+            "select summary, enriched_at from insights"
+            " where id = 'rs-1'").fetchone()
         assert row[0], 'rebuild should populate summary'
         assert row[1] is not None, 'rebuild should set enriched_at'
         db.close()
@@ -1134,15 +1252,12 @@ class TestEnrich:
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path / 'memman')
         store_path = tmp_path / 'memman' / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
             id='mx-1', content='Already linked insight'))
         db._conn.execute(
-            "UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?"
-            " WHERE id = 'mx-1'",
+            "update insights set enrich_attempted_at = ?, enriched_at = ?"
+            " where id = 'mx-1'",
             ('2024-01-01T00:00:00+00:00',
              '2024-01-01T00:00:00+00:00'))
         insert_insight(db, make_insight(
@@ -1158,16 +1273,17 @@ class TestEnrich:
 
         db = open_db(str(store_path))
         pending = db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE enrich_attempted_at IS NULL'
-            ' AND deleted_at IS NULL').fetchone()[0]
+            'select count(*) from insights'
+            ' where enrich_attempted_at is null'
+            ' and deleted_at is null').fetchone()[0]
         assert pending == 0, (
             'all insights should be enrich-attempted after rebuild')
         db.close()
 
 
 class TestEnrichIsolation:
-    """A corpus rebuild refuses to race the scheduler drain."""
+    """A corpus rebuild refuses to race the scheduler drain.
+    """
 
     def test_rebuild_rejected_while_scheduler_started(self, tmp_path):
         """A started scheduler blocks a rebuild, both modes.
@@ -1190,15 +1306,19 @@ class TestEnrichIsolation:
 
 @pytest.mark.scheduler_stopped
 class TestEnrichStaleOnly:
-    """Tests for `enrich --stale-only` flag."""
+    """Tests for `enrich --stale-only` flag.
+    """
 
-    def _seed_drift(self, store_path, active_pv):
-        """Insert one drifted row and one current row."""
-        from memman.embed.fingerprint import Fingerprint, write_fingerprint
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight, update_enrichment
-        from memman.store.sqlite import SqliteBackend
-        from tests.conftest import make_insight
+    def _seed_drift(self, store_path: pathlib.Path, active_pv: str) -> None:
+        """Insert one drifted row and one current row.
+
+        Parameters
+        ----------
+        store_path : Path
+            Store directory to seed.
+        active_pv : str
+            Prompt version stamped on the current row.
+        """
         OLD_PV = 'old-prompt-version-deadbeef'
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
@@ -1213,8 +1333,8 @@ class TestEnrichStaleOnly:
         for iid in ('drift-1', 'fresh-1'):
             update_enrichment(db, iid, 'sum')
             db._conn.execute(
-                'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
-                ' WHERE id = ?',
+                'update insights set enrich_attempted_at = ?, enriched_at = ?'
+                ' where id = ?',
                 ('2024-01-01T00:00:00+00:00',
                  '2024-01-01T00:00:00+00:00', iid))
         db.close()
@@ -1229,10 +1349,6 @@ class TestEnrichStaleOnly:
             against the two seeded current, so the flipped predicate
             counts 2.
         """
-        from memman.pipeline.remember import compute_prompt_version
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
 
         active_pv = compute_prompt_version()
 
@@ -1266,18 +1382,12 @@ class TestEnrichStaleOnly:
         Oracle: the literal `'skipped': 'no_stale_rows'` key against
             the single row seeded on the active `prompt_version`.
         """
-        from memman.embed.fingerprint import Fingerprint, write_fingerprint
-        from memman.pipeline.remember import compute_prompt_version
-        from memman.store.sqlite import SqliteBackend
 
         active_pv = compute_prompt_version()
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path / 'memman')
         store_path = tmp_path / 'memman' / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
         write_fingerprint(backend, Fingerprint(
@@ -1305,8 +1415,6 @@ class TestEnrichStaleOnly:
         Oracle: `enriched_at` and `prompt_version` read back per row,
             before and after, for both the drifted and the fresh id.
         """
-        from memman.pipeline.remember import compute_prompt_version
-        from memman.store.db import open_db
 
         active_pv = compute_prompt_version()
 
@@ -1318,7 +1426,7 @@ class TestEnrichStaleOnly:
         db = open_db(str(store_path))
         before = {
             row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'SELECT id, enriched_at, prompt_version FROM insights')
+                'select id, enriched_at, prompt_version from insights')
             }
         db.close()
 
@@ -1333,7 +1441,7 @@ class TestEnrichStaleOnly:
         db = open_db(str(store_path))
         after = {
             row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'SELECT id, enriched_at, prompt_version FROM insights')
+                'select id, enriched_at, prompt_version from insights')
             }
         db.close()
         assert after['fresh-1'] == before['fresh-1']
@@ -1350,12 +1458,6 @@ class TestEnrichStaleOnly:
             against a stranded row and an enriched row, both seeded
             with a null `prompt_version`.
         """
-        from memman.embed.fingerprint import Fingerprint, write_fingerprint
-        from memman.pipeline.remember import compute_prompt_version
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight, update_enrichment
-        from memman.store.sqlite import SqliteBackend
-        from tests.conftest import make_insight
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path / 'memman')
@@ -1369,11 +1471,11 @@ class TestEnrichStaleOnly:
             id='legacy-1', content='Enriched insight from before provenance'))
         update_enrichment(db, 'legacy-1', 'sum')
         db._conn.execute(
-            'UPDATE insights SET enrich_attempted_at = ? WHERE id = ?',
+            'update insights set enrich_attempted_at = ? where id = ?',
             ('2024-01-01T00:00:00+00:00', 'strand-1'))
         db._conn.execute(
-            'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
-            ' WHERE id = ?',
+            'update insights set enrich_attempted_at = ?, enriched_at = ?'
+            ' where id = ?',
             ('2024-01-01T00:00:00+00:00',
              '2024-01-01T00:00:00+00:00', 'legacy-1'))
         db.close()
@@ -1388,7 +1490,7 @@ class TestEnrichStaleOnly:
         db = open_db(str(store_path))
         after = {
             row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'SELECT id, enriched_at, prompt_version FROM insights')
+                'select id, enriched_at, prompt_version from insights')
             }
         db.close()
         assert after['legacy-1'] == ('2024-01-01T00:00:00+00:00', None)
@@ -1444,14 +1546,11 @@ class TestHotPathPurity:
 
     @pytest.fixture
     def runner_with_seed(self, tmp_path):
-        """CliRunner over an isolated data dir with two seeded insights.
+        """CliRunner and data dir holding two directly seeded insights.
 
-        Direct DB seeding avoids invoking the LLM for setup, so the
-        assertion that the test target makes no LLM calls is meaningful.
+        Seeding the store directly keeps the LLM out of setup, so the
+        assertion that the target makes no LLM call is meaningful.
         """
-        from memman.embed.fingerprint import write_fingerprint
-        from memman.store.db import open_db, store_dir, write_active
-        from memman.store.sqlite import SqliteBackend
 
         data_dir = str(tmp_path / 'memman')
         name = 'default'
@@ -1471,17 +1570,26 @@ class TestHotPathPurity:
 
         return CliRunner(), data_dir
 
-    def _make_failing_complete(self, *_args, **_kwargs):
+    def _make_failing_complete(self, *_args, **_kwargs) -> None:
+        """Stand-in for the LLM call that fails the test when reached.
+        """
         raise AssertionError(
             'synchronous write must not invoke the LLM')
 
-    def _make_failing_embed(self, *_args, **_kwargs):
+    def _make_failing_embed(self, *_args, **_kwargs) -> None:
+        """Stand-in for the embed call that fails the test when reached.
+        """
         raise AssertionError(
             'synchronous write must not invoke the embed client')
 
     def test_forget_makes_no_llm_or_embed_calls(
             self, runner_with_seed, monkeypatch):
-        """`forget` is pure SQL: no LLM, no embed."""
+        """Verify `forget` makes no LLM or embed call.
+
+        Mutation: `forget` calling the LLM or embed client, billing a
+            request on a pure delete.
+        Oracle: patched client methods that raise AssertionError.
+        """
         monkeypatch.setattr(
             'memman.llm.client.MemmanLLMClient.complete',
             self._make_failing_complete)
@@ -1494,10 +1602,16 @@ class TestHotPathPurity:
 
 
 class TestPostgresGuards:
-    """Admin commands that are SQLite-only must reject postgres backend."""
+    """Admin commands that are SQLite-only must reject postgres backend.
+    """
 
     def test_embed_reembed_rejects_postgres_backend(self, runner, env_file):
-        """`embed reembed` exits non-zero with a clear message on postgres."""
+        """Verify `embed reembed` refuses a postgres store.
+
+        Mutation: dropping the SQLite-only guard, so a postgres store is
+            swept with the sqlite code path.
+        Oracle: non-zero exit and the `SQLite-only` message.
+        """
         env_file('MEMMAN_BACKEND_default', 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_default', 'postgresql://user@host/db')
         r, data_dir = runner
@@ -1507,7 +1621,8 @@ class TestPostgresGuards:
 
 
 class TestCorruptStoreErrorHygiene:
-    """A store whose database cannot be opened exits cleanly."""
+    """A store whose database cannot be opened exits cleanly.
+    """
 
     def test_recall_reports_corrupt_store_without_traceback(self, runner):
         """`recall` on an unreadable store prints an error, not a trace.
@@ -1519,11 +1634,10 @@ class TestCorruptStoreErrorHygiene:
             the root group's generic arm says only `sqlite query
             failed`, so the message is what separates them.
 
-        Scope, since two seams have since grown over this path. The
-        root group catches `sqlite3.Error` as well as `BackendError`,
-        so `result.exception` is a `SystemExit` under the mutation too
-        and the type assertion below is tautological -- kept only as a
-        guard against a future seam that re-raises. This test now pins
+        Scope: the root group catches `sqlite3.Error` as well as
+        `BackendError`, so `result.exception` is a `SystemExit` under
+        the mutation too and the type assertion below adds nothing
+        beyond a guard against a seam that re-raises. This test pins
         `open_db`'s own translation via its message alone. The direct
         pin on `active_store`'s catch is
         `tests/test_session.py::test_active_store_wraps_backend_error_from_open`,
@@ -1568,7 +1682,7 @@ class TestCorruptStoreErrorHygiene:
         Mutation: dropping the root group's `BackendError` translation,
             or leaving `open_read_only`'s missing-database case raising
             `FileNotFoundError`. `embed reembed` counts rows through
-            `open_ro_db`, so it reaches neither `open_db` nor
+            `open_read_only`, so it reaches neither `open_db` nor
             `session.active_store`.
         Oracle: a store directory with no `memman.db` -- the sweep is
             global, so one stray directory is enough -- and a clean exit
@@ -1596,7 +1710,6 @@ class TestCorruptStoreErrorHygiene:
             its handler to whatever `sys.stderr` was live at the first
             configure in the process and never rebinds.
         """
-        import logging
 
         _, data_dir = runner
         (pathlib.Path(data_dir) / 'queue.db').write_bytes(

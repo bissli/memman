@@ -1,9 +1,9 @@
-"""Maintenance pass: incremental_vacuum after enrich_pending.
+"""Maintenance pass: oplog maintenance step after enrich_pending.
 
-Two properties verified:
-1. Fresh DBs adopt `auto_vacuum=INCREMENTAL` (mode 2).
-2. `_run_per_store_maintenance` calls `PRAGMA incremental_vacuum` after
-   the enrich_pending step, and respects the deadline budget.
+- Fresh DBs adopt `auto_vacuum=INCREMENTAL` (mode 2).
+- `_run_per_store_maintenance` runs the oplog maintenance step and
+  respects the deadline budget.
+- A row stamped attempted but not enriched is re-enriched.
 """
 
 import json
@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+from memman.embed.fingerprint import bound_embedder
 from memman.maintenance import _run_per_store_maintenance
 from memman.store.model import format_timestamp
 from memman.store.node import insert_insight, stamp_enrich_attempted
@@ -18,14 +19,19 @@ from tests.conftest import make_insight
 
 
 def test_fresh_db_uses_incremental_autovacuum(tmp_db):
-    """A freshly opened store has auto_vacuum=2 (INCREMENTAL)."""
-    row = tmp_db._query('PRAGMA auto_vacuum').fetchone()
+    """Verify a freshly opened store has auto_vacuum=2 (INCREMENTAL).
+
+    Mutation: dropping the auto_vacuum pragma from the baseline schema, so
+        freed pages are never returned to the file.
+    Oracle: sqlite's own `pragma auto_vacuum` value, 2.
+    """
+    row = tmp_db._query('pragma auto_vacuum').fetchone()
     assert row[0] == 2
 
 
 def test_maintenance_runs_incremental_vacuum_after_enrich_pending(
             tmp_db, tmp_backend):
-    """`_run_per_store_maintenance` issues a PRAGMA incremental_vacuum.
+    """Verify _run_per_store_maintenance calls the oplog maintenance step.
 
     Mutation: dropping the `ctx.backend.oplog.maintenance_step()` call
         (or the deadline check ahead of it swallowing every call), so
@@ -50,7 +56,13 @@ def test_maintenance_runs_incremental_vacuum_after_enrich_pending(
 
 
 def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_backend):
-    """Past-deadline maintenance must not issue more SQL after the gate."""
+    """Verify maintenance past its deadline skips the oplog maintenance step.
+
+    Mutation: dropping the deadline gate, so a pass that is out of budget
+        keeps issuing SQL.
+    Oracle: a maintenance_step spy that stays uncalled with a deadline one
+        second in the past.
+    """
     ctx = MagicMock()
     wrapped = MagicMock(wraps=tmp_backend)
     wrapped.oplog = MagicMock(wraps=tmp_backend.oplog)
@@ -73,8 +85,6 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
         enrich_pending.
     Oracle: the row's enriched_at after one maintenance pass.
     """
-    from memman.embed.fingerprint import bound_embedder
-
     insight = make_insight(
         id='strand-1', content='Python web framework facts')
     insert_insight(tmp_db, insight)
@@ -97,6 +107,6 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
     _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
 
     row = tmp_db._conn.execute(
-        'SELECT enriched_at FROM insights WHERE id = ?',
+        'select enriched_at from insights where id = ?',
         ('strand-1',)).fetchone()
     assert row[0] is not None

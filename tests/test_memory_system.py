@@ -7,9 +7,11 @@ module imports.
 import json
 import os
 import re
+import sqlite3
+from pathlib import Path
 
 import pytest
-from tests.conftest import invoke, parse_remember
+from tests.conftest import invoke, make_insight, parse_remember
 
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
@@ -23,8 +25,8 @@ _BASIC_LINE = re.compile(
 def runner(cross_backend_runner):
     """CliRunner parametrized over `{sqlite, postgres}`.
 
-    Delegates to `cross_backend_runner` so each of the 53 black-box CLI
-    tests in this module runs against both backends. Postgres
+    Delegates to `cross_backend_runner` so each black-box CLI test in
+    this module runs against both backends. Postgres
     invocations carry `pytest.mark.postgres` and are gated on
     `psycopg + testcontainers` being importable.
     """
@@ -65,14 +67,16 @@ def _hydrate_page(runner_tuple, output, basic):
 
 
 def recall_basic(runner_tuple, keyword):
-    """Recall via --basic (SQL LIKE on single keyword), return list."""
+    """Recall via --basic (SQL LIKE on single keyword), return list.
+    """
     result = invoke(runner_tuple, ['recall', keyword, '--basic'])
     assert result.exit_code == 0, result.output
     return _hydrate_page(runner_tuple, result.output, basic=True)
 
 
 def recall_smart(runner_tuple, query, **flags):
-    """Recall via intent-aware mode, return results list of insight dicts."""
+    """Recall via intent-aware mode, return results list of insight dicts.
+    """
     args = ['recall', query]
     for k, v in flags.items():
         args.extend([f'--{k}', str(v)])
@@ -82,19 +86,22 @@ def recall_smart(runner_tuple, query, **flags):
 
 
 def search_cmd(runner_tuple, query):
-    """Keyword-only retrieval via recall --basic, return insight list."""
+    """Keyword-only retrieval via recall --basic, return insight list.
+    """
     result = invoke(runner_tuple, ['recall', '--basic', query])
     assert result.exit_code == 0, result.output
     return _hydrate_page(runner_tuple, result.output, basic=True)
 
 
 def contents(results):
-    """Extract content strings from result dicts."""
+    """Extract content strings from result dicts.
+    """
     return [r['content'] for r in results]
 
 
 def result_ids(results):
-    """Extract IDs from result dicts."""
+    """Extract IDs from result dicts.
+    """
     return [r['id'] for r in results]
 
 
@@ -102,17 +109,26 @@ def result_ids(results):
 
 
 class TestPersistence:
-    """What you store, you can retrieve."""
+    """What you store, you can retrieve.
+    """
 
     def test_store_then_recall_finds_it(self, runner):
-        """Single insight retrievable by keyword from its content."""
+        """Verify a stored insight is found by a keyword from its content.
+
+        Mutation: the basic recall query misses a row the write just stored.
+        Oracle: the id `remember` returned, looked up in the recalled ids.
+        """
         data = remember(runner,
                         'I configured Redis with allkeys-lru eviction and 4GB maxmemory limit')
         hits = recall_basic(runner, 'Redis')
         assert data['id'] in result_ids(hits)
 
     def test_store_five_diverse_insights_recall_each(self, runner):
-        """Five diverse insights all individually retrievable."""
+        """Verify five stored insights are each recalled by their own keyword.
+
+        Mutation: a later write overwrites or displaces an earlier row.
+        Oracle: the five ids `remember` returned, one per keyword.
+        """
         topics = [
             ('I implemented OAuth2 PKCE flow for our mobile app',
              'OAuth2'),
@@ -137,21 +153,34 @@ class TestPersistence:
                 f'Could not recall "{keyword}" - got: {contents(hits)[:3]}')
 
     def test_partial_keyword_match(self, runner):
-        """Partial keyword from content is enough to find insight."""
+        """Verify a single word from the content finds the insight.
+
+        Mutation: basic recall demands the whole content string as the query.
+        Oracle: the literal word 'scheduling' inside the recalled content.
+        """
         remember(runner,
                  'Kubernetes pod scheduling affinity rules and taints')
         hits = recall_basic(runner, 'scheduling')
         assert any('scheduling' in c for c in contents(hits))
 
     def test_word_order_irrelevant(self, runner):
-        """Search finds content regardless of query word order."""
+        """Verify query word order does not affect keyword retrieval.
+
+        Mutation: the query is matched as an ordered phrase.
+        Oracle: a query listing the stored words in reverse order.
+        """
         remember(runner,
                  'SQLite WAL mode write-ahead logging benefits')
         hits = search_cmd(runner, 'benefits write-ahead SQLite')
         assert any('SQLite' in c for c in contents(hits))
 
     def test_no_false_positives_on_unrelated_query(self, runner):
-        """Completely unrelated query returns no results."""
+        """Verify a query sharing no word with any stored row returns nothing.
+
+        Mutation: basic recall returns rows on a miss, e.g. falling back
+            to all rows.
+        Oracle: 'chromodynamics', a word absent from both stored contents.
+        """
         remember(runner, 'Python web framework comparison')
         remember(runner, 'Docker container networking')
         hits = recall_basic(runner, 'chromodynamics')
@@ -159,24 +188,38 @@ class TestPersistence:
 
 
 class TestDeletionCompleteness:
-    """Forgotten insights vanish from ALL retrieval paths."""
+    """Forgotten insights vanish from ALL retrieval paths.
+    """
 
     def test_forget_removes_from_recall(self, runner):
-        """Forgotten insight absent from recall results."""
+        """Verify a forgotten insight is absent from basic recall.
+
+        Mutation: the basic recall query drops its deleted_at filter.
+        Oracle: the id `remember` returned, absent from the recalled ids.
+        """
         data = remember(runner, 'Python GIL prevents true parallelism')
         invoke(runner, ['forget', data['id']])
         hits = recall_basic(runner, 'GIL')
         assert data['id'] not in result_ids(hits)
 
     def test_forget_removes_from_search(self, runner):
-        """Forgotten insight absent from search results."""
+        """Verify a forgotten insight is absent from a multi-word search.
+
+        Mutation: the keyword search path drops its deleted_at filter.
+        Oracle: the id `remember` returned, absent from the hit ids.
+        """
         data = remember(runner, 'Nginx reverse proxy configuration')
         invoke(runner, ['forget', data['id']])
         hits = search_cmd(runner, 'Nginx reverse proxy')
         assert data['id'] not in [h['id'] for h in hits]
 
     def test_forget_does_not_collateral_damage_peers(self, runner):
-        """Forgetting A does not affect B."""
+        """Verify forgetting one insight leaves an unrelated one recallable.
+
+        Mutation: forget deletes more than the named row, e.g. by a broad
+            match.
+        Oracle: the peer's id from `remember`, still in its recall hits.
+        """
         a = remember(runner,
                      'Celery task queue uses exponential backoff retry with max 5 attempts')
         b = remember(runner,
@@ -189,7 +232,12 @@ class TestDeletionCompleteness:
         assert a['id'] not in result_ids(hits_a)
 
     def test_forget_then_re_store_same_content(self, runner):
-        """Content can be re-stored after being forgotten."""
+        """Verify content can be stored again after it was forgotten.
+
+        Mutation: the write path dedups against the soft-deleted row and drops
+            the new write.
+        Oracle: the new id from `remember`, found by keyword recall.
+        """
         text = 'Python GIL behavior under multiprocessing'
         data = remember(runner, text)
         invoke(runner, ['forget', data['id']])
@@ -198,7 +246,11 @@ class TestDeletionCompleteness:
         assert new_data['id'] in result_ids(hits)
 
     def test_double_forget_fails(self, runner):
-        """Second forget on same ID returns error."""
+        """Verify a second forget of the same id exits non-zero.
+
+        Mutation: forget succeeds on a row already soft-deleted.
+        Oracle: the exit code of the second forget.
+        """
         data = remember(runner,
                         'Nginx configured with 4096 worker connections for load balancing')
         invoke(runner, ['forget', data['id']])
@@ -207,10 +259,16 @@ class TestDeletionCompleteness:
 
 
 class TestReplaceAtomicity:
-    """Old content gone, new content present, metadata coherent."""
+    """Old content gone, new content present, metadata coherent.
+    """
 
     def test_replace_swaps_content(self, runner):
-        """Old content absent, new content present after replace."""
+        """Verify a replace hides the old text and shows the new text.
+
+        Mutation: replace leaves the old row current, or never adds the
+            new row.
+        Oracle: keyword recall for a word unique to each version.
+        """
         data = remember(runner, 'team uses Flask for API layer')
         invoke(runner, ['replace', data['id'],
                         'team migrated to FastAPI for API layer'])
@@ -221,7 +279,7 @@ class TestReplaceAtomicity:
         assert any('FastAPI' in c for c in contents(hits_new))
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits category from original.
+        """Verify a flag-less replace inherits the original's category.
 
         Mutation: dropping the inherited category on a flag-less
             replace, defaulting instead.
@@ -239,7 +297,7 @@ class TestReplaceAtomicity:
         assert shown['category'] == 'decision'
 
     def test_replace_override_metadata(self, runner):
-        """Replace with an explicit flag overrides the original metadata.
+        """Verify a replace with an explicit flag overrides the old metadata.
 
         Mutation: keeping the original category despite an explicit
             override on the replace command.
@@ -258,12 +316,20 @@ class TestReplaceAtomicity:
         assert shown['category'] == 'decision'
 
     def test_replace_nonexistent_id_errors(self, runner):
-        """Replace with fake ID fails."""
+        """Verify replace of an unknown id exits non-zero.
+
+        Mutation: replace of a missing id writes a new row and exits 0.
+        Oracle: the exit code.
+        """
         result = invoke(runner, ['replace', 'nonexistent-fake-id', 'nope'])
         assert result.exit_code != 0
 
     def test_replace_deleted_id_errors(self, runner):
-        """Replace on already-forgotten insight fails."""
+        """Verify replace of a forgotten insight exits non-zero.
+
+        Mutation: replace skips the deleted_at check on the target row.
+        Oracle: the exit code.
+        """
         data = remember(runner,
                         'RabbitMQ queue mirroring configured for high availability')
         invoke(runner, ['forget', data['id']])
@@ -272,7 +338,8 @@ class TestReplaceAtomicity:
 
 
 class TestDeduplication:
-    """No false positive merge onto an unrelated row."""
+    """No false positive merge onto an unrelated row.
+    """
 
     def test_identical_content_adds_a_second_row(self, runner):
         """A `remember` of identical content lands as its own row.
@@ -316,10 +383,17 @@ class TestDeduplication:
 
 
 class TestComposition:
-    """Multi-step workflows stay consistent."""
+    """Multi-step workflows stay consistent.
+    """
 
     def test_store_replace_recall_sequence(self, runner):
-        """Replace + subsequent inserts don't interfere with each other."""
+        """Verify a replace and a later insert keep each other's recall.
+
+        Mutation: a replace leaves stale keyword hits, or a later write
+            displaces the replacement.
+        Oracle: keyword recall for a word unique to each version and
+            to the insert.
+        """
         x = remember(runner, 'Flask API for internal tooling')
         hits = recall_basic(runner, 'Flask')
         assert any('Flask' in c for c in contents(hits))
@@ -338,7 +412,11 @@ class TestComposition:
         assert any('Django' in c for c in contents(hits_django))
 
     def test_bulk_insert_selective_delete_consistency(self, runner):
-        """Store 10, delete 3, verify 7 remain and 3 gone."""
+        """Verify deleting 3 of 10 insights removes exactly those 3.
+
+        Mutation: forget removes a neighbor row, or status counts deleted rows.
+        Oracle: hand-picked delete indices and the literal total of 7.
+        """
         keywords = [
             'gRPC', 'Kafka', 'etcd', 'Vault', 'Consul',
             'Envoy', 'Jaeger', 'Fluentd', 'ArgoCD', 'Istio',
@@ -366,25 +444,40 @@ class TestComposition:
 
 
 class TestInputValidation:
-    """Bad input is rejected, not silently accepted."""
+    """Bad input is rejected, not silently accepted.
+    """
 
     def test_invalid_category_rejected(self, runner):
-        """Unknown category produces non-zero exit."""
+        """Verify an unknown category exits non-zero.
+
+        Mutation: the category check is dropped and the value stored as given.
+        Oracle: the exit code for `--cat bogus`.
+        """
         result = invoke(runner, ['remember', 'test', '--cat', 'bogus'])
         assert result.exit_code != 0
 
     def test_store_name_invalid_rejected(self, runner):
-        """Invalid store names are rejected."""
+        """Verify store names with a leading dash, space, or dot fail.
+
+        Mutation: the store-name pattern admits one of these shapes.
+        Oracle: the exit code for each hand-picked bad name.
+        """
         for name in ['-bad', 'has space', '.hidden']:
             result = invoke(runner, ['store', 'create', name])
             assert result.exit_code != 0
 
 
 class TestRanking:
-    """Better matches rank higher."""
+    """Better matches rank higher.
+    """
 
     def test_exact_keyword_match_outranks_partial(self, runner):
-        """Exact keyword match ranks above partial overlap."""
+        """Verify the row matching more query words ranks first.
+
+        Mutation: ranking ignores word overlap and falls back to recency, which
+            puts the newer partial match first.
+        Oracle: the id of the fully matching row written first.
+        """
         a = remember(runner,
                      'I tuned Redis cache eviction to allkeys-lru')
         b = remember(runner,
@@ -395,7 +488,8 @@ class TestRanking:
 
 
 class TestOplogChronology:
-    """Operation log entries are in chronological order."""
+    """Operation log entries are in chronological order.
+    """
 
     def test_oplog_order_is_chronological(self, runner):
         """Verify `log list` returns the newest write first.
@@ -421,15 +515,15 @@ class TestOplogChronology:
 
 
 class TestStatusAfterMutations:
-    """Status counts reflect actual state after mixed mutations."""
+    """Status counts reflect actual state after mixed mutations.
+    """
 
     def test_status_count_after_mixed_mutations(self, runner):
-        """Store 4, forget 1, replace 1 - status shows 4 total.
+        """Verify status counts 3+ insights after stores, a forget, a replace.
 
-        Replace creates a new row and soft-deletes the old one,
-        so 4 inserts - 1 forget - 1 replaced + 1 new = 3 active
-        originals + 1 replacement = 4 visible if replace doesn't
-        add net count, or 3 if it does. We assert >= 3.
+        Mutation: replace drops the successor, or forget removes more
+            than one row.
+        Oracle: hand count of 3 current rows, checked as a lower bound only.
         """
         techs = ['Grafana', 'Jaeger', 'ArgoCD', 'Istio']
         stored = [remember(
@@ -444,32 +538,43 @@ class TestStatusAfterMutations:
 
 
 class TestMultiWordRecall:
-    """Multi-word queries should work across all retrieval paths."""
+    """Multi-word queries should work across all retrieval paths.
+    """
 
     def test_basic_recall_non_adjacent_words(self, runner):
-        """'Python slow' should find 'Python is slow for CPU-bound tasks'.
+        """Verify basic recall matches query words that are not adjacent.
 
-        Words appear in content but not adjacently.
+        Mutation: the query is matched as a contiguous phrase.
+        Oracle: 'Python slow' against 'Python is slow for CPU-bound tasks'.
         """
         remember(runner, 'Python is slow for CPU-bound tasks')
         hits = recall_basic(runner, 'Python slow')
         assert len(hits) > 0
 
     def test_search_handles_non_adjacent_words(self, runner):
-        """Search tokenizes independently, finds non-adjacent matches."""
+        """Verify keyword search matches non-adjacent query words.
+
+        Mutation: the query is matched as a contiguous phrase.
+        Oracle: 'Python slow' against 'Python is slow for CPU-bound tasks'.
+        """
         remember(runner, 'Python is slow for CPU-bound tasks')
         hits = search_cmd(runner, 'Python slow')
         assert any('Python' in c for c in contents(hits))
 
     def test_smart_recall_handles_multi_word(self, runner):
-        """Smart recall finds content by multi-word query."""
+        """Verify scored recall finds content by a multi-word query.
+
+        Mutation: scored recall uses only the first query word, or none.
+        Oracle: the literal word 'JSONB' in the recalled content.
+        """
         remember(runner, 'PostgreSQL JSONB indexing for document queries')
         hits = recall_smart(runner, 'PostgreSQL JSONB indexing')
         assert any('JSONB' in c for c in contents(hits))
 
 
 class TestContradictionDetection:
-    """A write that contradicts a stored row lands beside it, not over it."""
+    """A write that contradicts a stored row lands beside it, not over it.
+    """
 
     def test_contradiction_triggers_reconciliation(self, runner):
         """Storing contradictory content adds a row; nothing retires.
@@ -486,10 +591,16 @@ class TestContradictionDetection:
 
 
 class TestRecallPrecisionUnderNoise:
-    """Recall should find the right needle in a large haystack."""
+    """Recall should find the right needle in a large haystack.
+    """
 
     def test_specific_insight_among_fifty_similar(self, runner):
-        """One specific insight findable among 50 generic ones."""
+        """Verify one distinctive insight is recalled among 50 near-duplicates.
+
+        Mutation: a candidate cap applied before keyword matching drops
+            the needle.
+        Oracle: the literal 'alertmanager' in the recalled content.
+        """
         for i in range(50):
             remember(runner,
                      f'PostgreSQL query optimization uses index scan on column_{i} with btree')
@@ -500,10 +611,15 @@ class TestRecallPrecisionUnderNoise:
 
 
 class TestStoreIsolation:
-    """Named stores are airtight - no data leakage."""
+    """Named stores are airtight - no data leakage.
+    """
 
     def test_insight_invisible_across_stores(self, runner):
-        """Insight stored in 'work' is invisible from default store."""
+        """Verify an insight written to store 'work' is absent from default.
+
+        Mutation: the --store flag is ignored on write or on recall.
+        Oracle: an empty default-store recall, and the row found in 'work'.
+        """
         invoke(runner, ['store', 'create', 'work'])
         result = invoke(runner, ['--store', 'work', 'remember', 'secret project alpha roadmap details'])
         assert result.exit_code == 0
@@ -519,7 +635,11 @@ class TestStoreIsolation:
         assert any('secret' in row['text'] for row in rows)
 
     def test_forget_in_one_store_does_not_affect_another(self, runner):
-        """Forget in store A leaves store B's copy intact."""
+        """Verify a forget in store alpha leaves store beta's copy recallable.
+
+        Mutation: forget resolves the id or content across stores.
+        Oracle: identical text written to both stores, then recalled from beta.
+        """
         invoke(runner, ['store', 'create', 'alpha'])
         invoke(runner, ['store', 'create', 'beta'])
         text = 'Terraform infrastructure deployment checklist for AWS regions'
@@ -539,13 +659,14 @@ class TestStoreIsolation:
 
 
 class TestRecallCompleteness:
-    """All retrieval paths should return consistent results."""
+    """All retrieval paths should return consistent results.
+    """
 
     def test_all_retrieval_paths_agree(self, runner):
-        """If search finds it, basic recall should find it too.
+        """Verify keyword search and basic recall both find a stored insight.
 
-        A user should not need to know which retrieval command
-        to use - they should all find the same insights.
+        Mutation: `recall --basic` returns nothing for a stored keyword.
+        Oracle: both helpers return a non-empty hit list for 'Lambda'.
         """
         remember(runner,
                  'AWS Lambda serverless functions with DynamoDB backend')
@@ -558,12 +679,18 @@ class TestRecallCompleteness:
 
 
 class TestContentReview:
-    """`insights review` surfaces transient content for an operator."""
+    """`insights review` surfaces transient content for an operator.
+    """
 
     def test_review_flags_transient_not_durable(self, runner):
-        """A stored instance id is flagged; a durable decision is not."""
+        """Verify `insights review` flags a stored instance id.
+
+        Mutation: the transient-content detector stops matching instance ids.
+        Oracle: the literal instance id inside the flagged contents.
+        """
         remember(runner,
-                 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure')
+                 'Production outage traced to instance i-0c220c2402a5245bc'
+                 ' running out of memory causing cascading failure')
         remember(runner,
                  'Chose SQLite for single-node simplicity and embedded operation')
         result = invoke(runner, ['insights', 'review'])
@@ -574,10 +701,15 @@ class TestContentReview:
 
 
 class TestOperationLog:
-    """Actions are auditable in the operation log."""
+    """Actions are auditable in the operation log.
+    """
 
     def test_oplog_records_all_mutation_types(self, runner):
-        """Remember, forget, and replace all appear in log."""
+        """Verify remember, forget, and replace each appear in the log.
+
+        Mutation: one mutation type stops writing its oplog row.
+        Oracle: the three operation names in the `log list` output.
+        """
         data = remember(runner,
                         'Elasticsearch index sharding strategy uses 5 primary shards')
         invoke(runner, ['forget', data['id']])
@@ -593,10 +725,15 @@ class TestOperationLog:
 
 
 class TestInsightsShow:
-    """`insights show <id>` returns the insight via the active backend."""
+    """`insights show <id>` returns the insight via the active backend.
+    """
 
     def test_show_returns_stored_insight(self, runner):
-        """Show roundtrips a remember-d insight by id across both backends."""
+        """Verify `insights show` returns a stored insight by id.
+
+        Mutation: show reads the wrong row, or the wrong backend.
+        Oracle: the id `remember` returned and the stored content word.
+        """
         fact = remember(
             runner,
             'Loki log aggregator runs in single-binary monolithic mode')
@@ -607,7 +744,11 @@ class TestInsightsShow:
         assert 'Loki' in data['content']
 
     def test_show_unknown_id_fails_cleanly(self, runner):
-        """Unknown id exits non-zero with an actionable message."""
+        """Verify `insights show` of an unknown id exits non-zero, 'not found'.
+
+        Mutation: show prints a traceback or exits 0 on a missing id.
+        Oracle: the exit code and the message text.
+        """
         result = invoke(runner, ['insights', 'show', 'no-such-id'])
         assert result.exit_code != 0
         assert 'not found' in result.output.lower()
@@ -641,7 +782,8 @@ class TestInsightsShow:
 
 
 class TestResolveId:
-    """Node-store prefix resolution and CLI id-argument coverage."""
+    """Node-store prefix resolution and CLI id-argument coverage.
+    """
 
     def test_unique_prefix_resolves_to_full_id(self, tmp_backend):
         """Prefix shorter than the full id resolves when it is unique.
@@ -651,7 +793,6 @@ class TestResolveId:
         Oracle: hand-built rows sharing the first 4 chars; the 8-char
             prefix is unique and resolves to the first row's full id.
         """
-        from tests.conftest import make_insight
         tmp_backend.nodes.insert(make_insight(id='aaaabbbb-cccc-dddd'))
         tmp_backend.nodes.insert(make_insight(id='aaaaxxx1-cccc-dddd'))
         resolved = tmp_backend.nodes.resolve_id('aaaabbbb')
@@ -665,7 +806,6 @@ class TestResolveId:
         Oracle: ValueError raised with '2' in the message for a prefix
             matching both stored ids.
         """
-        from tests.conftest import make_insight
         tmp_backend.nodes.insert(make_insight(id='aaaabbbb-cccc-dddd'))
         tmp_backend.nodes.insert(make_insight(id='aaaaxxx1-cccc-dddd'))
         with pytest.raises(ValueError, match='2'):
@@ -679,7 +819,6 @@ class TestResolveId:
         Oracle: rows 'abcd' and 'abcd-1234'; exact id 'abcd' resolves
             to 'abcd', not to ValueError.
         """
-        from tests.conftest import make_insight
         tmp_backend.nodes.insert(make_insight(id='abcd'))
         tmp_backend.nodes.insert(make_insight(id='abcd-1234'))
         resolved = tmp_backend.nodes.resolve_id('abcd')
@@ -722,7 +861,6 @@ class TestResolveId:
         Oracle: a soft-deleted row and a replaced row each resolve
             from an 8-char prefix.
         """
-        from tests.conftest import make_insight
         tmp_backend.nodes.insert(make_insight(id='deadbeef-0001'))
         tmp_backend.nodes.soft_delete('deadbeef-0001')
         tmp_backend.nodes.insert(make_insight(id='feedface-0001'))
@@ -733,10 +871,15 @@ class TestResolveId:
 
 
 class TestStatusConsistency:
-    """Status counts reflect actual state after mutations."""
+    """Status counts reflect actual state after mutations.
+    """
 
     def test_status_count_after_inserts_and_forget(self, runner):
-        """Store 4, forget 1 - status shows 3 total."""
+        """Verify status shows 3 insights after 4 stores and 1 forget.
+
+        Mutation: status counts the soft-deleted row.
+        Oracle: the hand-counted total of 3.
+        """
         techs = ['Prometheus', 'Thanos', 'Cortex', 'Mimir']
         stored = [remember(
                 runner,
@@ -749,7 +892,8 @@ class TestStatusConsistency:
 
 
 class TestEdgeCases:
-    """Robustness under unusual input."""
+    """Robustness under unusual input.
+    """
 
     def test_long_content_survives(self, runner):
         """Verify a cap-sized insight is stored and recalled whole.
@@ -770,7 +914,12 @@ class TestEdgeCases:
         assert long_content in contents(hits)
 
     def test_special_chars_in_content(self, runner):
-        """Content with brackets, parens, quotes preserved."""
+        """Verify brackets, parens, quotes, and operators are stored intact.
+
+        Mutation: a storage or query path escapes or truncates special
+            characters.
+        Oracle: the literal '0xFF' token in the recalled content.
+        """
         content = 'zephyr config["key"] = (value & 0xFF) | flags'
         remember(runner, content)
         hits = recall_basic(runner, 'zephyr')
@@ -780,29 +929,22 @@ class TestEdgeCases:
 class TestRecallFreshness:
     """Scored recall's candidate universe is the store's active set.
 
-    A materialized read cache once served this path and froze
-    permanently above a row cap, and no test asserted this equality,
-    so recall served deleted rows and hid live ones. These are the
-    gate that keeps the candidate universe honest.
+    A read cache on this path would serve deleted rows and hide live
+    ones. These tests assert the equality that rules that out.
     """
 
     def test_scored_recall_matches_db_active_set(self, mm_runner):
         """Verify scored recall sees exactly the non-deleted rows on disk.
 
         Mutation: any read-side cache on the recall path that a
-            write does not invalidate - memoizing get_all_active(),
-            or reintroducing a materialized read artifact.
+            write does not invalidate, e.g. memoizing get_all_active().
         Oracle: the store DB's own active-id set, read through a raw
             sqlite3 connection outside the pipeline.
 
-        Sqlite-only by construction: Postgres never had a snapshot, so
-        the pre-change failure is a sqlite property. `remember`
-        auto-drains via the CliRunner wrapper, so only the
+        Sqlite-only: the test writes one row straight into the sqlite file.
+        `remember` auto-drains via the CliRunner wrapper, so only the
         out-of-band insert and the `forget` skip the drain.
         """
-        import sqlite3
-        from pathlib import Path
-
         kept = remember(mm_runner, 'Kombu message serialization uses JSON')
         doomed = remember(mm_runner, 'Supervisord manages worker processes')
         invoke(mm_runner, ['forget', doomed['id']])
@@ -853,8 +995,8 @@ class TestRecallFreshness:
         hits = recall_smart(
             runner, 'Traefik Kombu Havelock Vagrant ingress boxes', limit=0)
         returned = {h['id'] for h in hits}
-        # Set equality, not a count: with several rows alive, a count
-        # alone cannot tell "the whole universe" from "some rows".
+        # With several rows alive, a count alone cannot tell the whole
+        # universe from some rows.
         assert returned == set(kept)
         assert len(hits) == active_count == len(kept)
         assert doomed['id'] not in returned
@@ -875,7 +1017,5 @@ class TestRecallFreshness:
         invoke(runner, ['forget', data['id']])
         hits = recall_smart(runner, 'Redis Cluster resharding hash slots')
         returned = {h['id'] for h in hits}
-        # Anti-vacuity: without this the test passes whenever scored
-        # recall returns nothing at all, for any reason.
         assert survivor['id'] in returned
         assert data['id'] not in returned

@@ -1,20 +1,27 @@
 """Idempotency keyed on queue_uuid, and column-list parity.
 
-Idempotency rides on a uuid4 minted at enqueue, not the queue row's
-integer id. These tests pin that decomposition end to end through the
-real queue drain.
+Idempotency rides on a uuid4 minted at enqueue. The queue row's
+integer id plays no part. These tests pin that key end to end through
+the real queue drain.
 """
 
+import ast
+import inspect
 import json
+import os
 import sqlite3
+from pathlib import Path
 
+from memman.queue import queue_db
+from memman.store import node as node_mod
 from memman.store.db import store_dir
+from memman.store.node import _INSIGHT_COLUMNS
 from tests.conftest import force_drain, invoke, make_insight
 
 
 def _queue_row(data_dir, queue_id):
-    """Return the queue row's `queue_uuid`."""
-    from memman.queue import queue_db
+    """Return the queue row's `queue_uuid`.
+    """
     with queue_db(data_dir) as conn:
         return conn.execute(
             'select queue_uuid from queue where id = ?',
@@ -22,7 +29,8 @@ def _queue_row(data_dir, queue_id):
 
 
 def _stored(data_dir, store, where, params):
-    """Rows of (id, queue_uuid) from the store."""
+    """Rows of (id, queue_uuid) from the store.
+    """
     db_path = f'{store_dir(data_dir, store)}/memman.db'
     with sqlite3.connect(db_path) as conn:
         return conn.execute(
@@ -31,8 +39,8 @@ def _stored(data_dir, store, where, params):
 
 
 def _requeue(data_dir, queue_id):
-    """Flip a drained queue row back to pending (simulated replay)."""
-    from memman.queue import queue_db
+    """Flip a drained queue row back to pending (simulated replay).
+    """
     with queue_db(data_dir) as conn:
         conn.execute(
             "update queue set status = 'pending', attempts = 0,"
@@ -75,7 +83,6 @@ def test_replay_of_a_forgotten_write_stores_nothing(mm_runner):
         fails on the primary key.
     Oracle: the replayed queue row read back as `done` with no error.
     """
-    from memman.queue import queue_db
     _, data_dir = mm_runner
     raw = json.loads(invoke(
         mm_runner, ['remember', 'etcd compacts revisions']).output)
@@ -117,7 +124,6 @@ def test_queue_uuid_survives_counter_rewind(mm_runner):
     Oracle: after deleting queue.db, a second write that draws the
         same row id still stores (two insights total).
     """
-    import os
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
         'remember', 'note before rewind'])
@@ -148,12 +154,6 @@ def test_insight_column_lists_are_identical_across_backends():
         constant is read from source text since psycopg may be
         absent.
     """
-    import ast
-    import inspect
-    from pathlib import Path
-
-    from memman.store import node as node_mod
-    from memman.store.node import _INSIGHT_COLUMNS
     pg_path = (
         Path(inspect.getsourcefile(node_mod)).parent / 'postgres.py')
     tree = ast.parse(pg_path.read_text())
@@ -176,7 +176,8 @@ EXPECTED_INSIGHT_COLUMNS = {
 
 
 def _insight_columns(backend):
-    """Every column name of the insights table, on either backend."""
+    """Every column name of the insights table, on either backend.
+    """
     if hasattr(backend, '_db'):
         rows = backend._db._query('pragma table_info(insights)').fetchall()
         return {r[1] for r in rows}

@@ -2,9 +2,9 @@
 
 `EmbeddingProvider` is the structural contract every provider class
 must satisfy: a `name`/`model`/`dim` triple plus `available()` and
-`embed(text)` methods. Concrete clients
-(`embed/voyage.py`, `embed/openai_compat.py`, `embed/ollama.py`)
-register themselves in the `PROVIDERS` dict via a zero-arg factory.
+`embed(text)` methods. Concrete clients (`embed/voyage.py`,
+`embed/openai_compat.py`, `embed/openrouter.py`, `embed/ollama.py`)
+are registered in the `PROVIDERS` dict by a zero-arg factory.
 
 `get_client()` resolves the active provider by looking up
 `MEMMAN_EMBED_PROVIDER` in the registry and invoking its factory.
@@ -52,9 +52,6 @@ class EmbeddingProvider(Protocol):
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Return embedding vectors for many texts in one round-trip.
-
-        Used by the worker pipeline to batch enriched-text re-embeds
-        across all facts in a row, replacing N HTTP calls with one.
         """
         ...
 
@@ -65,7 +62,7 @@ class EmbeddingProvider(Protocol):
 
 
 def _voyage_factory() -> EmbeddingProvider:
-    """Build the registered Voyage client (factory indirection).
+    """Build the registered Voyage client.
     """
     from memman.embed.voyage import Client
     return Client()
@@ -86,7 +83,8 @@ def _ollama_factory() -> EmbeddingProvider:
 
 
 def _openrouter_factory() -> EmbeddingProvider:
-    """Build the registered OpenRouter embed client."""
+    """Build the registered OpenRouter embed client.
+    """
     from memman.embed.openrouter import Client
     return Client()
 

@@ -1,13 +1,21 @@
-"""Unit tests for memman.setup.scheduler."""
+"""Unit tests for memman.setup.scheduler.
+"""
 
+import logging
 import os
+import platform
+import stat
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from memman import config
+from memman.cli import cli
 from memman.setup import scheduler as sch
-from tests.conftest import install_env_factory
+from memman.setup.claude import _install_claude_code
+from tests.conftest import fake_subprocess, install_env_factory
 
 
 @pytest.fixture
@@ -27,7 +35,8 @@ def uninstall_home(fake_home, monkeypatch):
 def _knobs(openrouter: str = 'sk-or-test',
            voyage: str = 'vk-test',
            **extra: str) -> dict[str, str]:
-    """Build the install-time knobs dict used by `sch.install`."""
+    """Build the install-time knobs dict used by `sch.install`.
+    """
     base = {
         'MEMMAN_LLM_ENDPOINT': 'https://openrouter.ai/api/v1',
         'MEMMAN_OPENROUTER_API_KEY': openrouter,
@@ -39,14 +48,15 @@ def _knobs(openrouter: str = 'sk-or-test',
 
 @pytest.fixture
 def fake_binary(monkeypatch):
-    """Pretend memman is installed at a known path."""
+    """Pretend memman is installed at a known path.
+    """
     monkeypatch.setattr(sch, 'memman_binary_path',
                         lambda: '/fake/bin/memman')
 
 
 def _no_subprocess(monkeypatch, active: bool = True):
-    """Thin wrapper for shared `fake_subprocess` keyed on `sch`."""
-    from tests.conftest import fake_subprocess
+    """Thin wrapper for shared `fake_subprocess` keyed on `sch`.
+    """
     fake_subprocess(monkeypatch, sch, active=active)
 
 
@@ -90,11 +100,16 @@ def _record_subprocess(monkeypatch, *, returncode: int = 0,
 
 
 class TestInstall:
-    """systemd / launchd install: file generation, env file merge."""
+    """systemd / launchd install: file generation, env file merge.
+    """
 
-    def test_install_systemd_writes_timer_and_service(self,
-                                                      fake_home, fake_binary, monkeypatch):
-        """Systemd install creates timer + service files with correct content.
+    def test_install_systemd_writes_timer_and_service(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify a systemd install writes a correct timer and service.
+
+        Mutation: the interval is not rendered into OnUnitActiveSec, Persistent
+            is dropped, or the service runs the wrong binary or command.
+        Oracle: hand-written expected unit-file substrings.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -114,9 +129,13 @@ class TestInstall:
         assert 'MEMMAN_DATA_DIR=' in service
         assert 'EnvironmentFile=' in service
 
-    def test_install_launchd_writes_plist_and_wrapper(self,
-                                                      fake_home, fake_binary, monkeypatch):
-        """Launchd install creates plist + wrapper script with correct content.
+    def test_install_launchd_writes_plist_and_wrapper(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify a launchd install writes a plist and an executable wrapper.
+
+        Mutation: StartInterval or the drain command is not written, or the
+            wrapper loses its execute bit.
+        Oracle: hand-written plist and wrapper substrings, and os.access.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
@@ -134,11 +153,14 @@ class TestInstall:
         assert 'scheduler drain' in wrapper
         assert os.access(result['wrapper_path'], os.X_OK)
 
-    def test_install_writes_both_keys_to_env_file(self,
-                                                  fake_home, fake_binary, monkeypatch):
-        """Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written at mode 600.
+    def test_install_writes_both_keys_to_env_file(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify install writes both API keys and the endpoint at mode 600.
+
+        Mutation: a key is omitted from the env file, or the file is left
+            readable by group or other.
+        Oracle: literal env lines and the mode 0o600.
         """
-        import stat
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
 
@@ -153,9 +175,12 @@ class TestInstall:
         mode = stat.S_IMODE(os.stat(env_path).st_mode)
         assert mode == 0o600
 
-    def test_install_merges_existing_env_file(self,
-                                              fake_home, fake_binary, monkeypatch):
-        """Existing env keys are preserved across installs.
+    def test_install_merges_existing_env_file(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify install keeps unrelated env keys and refreshes knobs.
+
+        Mutation: install overwrites the env file, or keeps a stale knob value.
+        Oracle: a seeded file holding one foreign key and an old endpoint.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -173,9 +198,13 @@ class TestInstall:
         assert 'OPENROUTER_API_KEY=sk-or-new' in contents
         assert 'VOYAGE_API_KEY=vk-new' in contents
 
-    def test_install_without_interval_uses_60s_default(self,
-                                                       fake_home, fake_binary, monkeypatch):
-        """install() with no interval_seconds writes a 60s timer.
+    def test_install_without_interval_uses_60s_default(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify install with no interval writes a 60s timer.
+
+        Mutation: the default interval is dropped or differs from 60 seconds.
+        Oracle: literal 60 in the result and 'OnUnitActiveSec=60s' in the
+            timer.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -186,17 +215,24 @@ class TestInstall:
         assert 'OnUnitActiveSec=60s' in timer
 
     def test_default_interval_is_60_seconds(self):
-        """DEFAULT_INTERVAL_SECONDS is 60 so the worker drains promptly.
+        """Verify DEFAULT_INTERVAL_SECONDS is 60.
+
+        Mutation: the constant is raised to a slower poll.
+        Oracle: the literal 60.
         """
         assert sch.DEFAULT_INTERVAL_SECONDS == 60
 
 
 class TestDebugState:
-    """Debug-state file (`~/.memman/debug.state`) round-trip."""
+    """Debug-state file (`~/.memman/debug.state`) round-trip.
+    """
 
     def test_set_debug_on_writes_state_file_mode_600(self, fake_home):
-        """`set_debug(True)` writes 'on' to ~/.memman/debug.state at mode 600."""
-        import stat
+        """Verify set_debug(True) writes 'on' to debug.state at mode 600.
+
+        Mutation: the state lands at another path or with group/other bits set.
+        Oracle: the literal path, DEBUG_ON, and mode 0o600.
+        """
         sch.set_debug(True)
         p = fake_home / '.memman' / 'debug.state'
         assert p.exists()
@@ -204,14 +240,22 @@ class TestDebugState:
         assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
 
     def test_set_debug_off_writes_off_to_state_file(self, fake_home):
-        """`set_debug(False)` flips the persistent state to 'off'."""
+        """Verify set_debug(False) turns a stored 'on' back to 'off'.
+
+        Mutation: set_debug(False) leaves the file unchanged.
+        Oracle: DEBUG_OFF read from the state file after on then off.
+        """
         sch.set_debug(True)
         sch.set_debug(False)
         p = fake_home / '.memman' / 'debug.state'
         assert p.read_text().strip() == sch.DEBUG_OFF
 
     def test_get_debug_round_trips_state_file(self, fake_home):
-        """`get_debug()` reflects the last `write_debug_state()` call."""
+        """Verify get_debug follows the last state written.
+
+        Mutation: get_debug caches its first answer or inverts the flag.
+        Oracle: the state values written in sequence, off by default.
+        """
         assert sch.get_debug() is False
         sch.write_debug_state(sch.DEBUG_ON)
         assert sch.get_debug() is True
@@ -219,7 +263,12 @@ class TestDebugState:
         assert sch.get_debug() is False
 
     def test_set_debug_does_not_touch_env_file(self, fake_home):
-        """Toggling debug never reads or writes ~/.memman/env."""
+        """Verify toggling debug leaves the env file byte-identical.
+
+        Mutation: set_debug rewrites the env file, e.g. to store the flag
+            there.
+        Oracle: the seeded env text.
+        """
         env_path = fake_home / '.memman' / 'env'
         env_path.parent.mkdir(parents=True, exist_ok=True)
         original = (
@@ -233,11 +282,16 @@ class TestDebugState:
 
 
 class TestChangeInterval:
-    """`sch.change_interval` validation and unit rewrite."""
+    """`sch.change_interval` validation and unit rewrite.
+    """
 
-    def test_change_interval_rewrites_unit_without_touching_env(self,
-                                                                fake_home, fake_binary, monkeypatch):
-        """change_interval updates the unit file but leaves ~/.memman/env alone.
+    def test_change_interval_rewrites_unit_without_touching_env(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify change_interval rewrites the timer, not the env file.
+
+        Mutation: the timer keeps the old interval, or the env file is
+            rewritten.
+        Oracle: 'OnUnitActiveSec=300s' and the env text before and after.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -254,27 +308,36 @@ class TestChangeInterval:
         env_after = (fake_home / '.memman' / 'env').read_text()
         assert env_before == env_after
 
-    def test_change_interval_rejects_too_short(self,
-                                               fake_home, fake_binary, monkeypatch):
-        """change_interval refuses values below the 60s floor on systemd.
+    def test_change_interval_rejects_too_short(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify systemd refuses an interval below the 60s floor.
+
+        Mutation: the floor check is dropped or skipped for systemd.
+        Oracle: RuntimeError 'too short for systemd' for 30 seconds.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         with pytest.raises(RuntimeError, match='too short for systemd'):
             sch.change_interval(str(fake_home), 30)
 
-    def test_change_interval_rejects_below_60_for_launchd(self,
-                                                          fake_home, fake_binary, monkeypatch):
-        """change_interval refuses values below the 60s floor on launchd.
+    def test_change_interval_rejects_below_60_for_launchd(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify launchd refuses an interval below the 60s floor.
+
+        Mutation: the floor check is dropped or skipped for launchd.
+        Oracle: RuntimeError 'too short for launchd' for 30 seconds.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
         with pytest.raises(RuntimeError, match='too short for launchd'):
             sch.change_interval(str(fake_home), 30)
 
-    def test_change_interval_accepts_zero_for_serve(self,
-                                                    fake_home, fake_binary, monkeypatch):
-        """change_interval accepts 0 in serve mode (continuous loop).
+    def test_change_interval_accepts_zero_for_serve(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify serve mode accepts 0 as its continuous-loop interval.
+
+        Mutation: the 60s floor is applied to serve mode as well.
+        Oracle: result and stored serve interval both 0.
         """
         monkeypatch.setattr(sch, 'detect_scheduler',
                             lambda: sch.SCHEDULER_KIND_SERVE)
@@ -285,9 +348,12 @@ class TestChangeInterval:
         assert result['interval_seconds'] == 0
         assert sch.read_serve_interval() == 0
 
-    def test_change_interval_rejects_negative(self,
-                                              fake_home, fake_binary, monkeypatch):
-        """change_interval refuses negative values regardless of kind.
+    def test_change_interval_rejects_negative(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify a negative interval is refused in every mode.
+
+        Mutation: the negative check is dropped for serve mode.
+        Oracle: RuntimeError matching 'negative' for -1.
         """
         monkeypatch.setattr(sch, 'detect_scheduler',
                             lambda: sch.SCHEDULER_KIND_SERVE)
@@ -295,11 +361,13 @@ class TestChangeInterval:
         with pytest.raises(RuntimeError, match='negative'):
             sch.change_interval(str(fake_home), -1)
 
-    def test_change_interval_warns_on_mixed_mode(self,
-                                                 fake_home, fake_binary, monkeypatch, caplog):
-        """change_interval logs a warning when serve coexists with systemd.
+    def test_change_interval_warns_on_mixed_mode(
+            self, fake_home, fake_binary, monkeypatch, caplog):
+        """Verify serve mode alongside enabled systemd warns.
+
+        Mutation: the mixed-mode warning is dropped.
+        Oracle: a WARNING record naming both 'serve' and 'systemd'.
         """
-        import logging
         monkeypatch.setattr(sch, 'detect_scheduler',
                             lambda: sch.SCHEDULER_KIND_SERVE)
         monkeypatch.setattr(sch, '_systemd_is_enabled', lambda: True)
@@ -313,7 +381,10 @@ class TestChangeInterval:
             f'{[r.message for r in caplog.records]}')
 
     def test_change_interval_launchd(self, fake_home, fake_binary, monkeypatch):
-        """change_interval rewrites the launchd plist with a new StartInterval.
+        """Verify change_interval rewrites the launchd plist interval.
+
+        Mutation: the plist keeps the old StartInterval.
+        Oracle: '<key>StartInterval</key><integer>3600</integer>' in the plist.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
@@ -327,10 +398,14 @@ class TestChangeInterval:
 
 
 class TestStatusParsing:
-    """`sch.status` parses systemd / launchd output."""
+    """`sch.status` parses systemd / launchd output.
+    """
 
     def test_status_not_installed(self, fake_home, monkeypatch):
-        """status() reports installed=False when no unit file exists.
+        """Verify status reports not installed when no unit file exists.
+
+        Mutation: status reports installed, or an interval, with no unit file.
+        Oracle: installed False and interval None.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -339,9 +414,12 @@ class TestStatusParsing:
         assert result['installed'] is False
         assert result['interval_seconds'] is None
 
-    def test_status_installed_parses_interval(self,
-                                              fake_home, fake_binary, monkeypatch):
-        """status() parses OnUnitActiveSec from the installed timer.
+    def test_status_installed_parses_interval(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify status reads the interval back from the installed timer.
+
+        Mutation: the OnUnitActiveSec value is misparsed or dropped.
+        Oracle: the 1800 seconds passed to install.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -352,9 +430,12 @@ class TestStatusParsing:
         assert result['installed'] is True
         assert result['interval_seconds'] == 1800
 
-    def test_status_launchd_parses_interval(self,
-                                            fake_home, fake_binary, monkeypatch):
-        """Launchd status parses StartInterval from the plist.
+    def test_status_launchd_parses_interval(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify status reads StartInterval back from the launchd plist.
+
+        Mutation: the StartInterval value is misparsed or dropped.
+        Oracle: the 1200 seconds passed to install.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
@@ -367,18 +448,23 @@ class TestStatusParsing:
         assert result['interval_seconds'] == 1200
 
     def test_parse_interval_non_s_unit(self, fake_home):
-        """Parser returns None on OnUnitActiveSec values without an 's' suffix.
+        """Verify the timer parser returns None without an 's' suffix.
+
+        Mutation: '15min' is read as 15 seconds.
+        Oracle: a hand-written timer file with OnUnitActiveSec=15min.
         """
         timer_path = fake_home / 'memman-enrich.timer'
         timer_path.write_text(
             '[Timer]\nOnUnitActiveSec=15min\nPersistent=true\n')
         assert sch._parse_interval_from_systemd_timer(timer_path) is None
 
-    def test_systemd_status_computes_next_run(self,
-                                              fake_home, fake_binary, monkeypatch):
-        """status() reports next_run = LastTriggerUSec + interval.
+    def test_systemd_status_computes_next_run(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify next_run is LastTriggerUSec plus the interval, in UTC.
+
+        Mutation: the interval is not added, or the EDT stamp is read as UTC.
+        Oracle: hand-computed 14:18:58 EDT + 900s = 2026-04-24T18:33:58 UTC.
         """
-        import time
         prev_tz = os.environ.get('TZ')
         os.environ['TZ'] = 'EST5EDT,M3.2.0,M11.1.0'
         time.tzset()
@@ -406,9 +492,12 @@ class TestStatusParsing:
                 os.environ['TZ'] = prev_tz
             time.tzset()
 
-    def test_systemd_status_next_run_when_never_fired(self,
-                                                      fake_home, fake_binary, monkeypatch):
-        """status() returns next_run=None when the timer has never fired.
+    def test_systemd_status_next_run_when_never_fired(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify next_run is None when the timer has never fired.
+
+        Mutation: the 'n/a' stamp is parsed into a date or raises.
+        Oracle: LastTriggerUSec stubbed to 'n/a'.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
@@ -422,11 +511,13 @@ class TestStatusParsing:
         result = sch.status()
         assert result['next_run'] is None
 
-    def test_launchd_status_computes_next_run(self,
-                                              fake_home, fake_binary, monkeypatch):
-        """status() reports next_run = log_mtime + interval on launchd.
+    def test_launchd_status_computes_next_run(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify launchd next_run is the log mtime plus the interval.
+
+        Mutation: the interval is not added, or the mtime is ignored.
+        Oracle: a log file with a fixed mtime, plus 900s.
         """
-        import os
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
@@ -447,9 +538,12 @@ class TestStatusParsing:
             fixed_mtime + 900, tz=timezone.utc).isoformat()
         assert result['next_run'] == expected
 
-    def test_launchd_status_next_run_without_log(self,
-                                                 fake_home, fake_binary, monkeypatch):
-        """status() returns next_run=None on launchd with no enrich.log yet.
+    def test_launchd_status_next_run_without_log(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify launchd next_run is None before any enrich.log exists.
+
+        Mutation: a missing log raises or yields a made-up time.
+        Oracle: no log file on disk.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
@@ -461,9 +555,12 @@ class TestStatusParsing:
         assert result['platform'] == 'launchd'
         assert result['next_run'] is None
 
-    def test_systemd_status_next_run_when_malformed(self,
-                                                    fake_home, fake_binary, monkeypatch):
-        """status() returns next_run=None on an unparseable timestamp.
+    def test_systemd_status_next_run_when_malformed(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify next_run is None when LastTriggerUSec cannot be parsed.
+
+        Mutation: an unparseable stamp raises or yields a bogus date.
+        Oracle: LastTriggerUSec stubbed to a non-date string.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
@@ -480,11 +577,15 @@ class TestStatusParsing:
 
 
 class TestActivation:
-    """`uninstall`, `start`, `stop`, `trigger` semantics."""
+    """`uninstall`, `start`, `stop`, `trigger` semantics.
+    """
 
-    def test_uninstall_systemd_removes_unit_files(self,
-                                                  fake_home, fake_binary, monkeypatch):
-        """uninstall() removes systemd timer and service files.
+    def test_uninstall_systemd_removes_unit_files(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify uninstall deletes the systemd timer and service files.
+
+        Mutation: uninstall leaves one of the unit files on disk.
+        Oracle: both paths exist after install and neither after uninstall.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -501,60 +602,36 @@ class TestActivation:
         assert not service_path.exists()
 
     def test_start_raises_when_not_installed(self, fake_home, monkeypatch):
-        """start() raises FileNotFoundError when unit files are absent."""
+        """Verify start() without unit files raises FileNotFoundError.
+
+        Mutation: start() calls systemctl and reports success with nothing
+            installed.
+        Oracle: FileNotFoundError matching 'not installed'.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         with pytest.raises(FileNotFoundError, match='not installed'):
             sch.start()
 
     def test_stop_raises_when_not_installed(self, fake_home, monkeypatch):
-        """stop() raises FileNotFoundError when unit files are absent."""
+        """Verify stop() without unit files raises FileNotFoundError.
+
+        Mutation: stop() calls systemctl and reports success with nothing
+            installed.
+        Oracle: FileNotFoundError matching 'not installed'.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         with pytest.raises(FileNotFoundError, match='not installed'):
             sch.stop()
 
-    def _record_subprocess(self, *, returncode: int = 0,
-                           stderr: str = '', stdout: str = 'active',
-                           responses: dict | None = None):
-        """Stub subprocess.run, record argvs, and (optionally) route by argv.
+    def test_trigger_systemd_uses_no_block(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify trigger() starts the systemd service without blocking.
 
-        `responses` maps an argv-tuple prefix to a stdout string. When a
-        call's argv starts with a key, that response is returned; otherwise
-        the default `stdout` is used.
-        """
-        calls: list = []
-
-        class _FakeResult:
-            def __init__(self, rc: int, out: str, err: str) -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = err
-
-        def _fake_run(cmd, *args, **kwargs):
-            argv = tuple(cmd)
-            calls.append(list(cmd))
-            out = stdout
-            if responses:
-                if argv in responses:
-                    out = responses[argv]
-                else:
-                    for key, value in responses.items():
-                        if argv[:len(key)] == key:
-                            out = value
-                            break
-            return _FakeResult(returncode, out, stderr)
-
-        fake = type('S', (), {
-            'run': staticmethod(_fake_run),
-            'TimeoutExpired': TimeoutError,
-            })()
-        self.setattr(sch, 'subprocess', fake)
-        return calls
-
-    def test_trigger_systemd_uses_no_block(self,
-                                           fake_home, fake_binary, monkeypatch):
-        """trigger() on systemd runs `systemctl --user start --no-block`.
+        Mutation: --no-block is dropped, or the timer is started in place of
+            the service.
+        Oracle: the exact recorded systemctl argv.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         calls = _record_subprocess(monkeypatch)
@@ -569,9 +646,13 @@ class TestActivation:
             'memman-enrich.service',
             ]]
 
-    def test_trigger_systemd_handles_already_running(self,
-                                                     fake_home, fake_binary, monkeypatch):
-        """trigger() returns informational note when a run is already active.
+    def test_trigger_systemd_handles_already_running(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify trigger() returns a note when a run is already active.
+
+        Mutation: the nonzero systemctl exit raises instead of returning a
+            note.
+        Oracle: a stub returning exit 1 with 'already running' on stderr.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
@@ -585,9 +666,12 @@ class TestActivation:
         assert result['platform'] == 'systemd'
         assert 'already' in result.get('note', '').lower()
 
-    def test_trigger_launchd_runs_job(self,
-                                      fake_home, fake_binary, monkeypatch):
-        """trigger() on launchd runs `launchctl start com.memman.enrich`.
+    def test_trigger_launchd_runs_job(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify trigger() on launchd starts the enrich job by label.
+
+        Mutation: the wrong launchctl subcommand or label is used.
+        Oracle: the exact recorded launchctl argv.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         calls = _record_subprocess(monkeypatch)
@@ -600,7 +684,10 @@ class TestActivation:
         assert calls == [['launchctl', 'start', 'com.memman.enrich']]
 
     def test_trigger_raises_when_not_installed(self, fake_home, monkeypatch):
-        """trigger() raises FileNotFoundError when the unit file is absent.
+        """Verify trigger() without unit files raises FileNotFoundError.
+
+        Mutation: trigger() reports success with nothing installed.
+        Oracle: FileNotFoundError matching 'not installed'.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
@@ -609,26 +696,47 @@ class TestActivation:
 
 
 class TestStateFile:
-    """Scheduler state-file read/write/clear."""
+    """Scheduler state-file read/write/clear.
+    """
 
     def test_state_file_round_trip(self, fake_home):
-        """write_state persists; read_state returns the value."""
+        """Verify read_state returns the state write_state stored.
+
+        Mutation: write_state and read_state use different files.
+        Oracle: STATE_STARTED, which differs from the read default.
+        """
         sch.write_state(sch.STATE_STARTED)
         assert sch.read_state() == sch.STATE_STARTED
 
     @pytest.mark.parametrize('file_content', [None, 'garbage\n'])
     def test_read_state_defaults_to_stopped(self, fake_home, file_content):
-        """Missing or invalid state file is treated as `stopped`."""
+        """Verify a missing or invalid state file reads as stopped.
+
+        Mutation: a missing or garbage file reads as started.
+        Oracle: no file, and a file holding 'garbage', both giving
+            STATE_STOPPED.
+        """
         if file_content is not None:
             sch._state_file_path().parent.mkdir(parents=True, exist_ok=True)
             sch._state_file_path().write_text(file_content)
         assert sch.read_state() == sch.STATE_STOPPED
 
     def test_write_state_rejects_bad_value(self, fake_home):
+        """Verify write_state refuses a value outside the known states.
+
+        Mutation: any string is accepted and persisted.
+        Oracle: ValueError for 'banana'.
+        """
         with pytest.raises(ValueError):
             sch.write_state('banana')
 
     def test_clear_state_removes_file(self, fake_home):
+        """Verify clear_state deletes the state file.
+
+        Mutation: clear_state leaves the file in place.
+        Oracle: the path exists after write_state and is gone after
+            clear_state.
+        """
         sch.write_state(sch.STATE_STARTED)
         assert sch._state_file_path().exists()
         sch.clear_state()
@@ -636,10 +744,15 @@ class TestStateFile:
 
 
 class TestServe:
-    """Serve mode: continuous-loop scheduler."""
+    """Serve mode: continuous-loop scheduler.
+    """
 
     def test_serve_install_records_interval(self, fake_home, monkeypatch):
-        """install() in serve mode records the interval and writes STATE_STARTED."""
+        """Verify a serve-mode install records interval and STATE_STARTED.
+
+        Mutation: the interval or the started state is not persisted.
+        Oracle: DEFAULT_INTERVAL_SECONDS and STATE_STARTED read back from disk.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler',
                             lambda: sch.SCHEDULER_KIND_SERVE)
         monkeypatch.setattr(sch, 'memman_binary_path', lambda: '/usr/local/bin/memman')
@@ -654,28 +767,33 @@ class TestServe:
 
 
 class TestDetectScheduler:
-    """Platform detection."""
+    """Platform detection.
+    """
 
     def test_detect_raises_when_no_scheduler(self, monkeypatch):
-        """detect_scheduler raises RuntimeError when no kind is available."""
-        import platform as _platform
+        """Verify detect_scheduler raises when no scheduler kind is available.
+
+        Mutation: detection falls back to a kind that is not installed.
+        Oracle: Linux with no systemctl on PATH and no override in the env.
+        """
         monkeypatch.delenv(config.SCHEDULER_KIND, raising=False)
-        monkeypatch.setattr(_platform, 'system', lambda: 'Linux')
+        monkeypatch.setattr(platform, 'system', lambda: 'Linux')
         monkeypatch.setattr(sch.shutil, 'which', lambda _: None)
         with pytest.raises(RuntimeError, match='no scheduler available'):
             sch.detect_scheduler()
 
 
 class TestMemmanBinaryPath:
-    """`memman_binary_path` self-identifies via sys.executable's sibling."""
+    """`memman_binary_path` self-identifies via sys.executable's sibling.
+    """
 
     def test_returns_sibling_of_sys_executable(self, tmp_path, monkeypatch):
-        """When a memman script lives next to sys.executable, return it.
+        """Verify memman_binary_path prefers the script beside sys.executable.
 
-        Locks the PATH-independent self-identification: regardless of
-        what `shutil.which('memman')` would resolve, the function must
-        prefer the sibling so a side-by-side install (pipx + dev venv)
-        does not write the wrong path into the systemd unit.
+        Mutation: shutil.which is preferred over the interpreter's sibling, so
+            a side-by-side install (pipx plus a dev venv) writes the wrong path
+            into the systemd unit.
+        Oracle: a sibling script and a PATH decoy at known paths.
         """
         venv_bin = tmp_path / 'venv' / 'bin'
         venv_bin.mkdir(parents=True)
@@ -698,7 +816,10 @@ class TestMemmanBinaryPath:
 
     def test_falls_back_to_path_when_sibling_missing(
             self, tmp_path, monkeypatch):
-        """Sibling absent (e.g., system-python + pip --user) -> shutil.which.
+        """Verify memman_binary_path falls back to PATH when no sibling exists.
+
+        Mutation: a missing sibling raises instead of consulting shutil.which.
+        Oracle: a script at a known PATH location.
         """
         venv_bin = tmp_path / 'venv' / 'bin'
         venv_bin.mkdir(parents=True)
@@ -718,7 +839,10 @@ class TestMemmanBinaryPath:
         assert sch.memman_binary_path() == str(path_memman)
 
     def test_raises_when_neither_resolves(self, tmp_path, monkeypatch):
-        """No sibling, nothing on PATH -> RuntimeError with install hint.
+        """Verify memman_binary_path raises with an install hint.
+
+        Mutation: an unresolved name is returned instead of raising.
+        Oracle: RuntimeError matching 'install with pipx'.
         """
         venv_bin = tmp_path / 'venv' / 'bin'
         venv_bin.mkdir(parents=True)
@@ -732,11 +856,10 @@ class TestMemmanBinaryPath:
             sch.memman_binary_path()
 
     def test_sibling_must_be_executable(self, tmp_path, monkeypatch):
-        """A non-executable file next to python is not the binary.
+        """Verify a non-executable file beside python is skipped.
 
-        Defensive: when `memman` happens to exist next to the
-        interpreter as a regular file (e.g., a stray text file),
-        skip it and let `shutil.which` find the real script.
+        Mutation: the sibling is accepted on existence alone.
+        Oracle: a mode 0644 sibling and an executable script on PATH.
         """
         venv_bin = tmp_path / 'venv' / 'bin'
         venv_bin.mkdir(parents=True)
@@ -760,7 +883,8 @@ class TestMemmanBinaryPath:
 
 
 class TestSchedulerLogs:
-    """`memman log worker` and the install-time logs/ directory."""
+    """`memman log worker` and the install-time logs/ directory.
+    """
 
     def test_install_creates_logs_directory(self, tmp_path, monkeypatch):
         """_install_claude_code leaves ~/.memman/logs/ owner-only.
@@ -786,7 +910,6 @@ class TestSchedulerLogs:
         preexisting.chmod(0o755)
         monkeypatch.setattr(
             'memman.setup.claude._init_default_store', lambda dd: None)
-        from memman.setup.claude import _install_claude_code
         env = {'config_dir': str(tmp_path / 'claude')}
         _install_claude_code(env, data_dir=str(tmp_path / 'data'))
         logs_dir = tmp_path / '.memman' / 'logs'
@@ -794,9 +917,11 @@ class TestSchedulerLogs:
         assert (logs_dir.stat().st_mode & 0o777) == 0o700
 
     def test_log_worker_reads_log_file(self, tmp_path, monkeypatch):
-        """`memman log worker` prints the tail of enrich.log."""
-        from click.testing import CliRunner
-        from memman.cli import cli
+        """Verify `log worker --lines 2` prints the last two enrich.log lines.
+
+        Mutation: --lines is ignored, so the whole file prints.
+        Oracle: a four-line file with the marker on the last line.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         logs_dir = tmp_path / '.memman' / 'logs'
         logs_dir.mkdir(parents=True)
@@ -809,9 +934,11 @@ class TestSchedulerLogs:
         assert 'line1' not in result.output
 
     def test_log_worker_errors_flag(self, tmp_path, monkeypatch):
-        """`memman log worker --errors` reads enrich.err."""
-        from click.testing import CliRunner
-        from memman.cli import cli
+        """Verify `log worker --errors` reads enrich.err, not enrich.log.
+
+        Mutation: --errors is ignored and enrich.log prints.
+        Oracle: distinct markers in the two files.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         logs_dir = tmp_path / '.memman' / 'logs'
         logs_dir.mkdir(parents=True)
@@ -824,9 +951,11 @@ class TestSchedulerLogs:
         assert 'LOG-NOT-THIS' not in result.output
 
     def test_log_worker_missing_file(self, tmp_path, monkeypatch):
-        """Missing log file emits a friendly message, not an error."""
-        from click.testing import CliRunner
-        from memman.cli import cli
+        """Verify a missing log file gives a friendly message and exit 0.
+
+        Mutation: a missing file raises or exits non-zero.
+        Oracle: no logs directory, and the 'no log file yet' text.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         runner = CliRunner()
         result = runner.invoke(cli, ['log', 'worker'])
@@ -844,8 +973,6 @@ class TestSchedulerLogs:
         Oracle: a decoy memman.log seeded under the fake home; only
             the data-dir file's marker may surface.
         """
-        from click.testing import CliRunner
-        from memman.cli import cli
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         data_dir = tmp_path / 'elsewhere'
         (data_dir / 'logs').mkdir(parents=True)
@@ -872,8 +999,6 @@ class TestSchedulerLogs:
         Oracle: a decoy of each name seeded under the data dir; only
             the home files' markers may surface.
         """
-        from click.testing import CliRunner
-        from memman.cli import cli
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         data_dir = tmp_path / 'elsewhere'
         (data_dir / 'logs').mkdir(parents=True)
@@ -904,8 +1029,6 @@ class TestSchedulerLogs:
             and ordering - the backup is older, so it must print
             before the live line.
         """
-        from click.testing import CliRunner
-        from memman.cli import cli
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         data_dir = tmp_path / 'elsewhere'
         (data_dir / 'logs').mkdir(parents=True)
@@ -930,8 +1053,6 @@ class TestSchedulerLogs:
         Oracle: Click's usage exit code 2, and both flag names in the
             message.
         """
-        from click.testing import CliRunner
-        from memman.cli import cli
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
         home_logs = tmp_path / '.memman' / 'logs'
         home_logs.mkdir(parents=True)
@@ -965,11 +1086,16 @@ def _install_env_full(data_dir):
 
 
 class TestUninstall:
-    """`sch.uninstall` strips secrets and is a no-op on empty data dirs."""
+    """`sch.uninstall` strips secrets and is a no-op on empty data dirs.
+    """
 
     def test_uninstall_strips_secrets_keeps_settings(
             self, uninstall_home, monkeypatch):
-        """Secrets removed; non-secret settings preserved."""
+        """Verify uninstall removes secrets and keeps non-secret settings.
+
+        Mutation: a secret key survives, or a setting is stripped with them.
+        Oracle: a seeded env file with a known mix of both kinds.
+        """
         _, data_dir = uninstall_home
         _install_env_full(data_dir)
 
@@ -993,7 +1119,12 @@ class TestUninstall:
     @pytest.mark.no_default_env
     def test_uninstall_no_op_when_no_env_file(
             self, uninstall_home, monkeypatch):
-        """Uninstall against an empty data dir doesn't error."""
+        """Verify uninstall with no env file reports no env actions.
+
+        Mutation: uninstall raises, or reports an action, when the file is
+            absent.
+        Oracle: an empty data dir and an empty env_actions list.
+        """
         _, data_dir = uninstall_home
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch, active=False)
@@ -1003,11 +1134,18 @@ class TestUninstall:
 
 
 class TestBackupScheduler:
-    """`install_backup` / `uninstall_backup` and the backup-state helpers."""
+    """`install_backup` / `uninstall_backup` and the backup-state helpers.
+    """
 
     def test_install_backup_systemd_writes_calendar_timer(
             self, fake_home, fake_binary, monkeypatch):
-        """Systemd install_backup writes an OnCalendar timer + worker service."""
+        """Verify install_backup writes an OnCalendar timer and service.
+
+        Mutation: the cron expression converts to the wrong OnCalendar, or the
+            enable and restart calls are skipped.
+        Oracle: '0 3 * * *' giving '*-*-* 03:00:00', and the recorded systemctl
+            argvs.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         calls = _record_subprocess(monkeypatch)
         result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
@@ -1024,7 +1162,11 @@ class TestBackupScheduler:
 
     def test_install_backup_launchd_writes_calendar_plist(
             self, fake_home, fake_binary, monkeypatch):
-        """Launchd install_backup writes a StartCalendarInterval array + wrapper."""
+        """Verify a multi-value cron gives a launchd interval array.
+
+        Mutation: the plist omits the array, or sets RunAtLoad true.
+        Oracle: hand-written plist substrings for '*/15 * * * *'.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         result = sch.install_backup(
@@ -1039,7 +1181,11 @@ class TestBackupScheduler:
 
     def test_install_backup_launchd_single_value_is_dict(
             self, fake_home, fake_binary, monkeypatch):
-        """A single-value cron yields one calendar dict, not an array."""
+        """Verify a single-value cron gives one calendar dict, not an array.
+
+        Mutation: a single value is wrapped in a one-element array.
+        Oracle: Minute 0 and Hour 3 in a dict, with no array element.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
@@ -1051,7 +1197,12 @@ class TestBackupScheduler:
 
     def test_uninstall_backup_leaves_enrich_units(
             self, fake_home, fake_binary, monkeypatch):
-        """uninstall_backup removes only backup units and clears backup.state."""
+        """Verify uninstall_backup removes backup units, keeps enrich ones.
+
+        Mutation: uninstall_backup removes the enrich timer or keeps backup
+            state.
+        Oracle: unit file existence, and read_backup_state returning None.
+        """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home / '.memman'),
@@ -1061,7 +1212,7 @@ class TestBackupScheduler:
         unit_dir = fake_home / '.config' / 'systemd' / 'user'
         assert (unit_dir / sch.SYSTEMD_BACKUP_TIMER_NAME).exists()
 
-        sch.uninstall_backup(str(fake_home / '.memman'))
+        sch.uninstall_backup()
 
         assert not (unit_dir / sch.SYSTEMD_BACKUP_TIMER_NAME).exists()
         assert not (unit_dir / sch.SYSTEMD_BACKUP_SERVICE_NAME).exists()
@@ -1069,7 +1220,12 @@ class TestBackupScheduler:
         assert sch.read_backup_state() is None
 
     def test_backup_state_round_trip(self, fake_home):
-        """write/read/clear the once-per-minute backup guard state."""
+        """Verify the backup state stamp writes, reads, and clears.
+
+        Mutation: read_backup_state disagrees with write, or clear leaves the
+            stamp.
+        Oracle: the literal stamp '2026-06-27T03:00'.
+        """
         sch.write_backup_state('2026-06-27T03:00')
         assert sch.read_backup_state() == '2026-06-27T03:00'
         sch.clear_backup_state()

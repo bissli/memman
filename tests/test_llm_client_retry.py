@@ -1,4 +1,4 @@
-"""Retry behaviour of MemmanLLMClient.complete on empty LLM responses.
+"""Retry behavior of MemmanLLMClient.complete on empty LLM responses.
 
 A transient empty body from a flaky local endpoint (Ollama, llama.cpp)
 must be retried inside `complete()` rather than surfaced, because every
@@ -92,9 +92,8 @@ def test_empty_content_string_retries(monkeypatch, empty_content):
 def test_empty_retry_does_not_sleep_backoff(monkeypatch):
     """Empty-body retries never wait a RETRY_BACKOFF-scale delay.
 
-    An empty body is not rate limiting; `(1.0, 2.0, 4.0)` of sleep is
-    charged against the 60 s drain timeout whose maintenance pass needs
-    ~30 s.
+    An empty body is not rate limiting, and backoff sleep is charged
+    against the drain timeout that the maintenance pass also needs.
 
     Mutation: reusing `RETRY_BACKOFF` on the empty-body path.
     Oracle: a sleep spy asserts no recorded delay reaches 1.0 (the

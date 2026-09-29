@@ -1,8 +1,8 @@
 """Post-commit verification tests for sqlite -> postgres migration.
 
-Slice 1.3: after the destination commit lands, row counts in each
-destination table must match the captured source counts. A mismatch
-raises `MigrateError`.
+After the destination commit lands, row counts in each destination
+table must match the captured source counts. A mismatch raises
+`MigrateError`.
 """
 
 import sqlite3
@@ -16,7 +16,9 @@ import pytest
 
 psycopg = pytest.importorskip('psycopg')
 
+from memman.migrate import MigrateError, _verify_destination_counts
 from memman.store.db import _BASELINE_SCHEMA
+from memman.store.sqlite import SqliteMigrator
 
 pytestmark = pytest.mark.postgres
 
@@ -32,13 +34,13 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
         for i in range(n_rows):
             vec = [0.1 * (i + 1)] * 512
             conn.execute(
-                'INSERT INTO insights (id, content, category,'
+                'insert into insights (id, content, category,'
                 ' embedding, created_at, updated_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?)',
+                ' values (?, ?, ?, ?, ?, ?)',
                 (str(uuid.uuid4()), f'row-{i}', 'fact',
                  struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":512}'))
         conn.commit()
@@ -47,12 +49,14 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
 
 
 def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
-    """Happy-path migrate verifies destination row counts match source.
+    """Verify destination row counts match the source after a full apply.
+
+    Mutation: apply dropping insights, oplog, or meta rows, or the
+        verifier comparing against the wrong table.
+    Oracle: the counts taken from the gathered payload.
     """
-    from memman.migrate import _verify_destination_counts
     from memman.store.postgres import PostgresMigrator, _connection
     from memman.store.postgres import _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_verify_ok'
     sdir = tmp_path / 'data' / store
@@ -65,7 +69,7 @@ def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         with _connection(pg_dsn, autocommit=True) as conn:
@@ -84,15 +88,15 @@ def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
 
 
 def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
-    """If the destination ends up short, MigrateError is raised.
+    """Verify a destination one row short raises MigrateError.
 
-    Wraps `PostgresMigrator.apply` to delete one row before commit;
-    the verify-counts step then catches the discrepancy and raises.
+    Mutation: the count check skipping insights, or passing on a
+        smaller destination count.
+    Oracle: a wrapped apply that deletes one insights row, against the
+        4 seeded rows in the payload.
     """
-    from memman.migrate import MigrateError, _verify_destination_counts
     from memman.store.postgres import PostgresMigrator, _connection
     from memman.store.postgres import _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_verify_mismatch'
     sdir = tmp_path / 'data' / store
@@ -117,7 +121,7 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         with patch.object(
                 PostgresMigrator, 'apply', new=short_apply):

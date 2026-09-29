@@ -27,7 +27,8 @@ from tests.conftest import force_drain, invoke, make_insight, parse_remember
 
 
 def _queue_author(data_dir: str, queue_id: int) -> str | None:
-    """Return the `author` from the queue row, or None when absent."""
+    """The `author` from the queue row, or None when absent.
+    """
     with queue_db(data_dir) as conn:
         row = conn.execute(
             'select author from queue where id = ?',
@@ -36,7 +37,8 @@ def _queue_author(data_dir: str, queue_id: int) -> str | None:
 
 
 def _insight_author(data_dir: str, queue_uuid: str) -> str | None:
-    """Return `author` from the SQLite insight matching `queue_uuid`."""
+    """`author` from the SQLite insight matching `queue_uuid`.
+    """
     db = open_read_only(store_dir(data_dir, read_active(data_dir)))
     try:
         row = db._query(
@@ -48,7 +50,8 @@ def _insight_author(data_dir: str, queue_uuid: str) -> str | None:
 
 
 def _queue_uuid_for(data_dir: str, queue_id: int) -> str | None:
-    """Return the `queue_uuid` for a queue row."""
+    """The `queue_uuid` for a queue row.
+    """
     with queue_db(data_dir) as conn:
         row = conn.execute(
             'select queue_uuid from queue where id = ?',
@@ -126,15 +129,13 @@ def test_insight_author_round_trips_through_store(backend):
 
 @pytest.mark.postgres
 def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
-    """Verify author survives a sqlite -> postgres -> sqlite migrate round trip.
+    """Verify author survives a sqlite-postgres-sqlite migrate round trip.
 
     Mutation: dropping author from the `MigrateInsight` built by
         `PostgresMigrator.gather`.
     Oracle: the insight gathered back from postgres, and the final
         sqlite row after re-apply, both carry the original author.
     """
-    # psycopg is the optional postgres extra, so a sqlite-only install
-    # still collects this file.
     import psycopg
 
     store = 'author_migrate_rt'
@@ -165,12 +166,12 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(sdir)
 
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         rev_src.preflight_source(store)
         rev_payload = rev_src.gather(store)
         assert len(rev_payload.insights) == 1
@@ -256,7 +257,7 @@ def test_remember_refuses_author_prefix_variants(
     r"""Verify remember refuses an opening author behind punctuation.
 
     Mutation: stripping only leading whitespace (`lstrip`) instead of
-        `\\W*`, which would accept every case here except the plain
+        `\W*`, which would accept every case here except the plain
         leading-whitespace one.
     Oracle: exit code != 0 on each variant.
     """
@@ -300,7 +301,7 @@ def test_remember_accepts_author_substring_and_mid_sentence(
 
 def test_remember_author_with_regex_metacharacter_is_escaped(
         mm_runner, monkeypatch):
-    """Verify a `.` in the author name matches only itself, not any char.
+    """Verify a `.` in the author name matches only a literal dot.
 
     Mutation: building the refusal pattern from the raw `author`
         string instead of `re.escape(author)`, so `.` acts as a
@@ -317,7 +318,7 @@ def test_remember_accepts_punctuation_leading_content_when_author_unset(
     r"""Verify an unset MEMMAN_AUTHOR disables the refusal entirely.
 
     Mutation: dropping the `if not author: return None` guard, which
-        leaves `re.escape('')` in the pattern and lets `\\W*` match a
+        leaves `re.escape('')` in the pattern and lets `\W*` match a
         leading punctuation character on its own, refusing content
         that never touched an author name.
     Oracle: exit code == 0 for content opening with a quote mark.

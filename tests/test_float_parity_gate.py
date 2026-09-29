@@ -13,19 +13,11 @@ near 0, where float32 and float64 legitimately disagree on rank.
 
 Notes
 -----
-- A sibling `test_threshold_zone_does_not_collapse_result_set` was
-  deleted with `VECTOR_SEARCH_MIN_SIM`. It asserted that neither
-  backend's cutoff collapses the result set to empty, and it could
-  never fail: on its query, 'topic insight', the keyword channel
-  matches all 60 rows and the recency channel seeds 30 more, so the
-  page is full whatever the vector cutoff admits. Measured on the
-  shipped code: 60 of 60 keyword rows and a 5-row page on all five of
-  its queries, at vector-anchor counts from 11 to 30.
-- The behavior it was reaching for - the two backends agreeing at the
-  surviving sign boundary - is DECLARED UNCOVERED. Reaching it needs
-  a corpus built at cosine ~1e-8, where float32 and float64 disagree
-  on sign; on this corpus the boundary sits at the median, 11 to 36
-  of 60 rows clear it per query, and no test on it can have teeth.
+- Agreement of the two backends at the sign boundary of the vector
+  channel is uncovered. Reaching it needs a corpus built at cosine
+  near 1e-8, where float32 and float64 disagree on sign. On this
+  corpus the boundary sits at the median and the keyword channel fills
+  the page, so no test on it can have teeth.
 """
 
 import random
@@ -34,6 +26,7 @@ import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
 from memman.search.recall import run_recall
 from memman.store.model import Insight
+from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 from tests.conftest import EMBEDDING_DIM
 
 N_TOPICS = 12
@@ -47,7 +40,8 @@ pytestmark = pytest.mark.postgres
 
 
 def _unit(vec: list[float]) -> list[float]:
-    """Normalize to unit length."""
+    """Normalize to unit length.
+    """
     norm = sum(x * x for x in vec) ** 0.5
     if norm <= 0:
         return vec
@@ -55,20 +49,23 @@ def _unit(vec: list[float]) -> list[float]:
 
 
 def _gaussian_unit(seed: int) -> list[float]:
-    """Deterministic 512-dim unit Gaussian vector."""
+    """Deterministic 512-dim unit Gaussian vector.
+    """
     rng = random.Random(seed)
     return _unit([rng.gauss(0.0, 1.0) for _ in range(EMBEDDING_DIM)])
 
 
 def _perturb(vec: list[float], seed: int, scale: float) -> list[float]:
-    """Add Gaussian noise then re-normalize."""
+    """Add Gaussian noise then re-normalize.
+    """
     rng = random.Random(seed)
     noisy = [x + rng.gauss(0.0, scale) for x in vec]
     return _unit(noisy)
 
 
 def _populate(backend, topic_centers: list[list[float]]) -> None:
-    """Insert 3 perturbed corpus vectors per topic, 60 insights total."""
+    """Insert INSIGHTS_PER_TOPIC perturbed corpus vectors per topic.
+    """
     for t_idx, center in enumerate(topic_centers):
         for k in range(INSIGHTS_PER_TOPIC):
             ins_id = f't{t_idx:02d}-i{k}'
@@ -85,7 +82,8 @@ def _populate(backend, topic_centers: list[list[float]]) -> None:
 
 
 def _top5_ids(backend, qvec) -> set[str]:
-    """Return the top-5 ids by intent-aware recall on the given backend."""
+    """Return the top-5 ids by intent-aware recall on the given backend.
+    """
     result = run_recall(
         backend, query='topic insight',
         query_vec=qvec,
@@ -95,10 +93,16 @@ def _top5_ids(backend, qvec) -> set[str]:
 
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
-    """Sqlite and postgres top-5 sets overlap by >= 4 on 20 query vectors."""
+    """Verify sqlite and postgres top-5 sets overlap by 4 or more on every query.
+
+    Mutation: a postgres recall path whose float32 ranking diverges from the
+        float64 sqlite ranking, such as a distance operator that changes
+        the vector-channel order.
+    Oracle: the sqlite top-5 for the same corpus and query vector, with
+        PARITY_FLOOR of 4 of 5.
+    """
     from memman.store.postgres import drop_postgres_store
     from memman.store.postgres import open_postgres_backend
-    from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
 
@@ -107,10 +111,7 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
     sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
-    try:
-        drop_postgres_store('parity_test', pg_dsn)
-    except Exception:
-        pass
+    drop_postgres_store('parity_test', pg_dsn)
     postgres_backend = open_postgres_backend('parity_test', pg_dsn)
     postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
@@ -133,19 +134,7 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
             f'{len(failures)}/{N_QUERIES} queries below parity floor '
             f'{PARITY_FLOOR}/5:\n' + '\n'.join(failures))
     finally:
-        try:
-            sqlite_backend.close()
-        except Exception:
-            pass
-        try:
-            drop_sqlite_store('parity', sqlite_data_dir)
-        except Exception:
-            pass
-        try:
-            postgres_backend.close()
-        except Exception:
-            pass
-        try:
-            drop_postgres_store('parity_test', pg_dsn)
-        except Exception:
-            pass
+        sqlite_backend.close()
+        drop_sqlite_store('parity', sqlite_data_dir)
+        postgres_backend.close()
+        drop_postgres_store('parity_test', pg_dsn)

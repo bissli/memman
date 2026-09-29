@@ -1,7 +1,9 @@
-"""Enrichment pass over pending rows: summary, vector."""
+"""Enrichment pass over pending rows: summary, vector.
+"""
 
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from memman import trace
 from memman.embed import EmbeddingProvider
@@ -23,31 +25,25 @@ ENRICHMENT_SYSTEM_PROMPT = (
     '}')
 
 
-def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
+def enrich_with_llm(
+        insight: Insight, llm_client: MemmanLLMClient) -> dict[str, Any]:
     """Summarize an insight via LLM.
 
     Parameters
     ----------
     insight : Insight
         The row to enrich; its id and content form the prompt.
-    llm_client : object
-        Anything exposing `complete(system, user, stage=...)`.
+    llm_client : MemmanLLMClient
+        Client whose `complete` runs the call.
 
     Returns
     -------
     dict
-        Key `summary`, or `{}` when the LLM call fails.
-
-    Notes
-    -----
-    - A body that decodes on neither draw returns an empty summary.
-      The outcome is terminal: retrying it would bill the call on
-      every drain of the row's store.
-    - Callers stamp `enriched_at` only when a non-empty dict and a
-      vector land in the same pass, so `{}` leaves the row to the
-      stranded-row sweep. On a re-enrichment the empty summary
-      replaces the one the row held.
-    - Pure function -- the caller handles every DB write.
+        Key `summary`. `{}` when the LLM call fails. Callers stamp
+        `enriched_at` only for a non-empty dict plus a vector, so `{}`
+        leaves the row to the stranded-row sweep. A body that decodes
+        on neither draw returns `{'summary': ''}`, which on a
+        re-enrichment replaces the summary the row held.
     """
     prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
     trace.event(
@@ -77,6 +73,8 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
             'enrichment body did not decode for %s (len=%d, raw_len=%d)'
             ' on either draw; returning an empty summary',
             insight.id, len(insight.content), len(raw))
+        # Terminal: a retry would bill the call on every drain of the
+        # row's store.
         trace.event(
             'enrich_result',
             insight_id=insight.id,
@@ -112,7 +110,10 @@ def enrich_pending(
     backend : Backend
         The store to work through.
     llm_client : MemmanLLMClient | None, default None
-        Serves the enrichment call; None resolves `get_llm_client()`.
+        Serves the enrichment call. None resolves `get_llm_client()`,
+        whose model `compute_prompt_version` stamps on every row this
+        pass writes; a client on any other model makes that stamp name
+        a model that did not run.
     embed_client : EmbeddingProvider | None, default None
         The store-bound embedder; None stores no vector.
     max_batch : int, default MAX_ENRICH_BATCH
@@ -133,10 +134,6 @@ def enrich_pending(
       the embed succeeded, so a failing row leaves the pending set
       and a rebuild loop terminates. `enriched_at` is stamped only
       when an enrichment and a vector both land.
-    - An omitted `llm_client` resolves to `get_llm_client()`:
-      `compute_prompt_version` stamps `MEMMAN_LLM_MODEL` on every row
-      this pass writes, so a client on any other model makes that
-      stamp name a model that did not run.
     """
     pending_ids = backend.nodes.get_pending_enrich_ids(limit=max_batch)
     if not pending_ids:
@@ -162,7 +159,7 @@ def enrich_pending(
         if on_progress:
             on_progress('enrich', insight)
 
-        enrichment: dict = {}
+        enrichment: dict[str, Any] = {}
         # Resolved inside the try, so a client that fails to build
         # degrades to an unenriched row exactly as a failed call does.
         # get_llm_client caches its client, so the repeat costs nothing.

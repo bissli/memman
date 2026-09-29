@@ -8,12 +8,13 @@ carries onto the stored row.
 
 import json
 
+from memman.queue import queue_db
 from tests.conftest import invoke, parse_remember
 
 
 def _hints(data_dir, queue_id):
-    """Return `(category,)` for a queue row."""
-    from memman.queue import queue_db
+    """Return `(category,)` for a queue row.
+    """
     with queue_db(data_dir) as conn:
         return conn.execute(
             'select category from queue where id = ?',
@@ -40,9 +41,9 @@ def test_explicit_default_category_reaches_queue_as_hint(mm_runner):
 def test_omitted_category_defaults_to_fact(mm_runner):
     """Verify an omitted `--cat` reaches the queue and the row as `fact`.
 
-    Mutation: the CLI deferring an omitted `--cat` to a None hint
-        again, which hands the stored row's category back to a model
-        no write path calls any more.
+    Mutation: the CLI passing a None hint for an omitted `--cat`,
+        which leaves the stored row's category to a model no write
+        path calls.
     Oracle: `('fact',)` on the queue row when the flag is not passed,
         and the stored row's own category equal to the hint.
     """

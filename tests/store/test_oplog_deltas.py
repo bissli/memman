@@ -1,22 +1,29 @@
 """Oplog `before` / `after` content deltas.
 
-Persists pre- and post-state on replace / forget so
-forensic questions ("what did insight X say before it was replaced?")
-can be answered from the oplog instead of requiring a backup.
+The oplog persists pre- and post-state on replace and forget, so a
+question such as "what did insight X say before it was replaced?" is
+answered from the oplog, without a backup.
 """
 
 import json
 
 import pytest
+from memman.cli import _forget_insight
+from memman.setup import scheduler as sched_mod
 from memman.store.model import insight_to_delta_dict
 from tests.conftest import make_insight
 
 
 class TestOplogLogAcceptsDeltas:
-    """`Oplog.log` accepts and persists `before` / `after` kwargs."""
+    """`Oplog.log` accepts and persists `before` / `after` kwargs.
+    """
 
     def test_round_trips_before_and_after(self, backend):
         """Both fields populated on log read back via `recent`.
+
+        Mutation: `Oplog.log` persisting only one of the two deltas, or
+            swapping `before` and `after`.
+        Oracle: the hand-written dicts passed in.
         """
         with backend.transaction():
             backend.oplog.log(
@@ -33,6 +40,10 @@ class TestOplogLogAcceptsDeltas:
 
     def test_default_none_preserves_legacy_call_sites(self, backend):
         """Logging with no before/after kwargs leaves both null.
+
+        Mutation: `Oplog.log` storing `{}` or `'null'` text for an
+            omitted delta instead of None.
+        Oracle: `None` for both fields on a hand-logged plain entry.
         """
         with backend.transaction():
             backend.oplog.log(
@@ -46,6 +57,10 @@ class TestOplogLogAcceptsDeltas:
 
     def test_only_before_for_forget_shape(self, backend):
         """Forget records before only (no after).
+
+        Mutation: `Oplog.log` defaulting `after` to a copy of `before`
+            or an empty dict.
+        Oracle: `before` equals the passed dict and `after` is None.
         """
         with backend.transaction():
             backend.oplog.log(
@@ -57,7 +72,8 @@ class TestOplogLogAcceptsDeltas:
 
 
 class TestInsightToDeltaDict:
-    """`insight_to_delta_dict` shapes the dict for oplog deltas."""
+    """`insight_to_delta_dict` shapes the dict for oplog deltas.
+    """
 
     def test_includes_content_and_metadata(self):
         """The delta dict carries content and category.
@@ -86,21 +102,24 @@ class TestInsightToDeltaDict:
 def _sched_started(monkeypatch):
     """Force scheduler state to STARTED so write CLI verbs proceed.
     """
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(
         sched_mod, 'read_state', lambda: sched_mod.STATE_STARTED)
 
 
 class TestForgetWritesBefore:
-    """`memman forget <id>` records the pre-deletion content."""
+    """`memman forget <id>` records the pre-deletion content.
+    """
 
     def test_forget_logs_before(self, backend, _sched_started):
         """Forget oplog row carries the deleted insight's content.
+
+        Mutation: `_forget_insight` logging the forget without
+            `before`, or with a `before` lacking the content.
+        Oracle: the content string the test inserted.
         """
         with backend.transaction():
             backend.nodes.insert(
                 make_insight(id='f-1', content='goodbye world'))
-        from memman.cli import _forget_insight
         _forget_insight(backend, 'f-1')
         entries = [
             e for e in backend.oplog.recent(limit=10)

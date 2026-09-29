@@ -32,11 +32,13 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from memman import config
-from memman.embed.fingerprint import Fingerprint
+from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
+from memman.exceptions import ConfigError as RuntimeConfigError
 from memman.migrate import Artifact, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
 from memman.migrate import sanitize_identifier
 from memman.search.keyword import insight_tokens
+from memman.setup.archive import archive_postgres_schema
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession, _check_identifier
 from memman.store.errors import BackendError, ConfigError
@@ -44,6 +46,8 @@ from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
+from memman.store.oplog import MAX_OPLOG_ENTRIES, OPLOG_RETENTION_DAYS
+from memman.trace import redact_dsn
 
 if TYPE_CHECKING:
     import psycopg
@@ -75,16 +79,11 @@ def _store_schema(name: str) -> str:
     ConfigError
         When `name` is not a SQL identifier, or when the prefixed
         schema would exceed `PG_NAME_MAX_CHARS`.
-
-    Notes
-    -----
-    - The length check covers the prefixed schema, not the bare name.
-      Postgres truncates an over-long identifier to NAMEDATALEN-1
-      silently, so two store names differing only past that point map
-      to one schema and share its rows.
     """
     _check_identifier(name)
     schema = f'store_{name}'
+    # Postgres truncates an over-long identifier silently, so two
+    # names differing only past the limit would share one schema.
     if len(schema) > PG_NAME_MAX_CHARS:
         raise ConfigError(
             f'store name {name!r} is too long: schema {schema!r} is'
@@ -95,19 +94,19 @@ def _store_schema(name: str) -> str:
 
 
 def _lock_id(name: str) -> int:
-    """Deterministic int8 lock id for `pg_advisory_*lock` calls.
+    """Deterministic signed int8 lock id for `pg_advisory_*lock` calls.
 
-    Postgres advisory locks take a signed int8. blake2b digest_size=8
-    yields exactly that. Python's built-in `hash()` is randomized per
-    process via PYTHONHASHSEED, so two memman processes computing a
-    lock id from the same input would not serialize against each other.
+    Built on blake2b. `hash()` is randomized per process by
+    PYTHONHASHSEED, so it would give two processes different ids for
+    one name.
     """
     digest = hashlib.blake2b(name.encode('utf-8'), digest_size=8).digest()
     return int.from_bytes(digest, 'big', signed=True)
 
 
 def _advisory_lock_key(schema: str, name: str) -> int:
-    """Per-store, per-name int8 key for `pg_advisory_*lock` calls."""
+    """Per-store, per-name int8 key for `pg_advisory_*lock` calls.
+    """
     return _lock_id(f'{schema}:{name}')
 
 
@@ -177,8 +176,6 @@ create index if not exists idx_oplog_created_{schema}
     on {schema}.oplog(created_at);
 """
 
-_MAX_OPLOG_ENTRIES = 5000
-
 
 def _open_connection(
         dsn: str, *, autocommit: bool = False,
@@ -187,21 +184,37 @@ def _open_connection(
         register_vector: bool = True) -> psycopg.Connection:
     """Open a fresh psycopg connection with pgvector adapters.
 
-    `keepalives=True` adds `keepalives_idle=30` for a lock-holding
-    connection so a hung worker is detected by the kernel rather
-    than holding the lock indefinitely.
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    autocommit : bool, default False
+        Open the connection in autocommit mode.
+    keepalives : bool, default False
+        Add `keepalives_idle=30` for a lock-holding connection so the
+        kernel detects a hung worker instead of the lock being held
+        indefinitely.
+    connect_timeout : int or None, default None
+        Seconds to wait for the server; None leaves the driver default.
+    register_vector : bool, default True
+        Register the pgvector adapter. Pass False for a probe against
+        a database where the `vector` extension may be absent (the
+        install wizard's pgvector-presence check): registration raises
+        `ProgrammingError` without the extension, and skipping it lets
+        the caller detect absence with its own SQL.
 
-    Set `register_vector=False` for probes that must run against a
-    database where the `vector` extension may legitimately be absent
-    (e.g., the install wizard's pgvector-presence check). The
-    pgvector adapter raises `ProgrammingError` on register when the
-    extension is missing; skipping registration lets callers detect
-    absence with their own SQL probe.
+    Returns
+    -------
+    psycopg.Connection
+        A bare connection the caller closes. Lock-holding paths
+        (`reembed_lock`, `swap_lock`) and long-lived backend
+        connections own the lifecycle; one-shot helpers use
+        `_connection()` for close-on-exit.
 
-    Returns a bare connection; lock-holding paths (`reembed_lock`,
-    `swap_lock`) and long-lived backend connections own the
-    lifecycle directly. One-shot helpers should use `_connection()`
-    below for guaranteed close-on-exit semantics.
+    Raises
+    ------
+    BackendError
+        When the server is unreachable or rejects the connection.
     """
     import psycopg
     from pgvector.psycopg import register_vector as _register_vector
@@ -211,10 +224,9 @@ def _open_connection(
         kwargs['keepalives_idle'] = 30
     if connect_timeout is not None:
         kwargs['connect_timeout'] = connect_timeout
-    # Notes:
-    # - An unreachable or rejecting server is an ordinary operator
-    #   condition, so it leaves here as BackendError. The lock paths
-    #   call this directly, bypassing `_connection` below.
+    # An unreachable or rejecting server is an ordinary operator
+    # condition. The lock paths call this directly, bypassing
+    # `_connection`, so the translation happens here.
     try:
         conn = psycopg.connect(dsn, **kwargs)
         if register_vector:
@@ -228,34 +240,36 @@ def _open_connection(
 @contextmanager
 def _connection(
         dsn: str, *, autocommit: bool = False,
-        keepalives: bool = False,
         connect_timeout: int | None = None,
         register_vector: bool = True
         ) -> Iterator[psycopg.Connection]:
     """Context-manager wrapper around `_open_connection`.
 
-    Closes on exit (psycopg3's `with conn:` is transaction-scoped, not
-    close-scoped, so wrapping `_open_connection` is the way to get
-    deterministic close-on-exit semantics for one-shot helpers
-    without losing the `register_vector` adapter setup).
+    Takes the parameters of `_open_connection`, less `keepalives`, and
+    yields its connection, closed on exit. psycopg3's own `with conn:` scopes a
+    transaction and leaves the connection open.
+
+    Raises
+    ------
+    BackendError
+        On a connection failure, or on any driver error raised in the
+        `with` body.
 
     Notes
     -----
-    - Translating here, rather than at each statement, covers every
-      query in the scope: memman's contract is that a backend raises
-      `BackendError`, and a driver exception does not satisfy it.
-    - A caller that branches on a driver type nests its own handler
-      around the statement instead. Catching there runs first, so the
-      branch is taken before this wrapper sees the error.
+    - A caller that branches on a driver exception type nests its own
+      handler around the statement, which runs before this wrapper
+      sees the error.
     """
     import psycopg as _psycopg
 
     conn = _open_connection(
-        dsn, autocommit=autocommit, keepalives=keepalives,
-        connect_timeout=connect_timeout,
+        dsn, autocommit=autocommit, connect_timeout=connect_timeout,
         register_vector=register_vector)
     try:
         yield conn
+    # One translation here covers every query in the scope, since a
+    # backend must raise `BackendError`.
     except _psycopg.Error as exc:
         raise BackendError(f'postgres query failed: {exc}') from exc
     finally:
@@ -266,7 +280,8 @@ def _connection(
 
 
 def _row_to_insight(row: tuple[Any, ...]) -> Insight:
-    """Map a select row into an Insight dataclass."""
+    """Map a select row into an Insight dataclass.
+    """
     i = Insight()
     i.id = row[0]
     i.content = row[1]
@@ -287,9 +302,7 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     return i
 
 
-# `queue_uuid`, then `replaced_by`, then `author`, appended last --
-# must stay byte-identical to node.py's _INSIGHT_COLUMNS (see
-# test_insight_column_lists_are_identical_across_backends).
+# Must stay byte-identical to node.py's _INSIGHT_COLUMNS.
 _INSIGHT_COLS = (
     'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
@@ -298,7 +311,8 @@ _INSIGHT_COLS = (
 
 
 class PostgresNodeStore(NodeStore):
-    """NodeStore implementation against a per-store Postgres schema."""
+    """NodeStore implementation against a per-store Postgres schema.
+    """
 
     def __init__(
             self, conn: psycopg.Connection, schema: str) -> None:
@@ -306,25 +320,25 @@ class PostgresNodeStore(NodeStore):
         self._schema = schema
 
     def _q(self, sql: str) -> str:
-        """Format SQL with the per-store schema interpolated."""
+        """Format SQL with the per-store schema interpolated.
+        """
         return sql.format(s=self._schema)
 
     def insert(self, ins: Insight) -> None:
-        """Insert a new insight, stamping the timestamps server-side.
+        """Insert a new insight.
 
-        Notes
-        -----
-        - Caller-passed `created_at` / `updated_at` are IGNORED, as in
-          `node.insert_insight`. Tests that need a controlled
-          insertion time use `set_created_at` in `tests/conftest.py`.
-        - The stamp is one Python clock read through
-          `format_timestamp`, the same function and the same whole
-          second the SQLite path uses, rather than the column's
-          `default now()`. The resolution keeps one row's stamp
-          identical on both backends, so recall's time channel,
-          which orders by `created_at`, and a migrate round-trip
-          agree across them.
+        Parameters
+        ----------
+        ins : Insight
+            The row to insert. Its `created_at` and `updated_at` are
+            ignored; both are stamped with the current time.
         """
+        # Notes:
+        # - The stamp comes from the Python clock through
+        #   `format_timestamp`, the whole-second form the SQLite path
+        #   uses, and skips the column's `default now()`.
+        # - A row then carries the same stamp on both backends, so
+        #   recall's time channel and a migrate round-trip agree.
         now = format_timestamp(datetime.now(timezone.utc))
         sql = self._q("""
 insert into {s}.insights
@@ -730,7 +744,8 @@ where id = any(%s)
 
 
 class PostgresMetaStore(MetaStore):
-    """MetaStore implementation against a per-store Postgres schema."""
+    """MetaStore implementation against a per-store Postgres schema.
+    """
 
     def __init__(
             self, conn: psycopg.Connection, schema: str) -> None:
@@ -767,7 +782,8 @@ on conflict (key) do update set value = excluded.value
 
 
 class PostgresOplog(Oplog):
-    """Oplog implementation: insert-only writes; trim in maintenance."""
+    """Oplog implementation: insert-only writes; trim in maintenance.
+    """
 
     def __init__(
             self, conn: psycopg.Connection, schema: str) -> None:
@@ -802,7 +818,7 @@ where id <= (select max(id) from {self._schema}.oplog) - %s
 """
         try:
             with self._conn.cursor() as cur:
-                cur.execute(sql, (_MAX_OPLOG_ENTRIES,))
+                cur.execute(sql, (MAX_OPLOG_ENTRIES,))
         except Exception as exc:
             logger.warning(f'oplog cap trim failed: {exc}')
 
@@ -813,7 +829,7 @@ where created_at < now() - (%s * interval '1 day')
 """
         try:
             with self._conn.cursor() as cur:
-                cur.execute(sql, (180,))
+                cur.execute(sql, (OPLOG_RETENTION_DAYS,))
                 return int(cur.rowcount or 0)
         except Exception as exc:
             logger.warning(f'oplog age trim failed: {exc}')
@@ -893,24 +909,17 @@ class PostgresRecallSession(RecallSession):
 
     Owns its own connection (separate from the parent Backend's
     connection) so the session's `search_path` does not leak into
-    write traffic, and so the connection can be borrowed from a pool
-    without collision.
-
-    On `__exit__` the session resets `search_path` to the default
-    (`"$user", public`) before the connection is closed -- so no
-    session state leaks when the connection is returned to a pool.
+    write traffic. On `__exit__` the session resets `search_path` to
+    the default (`"$user", public`) and closes the connection.
 
     Vector work stays server-side: `vector_anchors` rides the HNSW
     index, and `similarities` scores with `embedding <=>` so the
     pipeline receives N scalars instead of N x dim floats.
     """
 
-    def __init__(
-            self, dsn: str, schema: str,
-            *, owns_conn: bool = True) -> None:
+    def __init__(self, dsn: str, schema: str) -> None:
         self._dsn = dsn
         self._schema = schema
-        self._owns_conn = owns_conn
         self._conn: psycopg.Connection | None = None
 
     def __enter__(self) -> Self:
@@ -927,17 +936,12 @@ class PostgresRecallSession(RecallSession):
                     cur.execute('set search_path = "$user", public')
             except Exception as e:
                 logger.warning(f'search_path reset failed: {e}')
-            if self._owns_conn:
-                import psycopg as _psycopg
-                try:
-                    self._conn.close()
-                except _psycopg.Error as exc:
-                    logger.debug(
-                        f'pg connection close failed: {exc}')
+            import psycopg as _psycopg
+            try:
+                self._conn.close()
+            except _psycopg.Error as exc:
+                logger.debug(f'pg connection close failed: {exc}')
             self._conn = None
-
-    def close(self) -> None:
-        self.__exit__(None, None, None)
 
     def vector_anchors(
             self, query_vec: list[float], *,
@@ -946,23 +950,6 @@ class PostgresRecallSession(RecallSession):
 
         Similarity is `1 - (embedding <=> :q)` (cosine in (0, 1],
         higher is better).
-
-        Notes
-        -----
-        - `hnsw.ef_search` is raised to `max(40, 4 * k)` for this
-          query. HNSW is approximate, so a search width close to `k`
-          returns a top-k that is merely near the true one: against an
-          exact SQL oracle, pgvector's default width of 40 misses
-          true top-k rows at `k=30`, while a width well above `k`
-          matches the oracle exactly and widening further changes
-          nothing.
-        - The width scales with `k` rather than being pinned, so a
-          larger anchor budget widens the search with it. The floor
-          is pgvector's own default, so this can never search
-          narrower than the library would.
-        - It must be set on THIS connection. The session opens its
-          own (`__enter__`), so a width set on the parent Backend's
-          connection never reaches the query that needs it.
         """
         assert self._conn is not None
         sql = f"""
@@ -972,6 +959,14 @@ where deleted_at is null and replaced_by is null and embedding is not null
 order by embedding <=> %s::vector
 limit %s
 """
+        # Notes:
+        # - HNSW is approximate: a search width near `k` returns a
+        #   top-k that is only near the true one, and a width well
+        #   above `k` matches an exact scan. The width scales with `k`
+        #   above pgvector's own default of 40.
+        # - Set on THIS connection: the session opens its own in
+        #   `__enter__`, so a width set on the Backend's connection
+        #   never reaches this query.
         with self._conn.cursor() as cur:
             cur.execute(f'set hnsw.ef_search = {max(40, 4 * int(k))}')
             cur.execute(sql, (query_vec, query_vec, k))
@@ -983,13 +978,6 @@ limit %s
     def similarities(
             self, query_vec: list[float]) -> dict[Id, float]:
         """Cosine per id, positives only, computed in the database.
-
-        Notes
-        -----
-        - Returns one float per row rather than the embedding itself,
-          which is the whole point: the pipeline needs N scalars to
-          score with, and shipping N x dim floats to compute them was
-          costing a full whole-store pull per recall.
         """
         assert self._conn is not None
         sql = f"""
@@ -1009,27 +997,6 @@ where deleted_at is null and replaced_by is null and embedding is not null
         """Match count per active insight id, computed in the database.
 
         See the Protocol docstring for the contract.
-
-        Notes
-        -----
-        - `kw_tokens` holds the row's distinct tokens as
-          `keyword.insight_tokens` produced them at write time, so
-          the count matches the Python route exactly rather than
-          approximately. Nothing here re-derives the tokenizer: the
-          earlier SQL form re-expressed `_WORD_RE` as
-          `regexp_split_to_array(lower(...), '[^a-z0-9]+')` on every
-          row of every recall, which cost 0.54 ms per active row and
-          again per matched row, 75% of recall on the largest store.
-        - Stopword filtering on the row side cannot change the
-          count, because `query_tokens` is stopword-filtered too and
-          `intersect` only ever sees tokens present in both. Checked
-          against the SQL form over 1,443 rows and all 1,849 distinct
-          logged queries of one store: the two counts never differed.
-        - `kw_tokens && query` is exactly `matched > 0`, so the GIN
-          index answers the filter and the intersect runs only on
-          rows that can contribute. Unnesting the STORED array beats
-          walking the query against it with `= any` above four query
-          tokens, 49 ms against 124 at twelve.
         """
         if not query_tokens:
             return {}
@@ -1043,6 +1010,20 @@ select i.id, cardinality(array(
 from {self._schema}.insights i
 where i.deleted_at is null and i.replaced_by is null and i.kw_tokens && %(q)s::text[]
 """
+        # Notes:
+        # - `kw_tokens` holds the row's tokens as
+        #   `keyword.insight_tokens` produced them at write time, so
+        #   the count matches the Python route exactly and no per-row
+        #   tokenizing happens at recall.
+        # - Row-side stopword filtering cannot change the count:
+        #   `query_tokens` is stopword-filtered too, and `intersect`
+        #   sees only tokens present in both.
+        # - `kw_tokens && query` is exactly `matched > 0`, so the GIN
+        #   index answers the filter and the intersect runs only on
+        #   rows that can contribute.
+        # - Unnesting the stored array beats walking the query against
+        #   it with `= any` once the query holds more than a few
+        #   tokens.
         with self._conn.cursor() as cur:
             cur.execute(sql, {'q': sorted(query_tokens)})
             return {r[0]: int(r[1]) for r in cur}
@@ -1061,16 +1042,11 @@ class PostgresBackend(Backend):
     meta: PostgresMetaStore
     oplog: PostgresOplog
 
-    def __init__(
-            self, dsn: str, store: str,
-            *, conn: psycopg.Connection | None = None,
-            owns_conn: bool = True) -> None:
+    def __init__(self, dsn: str, store: str) -> None:
         self._dsn = dsn
         self._store = store
         self._schema = _store_schema(store)
-        self._owns_conn = owns_conn
-        self._conn = conn if conn is not None else _open_connection(
-            dsn, autocommit=True)
+        self._conn = _open_connection(dsn, autocommit=True)
         with self._conn.cursor() as cur:
             cur.execute(f'set search_path = {self._schema}, public')
         self.nodes = PostgresNodeStore(self._conn, self._schema)
@@ -1079,8 +1055,8 @@ class PostgresBackend(Backend):
 
     @property
     def path(self) -> str:
-        """DSN+schema identifier (Postgres has no filesystem path)."""
-        from memman.trace import redact_dsn
+        """DSN+schema identifier (Postgres has no filesystem path).
+        """
         return f'{redact_dsn(self._dsn)}#{self._schema}'
 
     @contextmanager
@@ -1096,22 +1072,19 @@ class PostgresBackend(Backend):
 
     @contextmanager
     def recall_session(self) -> Iterator[PostgresRecallSession]:
-        """Yield a PostgresRecallSession for one recall request."""
+        """Yield a PostgresRecallSession for one recall request.
+        """
         session = PostgresRecallSession(self._dsn, self._schema)
         with session:
             yield session
 
     @contextmanager
-    def reembed_lock(self, name: str) -> Iterator[bool]:
-        """Acquire a per-store session-scoped advisory sweep lock.
+    def _advisory_lock(self, key: int) -> Iterator[bool]:
+        """Hold a session-scoped advisory lock on a dedicated connection.
 
-        Dedicated `psycopg.connect()` outside any pool, autocommit,
-        with `keepalives_idle=30`. Uses `pg_try_advisory_lock`
-        (non-blocking) so a second sweep agent fails fast with
-        `False` instead of waiting hours. Released on connection
-        close (intended crash-recovery mechanism).
+        Yields whether `pg_try_advisory_lock` acquired the key. The
+        lock releases on connection close.
         """
-        key = _advisory_lock_key(self._schema, f'reembed:{name}')
         conn = _open_connection(
             self._dsn, autocommit=True, keepalives=True)
         acquired = False
@@ -1134,6 +1107,21 @@ class PostgresBackend(Backend):
                 conn.close()
             except Exception:
                 pass
+
+    @contextmanager
+    def reembed_lock(self, name: str) -> Iterator[bool]:
+        """Acquire a per-store session-scoped advisory sweep lock.
+
+        Dedicated `psycopg.connect()` outside any pool, autocommit,
+        with `keepalives_idle=30`. Uses `pg_try_advisory_lock`
+        (non-blocking) so a second sweep agent fails fast with
+        `False` instead of waiting hours. Released on connection
+        close (intended crash-recovery mechanism).
+        """
+        with self._advisory_lock(
+                _advisory_lock_key(self._schema, f'reembed:{name}')
+                ) as acquired:
+            yield acquired
 
     @contextmanager
     def swap_lock(self) -> Iterator[bool]:
@@ -1147,32 +1135,14 @@ class PostgresBackend(Backend):
         on resume. Auto-releases on connection close, surviving
         process crash.
         """
-        key = _advisory_lock_key(self._schema, 'embed_swap')
-        conn = _open_connection(
-            self._dsn, autocommit=True, keepalives=True)
-        acquired = False
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'select pg_try_advisory_lock(%s)', (key,))
-                row = cur.fetchone()
-                acquired = bool(row[0]) if row else False
+        with self._advisory_lock(
+                _advisory_lock_key(self._schema, 'embed_swap')
+                ) as acquired:
             yield acquired
-        finally:
-            try:
-                if acquired:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            'select pg_advisory_unlock(%s)', (key,))
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
 
     def swap_prepare(self, target_dim: int) -> None:
-        """Add the pending vector column and its HNSW index."""
+        """Add the pending vector column and its HNSW index.
+        """
         _check_pg_version(self._dsn)
         _swap_prepare_pg(self._dsn, self._schema, int(target_dim))
 
@@ -1214,7 +1184,8 @@ class PostgresBackend(Backend):
         return {'ok': True, 'detail': 'schema reachable'}
 
     def start_run(self) -> int | None:
-        """Insert a per-store `worker_runs` row, return its id."""
+        """Insert a per-store `worker_runs` row, return its id.
+        """
         sql = (
             f'insert into {self._schema}.worker_runs'
             f' (last_heartbeat_at) values (now()) returning id')
@@ -1237,7 +1208,8 @@ class PostgresBackend(Backend):
             self._conn.commit()
 
     def finish_run(self, run_id: int | None) -> None:
-        """Stamp `ended_at = now()` on the per-store run row."""
+        """Stamp `ended_at = now()` on the per-store run row.
+        """
         if run_id is None:
             return
         sql = (
@@ -1248,7 +1220,8 @@ class PostgresBackend(Backend):
             self._conn.commit()
 
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
-        """Return the per-store recent `worker_runs` rows (newest first)."""
+        """Return the per-store recent `worker_runs` rows (newest first).
+        """
         sql = (
             f'select id, started_at, ended_at,'
             f' last_heartbeat_at'
@@ -1267,12 +1240,11 @@ class PostgresBackend(Backend):
             ]
 
     def close(self) -> None:
-        if self._owns_conn and self._conn is not None:
-            import psycopg as _psycopg
-            try:
-                self._conn.close()
-            except _psycopg.Error as exc:
-                logger.debug(f'pg connection close failed: {exc}')
+        import psycopg as _psycopg
+        try:
+            self._conn.close()
+        except _psycopg.Error as exc:
+            logger.debug(f'pg connection close failed: {exc}')
 
     def __enter__(self) -> Self:
         return self
@@ -1285,23 +1257,26 @@ class PostgresBackend(Backend):
         self.close()
 
 
-def _resolve_active_dim(expected_dim: int | None = None) -> int:
-    """Return the embedding dim to bake into a fresh schema.
+def _resolve_active_dim(expected_dim: int | None) -> int:
+    """Embedding dim to bake into a fresh schema.
 
-    When `expected_dim` is provided (e.g. read from `meta.embed_fingerprint`
-    on a pre-existing schema), it is used directly without consulting
-    the env-bound active client. This breaks the chicken-and-egg where
-    `open_postgres_backend` needs a dim to ensure the baseline schema
-    but the env active client may not be the right one for a store
-    whose stored fingerprint differs.
+    Parameters
+    ----------
+    expected_dim : int or None
+        Dim read from `meta.embed_fingerprint` on a pre-existing
+        schema; None when no stored dim is readable. A positive value
+        wins without consulting the env-bound active client, which may
+        not match a store whose stored fingerprint differs.
 
-    Falls back to the active fingerprint, then `EMBEDDING_DIM`.
+    Returns
+    -------
+    int
+        `expected_dim`, else the active fingerprint's dim, else
+        `EMBEDDING_DIM`.
     """
     if expected_dim is not None and expected_dim > 0:
         return int(expected_dim)
     try:
-        from memman.embed.fingerprint import seed_default_fingerprint
-        from memman.exceptions import ConfigError as RuntimeConfigError
         active = seed_default_fingerprint()
         if active.dim > 0:
             return int(active.dim)
@@ -1313,13 +1288,27 @@ def _resolve_active_dim(expected_dim: int | None = None) -> int:
 
 
 def _read_stored_dim(dsn: str, store: str) -> int | None:
-    """Best-effort read of the stored fingerprint dim for `store`.
+    """Stored fingerprint dim for `store`, read on a best-effort basis.
 
-    Returns None when the schema does not exist yet (UndefinedTable),
-    when the meta row is absent, or when the value is unparseable.
-    Connection failures (network/auth) propagate so a transient
-    outage doesn't masquerade as a fresh schema and silently force a
-    fingerprint mismatch on the next assert.
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    store : str
+        Store name.
+
+    Returns
+    -------
+    int or None
+        None when the schema does not exist yet, the meta row is
+        absent, or the value is unparseable.
+
+    Raises
+    ------
+    BackendError
+        On a connection failure (network or auth). A transient outage
+        must not pass for a fresh schema and force a fingerprint
+        mismatch on the next assert.
     """
     import psycopg
 
@@ -1358,9 +1347,7 @@ def open_postgres_backend(
     _ensure_baseline_schema(dsn, store, dim=target_dim)
     _assert_vector_dim_matches(dsn, store, target_dim)
     if read_only:
-        ro_conn = _open_connection(dsn, autocommit=True)
-        return PostgresBackend(
-            dsn, store, conn=ro_conn, owns_conn=True)
+        return PostgresBackend(dsn, store)
     backend = PostgresBackend(dsn, store)
     try:
         _ensure_hnsw_index(dsn, _store_schema(store))
@@ -1385,13 +1372,23 @@ def apply_baseline_schema(
         conn: Any, schema: str, dim: int) -> None:
     """Apply the baseline DDL on an open connection (idempotent).
 
-    Caller controls the transaction. Used both by
-    `_ensure_baseline_schema` (autocommit, store-open path) and by
-    the migrator (in-transaction so DDL rolls back on import
-    failure). Creates the `vector` extension, the schema, and the
-    base tables (with all constraints declared inline).
+    Parameters
+    ----------
+    conn : Any
+        Open psycopg connection; the caller controls the transaction.
+        The migrator passes one inside its transaction, so the DDL
+        rolls back if the import fails.
+    schema : str
+        Store schema to create.
+    dim : int
+        Width N of the `vector(N)` embedding column for a new schema.
+
+    Raises
+    ------
+    BackendError
+        When an existing schema lacks a baseline column.
     """
-    import psycopg  # optional-extra: lazy like every psycopg use here
+    import psycopg
     with conn.cursor() as cur:
         cur.execute('create extension if not exists vector')
         cur.execute(f'create schema if not exists {schema}')
@@ -1399,7 +1396,6 @@ def apply_baseline_schema(
             cur.execute(
                 PG_BASELINE_SCHEMA.format(schema=schema, dim=dim))
         except psycopg.errors.UndefinedColumn as exc:
-            # Mirrors the SQLite diagnostic in store/db.py::_migrate:
             # `create table if not exists` no-ops on an existing
             # table, so a store missing a column trips the first
             # baseline index that names it.
@@ -1414,14 +1410,16 @@ def _ensure_baseline_schema(
         dsn: str, store: str, *, dim: int = EMBEDDING_DIM) -> None:
     """Create the schema and apply baseline DDL idempotently.
 
-    `dim` is the embedding dimension to bake into `vector(N)` for
-    new schemas. Resolved from `seed_default_fingerprint().dim` by
-    `open_postgres_backend` so a non-Voyage operator (e.g. openai
-    1536) gets a correctly-sized column on first deploy. For
-    existing schemas the call is idempotent: `create table if not
-    exists` does not alter the existing column width, and the
-    open-time guard at `_assert_vector_dim_matches` refuses the
-    open if the stored width differs from `dim`.
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    store : str
+        Store name.
+    dim : int
+        Width N of `vector(N)` for a new schema. An existing schema
+        keeps its column width; `_assert_vector_dim_matches` refuses
+        the open on a mismatch.
     """
     schema = _store_schema(store)
     with _connection(dsn, autocommit=True) as conn:
@@ -1432,21 +1430,27 @@ def _assert_vector_dim_matches(
         dsn: str, store: str, expected_dim: int) -> None:
     """Refuse to open if the stored `vector(N)` column width differs.
 
-    pgvector stores `N` directly in `pg_attribute.atttypmod` (no
-    VARHDRSZ offset, unlike standard varlena types). Querying via
-    the conventional `information_schema.columns` does not work
-    because pgvector extension types do not populate
-    `character_maximum_length`.
+    Reads `N` from `pg_attribute.atttypmod`, where pgvector stores it
+    with no VARHDRSZ offset. `information_schema.columns` cannot supply
+    it, since pgvector types leave `character_maximum_length` unset.
 
-    Raises `BackendError` with an upgrade hint when the operator's
-    active embedding fingerprint dim differs from the stored column
-    width. This is the parallel of the schema-version skew refusal
-    for embedding-dim skew.
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    store : str
+        Store name.
+    expected_dim : int
+        Dim of the operator's active embedding fingerprint. While
+        `meta.embed_swap_state` is `backfilling` or `cutover`, the dim
+        of the in-flight `embedding_pending` column also passes, so a
+        process can open the store mid-swap.
 
-    Swap-aware: if `meta.embed_swap_state` is `backfilling` or
-    `cutover`, also accepts the dim of the in-flight
-    `embedding_pending` column. This lets a process open the store
-    mid-swap without crashing while the backfill completes.
+    Raises
+    ------
+    BackendError
+        When `expected_dim` differs from the stored column width. The
+        message carries an upgrade hint.
     """
     schema = _store_schema(store)
     dim_sql = """
@@ -1514,28 +1518,45 @@ def _swap_index_timeout_s() -> int:
 
 
 def _swap_pending_index_name(schema: str) -> str:
-    """Per-schema name for the in-flight HNSW index on the pending
-    column. Renamed to the canonical `idx_insights_hnsw_<schema>`
-    during cutover.
+    """Name of the in-flight HNSW index on the pending column.
+
+    Cutover renames it to the canonical `idx_insights_hnsw_<schema>`.
     """
     return f'idx_insights_hnsw_pending_{schema}'
 
 
 def _swap_prepare_pg(
-        dsn: str, schema: str, target_dim: int,
-        retries: int = 3, retry_sleep_s: float = 1.0) -> None:
+        dsn: str, schema: str, target_dim: int) -> None:
     """Add `embedding_pending vector(N)` and build a new HNSW.
 
-    `ADD COLUMN ... IF NOT EXISTS` and `CREATE INDEX CONCURRENTLY ...
-    IF NOT EXISTS` make this idempotent on resume. The ADD COLUMN runs
-    under `lock_timeout='5s'` with retry to avoid wedging behind
-    long-running queries; the index build uses
-    `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 = unlimited).
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    schema : str
+        Store schema; must be a plain SQL identifier.
+    target_dim : int
+        Width N of the new vector column.
+
+    Raises
+    ------
+    BackendError
+        When the column cannot be added within 3 attempts.
+
+    Notes
+    -----
+    - Idempotent on resume: both the column and the index use
+      `if not exists`.
+    - The index build uses `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`
+      (default 0, unlimited).
     """
     _check_identifier(schema)
     add_sql = (
         f'alter table {schema}.insights add column if not exists'
         f' embedding_pending vector({int(target_dim)})')
+    # The `add column` runs under a short `lock_timeout` and retries,
+    # so it cannot wedge behind a long-running query.
+    retries = 3
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
@@ -1549,7 +1570,7 @@ def _swap_prepare_pg(
             last_exc = exc
             if attempt + 1 == retries:
                 break
-            time.sleep(retry_sleep_s)
+            time.sleep(1.0)
     if last_exc is not None:
         raise BackendError(
             f'failed to add embedding_pending column on'
@@ -1571,16 +1592,16 @@ def _swap_cutover_pg(
         dsn: str, schema: str) -> None:
     """Atomic switch from `embedding` to `embedding_pending`.
 
-    Single transaction with `statement_timeout=0`:
-      1. Verify count(embedding_pending) >= count(embedding)
-         where deleted_at is null and replaced_by is null.
-      2. Drop old HNSW index.
-      3. Drop column embedding.
-      4. Rename embedding_pending -> embedding.
-      5. Rename pending HNSW index -> canonical name.
-
-    The orchestrator records cutover state and writes the fingerprint
+    One transaction with `statement_timeout=0` replaces the column and
+    renames the pending HNSW index to the canonical name. The
+    orchestrator records cutover state and writes the fingerprint
     around this call.
+
+    Raises
+    ------
+    BackendError
+        When fewer current rows carry `embedding_pending` than carry
+        `embedding` (the backfill is incomplete); nothing changes.
     """
     _check_identifier(schema)
     canonical_idx = f'idx_insights_hnsw_{schema}'
@@ -1636,17 +1657,21 @@ def _swap_abort_pg(dsn: str, schema: str) -> None:
 def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     """Create or recreate the HNSW index on `insights.embedding`.
 
-    1. Query `pg_index.indisvalid` for any prior HNSW index on this
-       column; drop it if invalid (an aborted CONCURRENTLY build
-       leaves an invalid remnant).
-    2. `create index concurrently if not exists` with
-       `vector_cosine_ops where deleted_at is null and replaced_by is null`.
+    An invalid prior index (the remnant of an aborted CONCURRENTLY
+    build) is dropped first, so the rebuild can proceed.
 
     Runs on a dedicated autocommit connection because
     `create index concurrently` cannot run inside a transaction.
     `statement_timeout` is set from `MEMMAN_REINDEX_TIMEOUT` (default
     180 seconds) so a stuck build aborts and the next call's
     invalid-remnant cleanup can recover.
+
+    Parameters
+    ----------
+    dsn : str
+        Connection string.
+    schema : str
+        Store schema; must be a plain SQL identifier.
     """
     _check_identifier(schema)
     index_name = f'idx_insights_hnsw_{schema}'
@@ -1686,12 +1711,10 @@ class PostgresMigrator(Migrator):
 
     backend_name: ClassVar[str] = 'postgres'
 
-    def __init__(self, data_dir: str, *, dsn: str) -> None:
-        self.data_dir = data_dir
+    def __init__(self, *, dsn: str) -> None:
         self.dsn = dsn
 
     def preflight_source(self, store: str) -> None:
-        _check_identifier(store)
         schema = _store_schema(store)
         with _connection(self.dsn, autocommit=True) as conn, \
                 conn.cursor() as cur:
@@ -1745,7 +1768,6 @@ class PostgresMigrator(Migrator):
                     ' privilege on the target database')
 
     def gather(self, store: str) -> MigrationPayload:
-        _check_identifier(store)
         schema = _store_schema(store)
         with _connection(self.dsn, autocommit=True) as conn, \
                 conn.cursor() as cur:
@@ -1821,7 +1843,6 @@ order by sqlite_id
 
     def apply(
             self, store: str, payload: MigrationPayload) -> None:
-        _check_identifier(store)
         schema = _store_schema(store)
         dim = payload.embedding_dim
         with _connection(self.dsn, autocommit=False) as conn:
@@ -1866,17 +1887,14 @@ order by sqlite_id
                             insight_rows)
 
                 if payload.oplog:
-                    op_rows = []
-                    for op in payload.oplog:
-                        legacy = op.legacy_id
-                        op_rows.append((
+                    op_rows = [(
                             op.operation, op.insight_id, op.detail,
                             op.created_at,
                             json.dumps(op.before)
                             if op.before is not None else None,
                             json.dumps(op.after)
                             if op.after is not None else None,
-                            legacy))
+                            op.legacy_id) for op in payload.oplog]
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.oplog'
@@ -1900,14 +1918,11 @@ order by sqlite_id
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
-                if isinstance(exc, MigrateError):
-                    raise
                 raise MigrateError(
                     f'postgres apply for store {store!r} failed:'
                     f' {type(exc).__name__}: {exc}') from exc
 
     def archive(self, store: str, data_dir: str) -> Artifact:
-        from memman.setup.archive import archive_postgres_schema
         try:
             path = archive_postgres_schema(data_dir, store, self.dsn)
         except RuntimeError as exc:

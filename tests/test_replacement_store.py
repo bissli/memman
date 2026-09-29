@@ -10,7 +10,8 @@ from tests.conftest import make_insight
 
 
 def _seed_pair(backend):
-    """Insert `p-1` and its successor `p-2`, both current."""
+    """Insert `p-1` and its successor `p-2`, both current.
+    """
     backend.nodes.insert(make_insight(id='p-1', content='first statement'))
     backend.nodes.insert(make_insight(id='p-2', content='second statement'))
 

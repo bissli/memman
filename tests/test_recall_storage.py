@@ -56,8 +56,8 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
     """Verify a half-swapped store still recalls, off-width rows at 0.0.
 
     A partial `embed swap` leaves two embedding widths in one store.
-    Building a matrix over them would raise on a ragged `np.array`,
-    taking down every recall until an operator repaired the store.
+    The test is SQLite-only: pgvector's `vector(N)` column is fixed
+    width, so a Postgres store cannot hold two widths.
 
     Mutation: building one matrix over all widths, which raises on a
         ragged `np.array` and takes down every recall until an
@@ -65,11 +65,6 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
     Oracle: three 512-wide rows against one 8-wide row, queried at
         512; the three must score and the outlier must be absent
         rather than fatal.
-
-    Notes
-    -----
-    - Sqlite-only: pgvector's `vector(N)` column is fixed-width, so a
-      Postgres store cannot hold two widths for this to exercise.
     """
 
     query = [0.0] * 512
@@ -124,8 +119,7 @@ def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
     score.
 
     Mutation: reducing the stored embeddings to a single modal width
-        and comparing every query against that one matrix - the exact
-        shape this replaced.
+        and comparing every query against that one matrix.
     Oracle: five rows at width A against two at width B, queried at
         B; the two B rows must score and the five A rows must not.
     """
@@ -150,7 +144,7 @@ def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
 
 
 def test_malformed_embedding_blob_does_not_break_recall(tmp_backend):
-    """Verify a blob that is not whole float64 values is skipped, not fatal.
+    """Verify a truncated float64 blob is skipped without failing recall.
 
     `np.frombuffer(blob, dtype='<f8')` raises on a length that is not
     a multiple of 8. Raising inside the session build would take down
@@ -181,32 +175,22 @@ def test_malformed_embedding_blob_does_not_break_recall(tmp_backend):
 def test_similarities_matches_per_pair_cosine(backend, backend_kind):
     """Verify the matmul agrees with a per-pair cosine to storage precision.
 
-    The session scores with one matrix-vector product; the oracle is a
-    per-pair dot. Both are float64, but BLAS sums a matrix-vector
-    product in a different order than a per-pair dot, so the two agree
-    to a float ulp rather than exactly. A real defect here -- a missing
-    norm, a transposed matmul, rows misaligned with their ids -- lands
-    far outside the tolerance.
-
     Mutation: dropping the query-norm divisor, dividing by the wrong
         axis's norms, or letting `_row_ids` drift out of step with the
-        matrix rows.
+        matrix rows. Each lands far outside the tolerance.
     Oracle: `_cosine_similarity` computed per row over the same
         vectors.
-
-    Notes
-    -----
-    - The tolerance follows each backend's storage precision.
-      SQLite keeps float64 blobs, so it is held to a float ulp;
-      pgvector's `vector` stores float4, so single-precision epsilon
-      is the floor there and demanding 1e-12 of it would assert
-      something the storage cannot represent.
-    - `anchor_score` is min-max normalized over the query's own
-      candidate pool, so a last-bit change in one similarity rescales
-      every row. Ordering churn far larger than this tolerance is
-      expected from any numeric change on this path, and is
-      amplification rather than a logic difference.
     """
+    # Notes:
+    # - BLAS sums a matrix-vector product in a different order than a
+    #   per-pair dot, so the two agree to a float ulp, never exactly.
+    # - SQLite keeps float64 blobs and is held to a float ulp.
+    #   pgvector's `vector` stores float4, so single-precision epsilon
+    #   is its floor.
+    # - `anchor_score` is min-max normalized over the query's own
+    #   candidate pool, so a last-bit change in one similarity
+    #   rescales every row. Ordering churn far larger than this
+    #   tolerance follows from any numeric change on this path.
     tolerance = 1e-6 if backend_kind == 'postgres' else 1e-12
     dim = 512
     query = [0.03 * ((i % 7) - 3) for i in range(dim)]

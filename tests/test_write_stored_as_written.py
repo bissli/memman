@@ -18,7 +18,7 @@ from tests.conftest import _mock_llm_complete, make_insight
 
 def test_a_write_makes_exactly_one_llm_call_on_enrichment(
         tmp_backend, monkeypatch):
-    """Verify a write calls the model once, for enrichment, and stores verbatim.
+    """Verify a write calls the model once, for enrichment only.
 
     Mutation: any model call restored on the write path, whatever its
         prompt text -- a screen, a verdict, a merge, or a second

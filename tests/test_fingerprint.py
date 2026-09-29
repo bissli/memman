@@ -29,7 +29,8 @@ from tests.conftest import make_insight
 
 
 def _seed_voyage(db: DB) -> None:
-    """Helper: write the canonical voyage fingerprint to meta."""
+    """Helper: write the canonical voyage fingerprint to meta.
+    """
     write_fingerprint(SqliteBackend(db), Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512))
 
@@ -37,7 +38,8 @@ def _seed_voyage(db: DB) -> None:
 def _seed_row_with_embedding(db: DB, *, id: str, content: str = 'x',
                              model: str = 'voyage-3-lite',
                              dim: int = 512) -> None:
-    """Seed a row with a synthetic embedding of given model+dim."""
+    """Seed a row with a synthetic embedding of given model+dim.
+    """
     insight = make_insight(
         id=id, content=content, embedding_model=model)
     insert_insight(db, insight)
@@ -46,12 +48,14 @@ def _seed_row_with_embedding(db: DB, *, id: str, content: str = 'x',
 
 
 def _invoke(args: list) -> 'click.testing.Result':
-    """Run the CLI with a CliRunner, returning the result."""
+    """Run the CLI with a CliRunner, returning the result.
+    """
     return CliRunner().invoke(cli, args)
 
 
 class TestFingerprintRegistry:
-    """Provider registry resolution and Fingerprint serialization."""
+    """Provider registry resolution and Fingerprint serialization.
+    """
 
     def test_unknown_provider_raises_config_error(self, env_file):
         """Verify an unknown MEMMAN_EMBED_PROVIDER raises ConfigError.
@@ -116,7 +120,8 @@ class TestFingerprintRegistry:
 
 
 class TestFingerprintConsistency:
-    """Install-time seeding and bound_embedder behavior."""
+    """Install-time seeding and bound_embedder behavior.
+    """
 
     @pytest.mark.no_autoseed_fingerprint
     def test_bound_embedder_raises_on_unseeded(self, tmp_db):
@@ -150,13 +155,15 @@ class TestFingerprintConsistency:
 
 @pytest.fixture
 def _scheduler_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force read_state to STATE_STOPPED for embed reembed tests."""
+    """Force read_state to STATE_STOPPED for embed reembed tests.
+    """
     monkeypatch.setattr(
         sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
 
 
 class TestReembed:
-    """embed reembed CLI: initialize, swap, resumability, worker blocking."""
+    """embed reembed CLI: initialize, swap, resumability, worker blocking.
+    """
 
     def test_initializes_unseeded_db(self, tmp_path, _scheduler_stopped):
         """Verify reembed seeds an unseeded store, skipping matching rows.

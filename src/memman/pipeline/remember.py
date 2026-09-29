@@ -11,10 +11,9 @@ Structure:
 A write adds one row, or replaces the row `replace <id>` names.
 Nothing else retires a row.
 
-The apply phase runs only after all LLM + embed work has returned.
-Crashes during planning leave the DB untouched; the retry path
-re-runs the whole pipeline cleanly. This closes the partial-write
-fact-loss gap for a single queue row.
+The apply phase runs only after all LLM and embed work has returned.
+A crash during planning leaves the DB untouched, and the retry path
+re-runs the whole pipeline.
 """
 
 import functools
@@ -23,8 +22,9 @@ import logging
 from typing import Any
 
 import httpx
+from memman import config
 from memman.embed import EmbeddingProvider
-from memman.exceptions import EmbedCredentialError
+from memman.exceptions import ConfigError, EmbedCredentialError
 from memman.llm.client import get_llm_client
 from memman.pipeline.enrich import enrich_with_llm
 from memman.search.quality import check_content_quality
@@ -36,7 +36,7 @@ logger = logging.getLogger('memman')
 
 @functools.lru_cache(maxsize=1)
 def compute_prompt_version() -> str:
-    """Return a 16-char SHA-256 hash of what a rebuild can replay.
+    """Hash of the inputs a rebuild replays.
 
     Returns
     -------
@@ -54,26 +54,17 @@ def compute_prompt_version() -> str:
       re-enrichment cannot address - and `enrich --stale-only`
       then clears the report by doing unrelated work, which is worse
       than having no remedy at all.
-    - The `MEMMAN_LLM_MODEL` id IS folded in, because `enrich_pending`
-      runs the enrichment call on it.
-    - An unresolvable model hashes as the empty string, so a
-      store with no model configured still yields a stable key rather
-      than raising on the `status` path.
-    - Cached for the life of the process. Every consumer - `status`,
-      one drain tick, one rebuild - is a fresh process; tests that
-      vary the inputs call `cache_clear()`.
+    - Cached for the life of the process. Every consumer (`status`,
+      one drain tick, one rebuild) is a fresh process. A test that
+      varies the inputs calls `cache_clear()`.
     """
-    # Imported here, not at module top, so the hash reads each prompt
-    # from its defining module at CALL time. A top-level `from x
-    # import y` would bind a copy and make the invariant above
-    # untestable.
-    from memman import config
-    from memman.exceptions import ConfigError
     from memman.pipeline.enrich import ENRICHMENT_SYSTEM_PROMPT
 
     try:
         llm_model = config.require(config.LLM_MODEL)
     except ConfigError:
+        # An unresolvable model hashes as '', so a store with no model
+        # configured still yields a stable key on the `status` path.
         llm_model = ''
     blob = f'{ENRICHMENT_SYSTEM_PROMPT}\x00{llm_model}'
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
@@ -149,20 +140,34 @@ def _apply_plan(
         ) -> dict[str, Any]:
     """Store one insight. Must be invoked inside a transaction.
 
-    Notes
-    -----
-    - A `replace` retires its target (never deletes it).
-    - A target that is not current (forgotten, replaced by an earlier
-      write, or never stored) is reported under `target_gone`, and the
-      write degrades to a plain add.
-    """
-    fi = insight
+    A `replace` retires its target and never deletes it.
 
+    Parameters
+    ----------
+    backend : Backend
+        The target store.
+    insight : Insight
+        The row to store; its timestamps are refreshed from the stored
+        row.
+    replaced_id : str
+        The row a `replace` retires; '' for a plain add.
+    embed_vec : list[float] or None
+        The content vector; None stores the row without one.
+    enrichment : dict[str, Any]
+        Output of `enrich_with_llm`; empty leaves the row unenriched.
+
+    Returns
+    -------
+    dict[str, Any]
+        The write's result. A target that is not current (forgotten,
+        replaced by an earlier write, or never stored) is reported
+        under `target_gone`, and the write degrades to a plain add.
+    """
     replaced = False
     target_gone: dict[str, str | None] | None = None
     if replaced_id:
         before_target = backend.nodes.get_include_deleted(replaced_id)
-        linked = backend.nodes.mark_replaced(replaced_id, fi.id)
+        linked = backend.nodes.mark_replaced(replaced_id, insight.id)
         if linked and before_target is not None:
             replaced = True
             # The predecessor keeps its content behind `replaced_by`,
@@ -170,9 +175,9 @@ def _apply_plan(
             # seeded the target's category when `--cat` was omitted.
             backend.oplog.log(
                 operation='replace', insight_id=replaced_id,
-                detail=f'replaced by {fi.id}',
+                detail=f'replaced by {insight.id}',
                 before=insight_to_delta_dict(before_target),
-                after=insight_to_delta_dict(fi))
+                after=insight_to_delta_dict(insight))
         else:
             target_gone = {
                 'id': replaced_id,
@@ -191,44 +196,44 @@ def _apply_plan(
             #   readable; the requested target may be gone from the
             #   table entirely, and it is named in the detail instead.
             backend.oplog.log(
-                operation='target-gone', insight_id=fi.id,
+                operation='target-gone', insight_id=insight.id,
                 detail=f'replace target {replaced_id} was not'
                 ' current; stored without the link',
-                after=insight_to_delta_dict(fi))
+                after=insight_to_delta_dict(insight))
 
-    backend.nodes.insert(fi)
-    stored = backend.nodes.get(fi.id)
+    backend.nodes.insert(insight)
+    stored = backend.nodes.get(insight.id)
     if stored is not None and stored.created_at is not None:
-        fi.created_at = stored.created_at
-        fi.updated_at = stored.updated_at
+        insight.created_at = stored.created_at
+        insight.updated_at = stored.updated_at
 
     embedded = embed_vec is not None
     if embed_vec is not None:
         backend.nodes.update_embedding(
-            fi.id, embed_vec, fi.embedding_model or '')
+            insight.id, embed_vec, insight.embedding_model or '')
 
     backend.oplog.log(
-        operation='remember', insight_id=fi.id, detail=fi.content,
-        after=insight_to_delta_dict(fi))
+        operation='remember', insight_id=insight.id, detail=insight.content,
+        after=insight_to_delta_dict(insight))
 
-    backend.nodes.stamp_enrich_attempted(fi.id)
+    backend.nodes.stamp_enrich_attempted(insight.id)
     if enrichment:
         backend.nodes.update_enrichment(
-            fi.id, summary=enrichment.get('summary', ''))
+            insight.id, summary=enrichment.get('summary', ''))
     # A vectorless row stays unstamped: the stranded-row sweep selects
     # `enriched_at is null`, and it is the only path that embeds the
     # row again.
     if enrichment and embedded:
-        backend.nodes.stamp_enriched(fi.id)
+        backend.nodes.stamp_enriched(insight.id)
 
     result: dict[str, Any] = {
-        'id': fi.id,
-        'content': fi.content,
-        'category': fi.category,
+        'id': insight.id,
+        'content': insight.content,
+        'category': insight.category,
         'action': 'replace' if replaced else 'add',
         'created_at': (
-            format_timestamp(fi.created_at)
-            if fi.created_at is not None else ''),
+            format_timestamp(insight.created_at)
+            if insight.created_at is not None else ''),
         'enrichment': {'summary': enrichment.get('summary', '')},
         'embedded': embedded,
         }

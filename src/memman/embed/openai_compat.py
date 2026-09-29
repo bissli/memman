@@ -1,5 +1,7 @@
-"""OpenAI-compatible embedding client (OpenAI, OpenRouter, vLLM,
-LiteLLM, any other provider exposing `/v1/embeddings`).
+"""OpenAI-compatible embedding client.
+
+Serves OpenAI, vLLM, LiteLLM, and any provider exposing
+`/v1/embeddings`.
 
 Endpoint, model, and API key are read from the env-or-file resolver
 (populated at install time from `INSTALL_DEFAULTS`).
@@ -19,7 +21,8 @@ logger = logging.getLogger('memman')
 
 
 class Client:
-    """HTTP client for OpenAI-compatible `/v1/embeddings` endpoints."""
+    """HTTP client for OpenAI-compatible `/v1/embeddings` endpoints.
+    """
 
     name = 'openai'
 
@@ -56,7 +59,8 @@ class Client:
                 f' {type(exc).__name__}: {exc}')
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers with auth."""
+        """Build request headers with auth.
+        """
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
@@ -80,11 +84,13 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via OpenAI-compatible API."""
+        """Generate embedding for text via OpenAI-compatible API.
+        """
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed many texts in one HTTP round-trip."""
+        """Embed many texts in one HTTP round-trip.
+        """
         if not texts:
             return []
         url = f'{self.endpoint}/v1/embeddings'
@@ -143,7 +149,8 @@ class Client:
         return vectors
 
     def unavailable_message(self) -> str:
-        """Return error message when the endpoint is not available."""
+        """Return error message when the endpoint is not available.
+        """
         return (
             f'OpenAI-compatible endpoint not available at'
             f' {self.endpoint} -- set'

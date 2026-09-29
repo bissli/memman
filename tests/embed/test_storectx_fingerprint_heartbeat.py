@@ -8,6 +8,7 @@ before each row's embed call and aborts the row with
 """
 
 import pytest
+from memman.cli import _StoreContext
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.exceptions import EmbedFingerprintError
 from memman.store.db import open_db, store_dir
@@ -15,11 +16,16 @@ from memman.store.sqlite import SqliteBackend
 
 
 class TestHeartbeat:
-    """`_StoreContext.assert_fingerprint_unchanged` raises on mid-drain swap."""
+    """`_StoreContext.assert_fingerprint_unchanged` raises on mid-drain swap.
+    """
 
     def test_passes_when_unchanged(self, tmp_path):
-        """No change between construction and call -> no error."""
-        from memman.cli import _StoreContext
+        """An unchanged fingerprint raises nothing.
+
+        Mutation: the heartbeat comparing against the wrong value, so
+            it raises on an unchanged store and aborts every row.
+        Oracle: the call returns with the fingerprint unchanged.
+        """
         sdir = store_dir(str(tmp_path), 'h1')
         db = open_db(sdir)
         try:
@@ -36,10 +42,12 @@ class TestHeartbeat:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_raises_when_fingerprint_flipped(self, tmp_path):
-        """A fingerprint flip after construction triggers
-        `EmbedFingerprintError` on the next heartbeat call.
+        """A fingerprint flip after construction raises EmbedFingerprintError.
+
+        Mutation: the heartbeat comparing nothing (or the cached value
+            with itself), so a mid-drain swap goes unnoticed.
+        Oracle: a second, independently written fingerprint.
         """
-        from memman.cli import _StoreContext
         sdir = store_dir(str(tmp_path), 'h2')
         db = open_db(sdir)
         try:

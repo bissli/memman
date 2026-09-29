@@ -19,7 +19,8 @@ logger = logging.getLogger('memman')
 
 
 def strip_code_fences(raw: str) -> str:
-    """Strip markdown code fences from LLM output."""
+    """Strip markdown code fences from LLM output.
+    """
     text = raw.strip()
     if text.startswith('```'):
         lines = text.split('\n')
@@ -33,22 +34,20 @@ def strip_code_fences(raw: str) -> str:
 _ESCAPE_RUN_RE = re.compile(r'\\\\|\\(?!["\\/bfnrtu])')
 
 
-def _top_level_json_values(raw: str, opener: str) -> list:
-    """Every JSON value that decodes from an `opener` in `raw`, in order.
+def _top_level_json_objects(raw: str) -> list[dict]:
+    """Every JSON object that decodes from a `{` in `raw`, in order.
 
     Parameters
     ----------
     raw : str
         The response text as the model returned it.
-    opener : str
-        `'{'` for objects, `'['` for lists.
 
     Returns
     -------
-    list
-        The decoded values. The scan resumes after each decoded value;
-        an opener whose value fails to decode (a truncated outer
-        object) is skipped by one character, so the values inside it
+    list[dict]
+        The decoded objects. The scan resumes after each decoded
+        object; a `{` whose object fails to decode (a truncated outer
+        object) is skipped by one character, so the objects inside it
         decode on their own. The text is scanned as sent and, when
         nothing decodes, with lone backslashes repaired; a valid escape
         pair is never touched.
@@ -60,10 +59,10 @@ def _top_level_json_values(raw: str, opener: str) -> list:
     repaired = _ESCAPE_RUN_RE.sub(
         lambda m: '\\\\' if m.group(0) == '\\' else m.group(0), raw)
     for text in (raw, repaired) if repaired != raw else (raw,):
-        found: list = []
+        found: list[dict] = []
         pos = 0
         while True:
-            start = text.find(opener, pos)
+            start = text.find('{', pos)
             if start == -1:
                 break
             try:
@@ -91,7 +90,7 @@ def parse_json_response(raw: str) -> dict | None:
     dict | None
         The whole text decoded as an object when it is one (fences
         stripped if present); else the LAST object the scan of
-        `_top_level_json_values` finds, so a response that reasons
+        `_top_level_json_objects` finds, so a response that reasons
         before its JSON, or emits a block, says "let me reconsider" and
         emits another, is read at its final answer; None when no object
         decodes.
@@ -110,7 +109,7 @@ def parse_json_response(raw: str) -> dict | None:
                 return parsed
         except (json.JSONDecodeError, ValueError, RecursionError):
             pass
-    objects = [v for v in _top_level_json_values(raw, '{') if isinstance(v, dict)]
+    objects = _top_level_json_objects(raw)
     return objects[-1] if objects else None
 
 
@@ -137,32 +136,32 @@ def complete_parsed(
         this is the SECOND attempt's pair, so a caller that traces a
         failure records the body it gave up on.
 
-    Notes
-    -----
-    - The parse failure is the only signal that a response is
-      unusable. A provider reports `finish_reason` `stop` on a body it
-      cut mid-string, so no field of the response separates a complete
-      answer from a cut one.
-    - Exactly one re-roll, because the failures are sampling
-      accidents: an unescaped quote inside a string value, a stream
-      the provider cut. A second draw clears one or the shape is out
-      of the model's reach.
-    - An exception propagates on either attempt. The caller already
-      separates a transport failure from an unusable body, and the
-      two carry different oplog outcomes.
+    Raises
+    ------
+    Exception
+        Whatever `llm_client.complete` raises, on either attempt. The
+        caller separates a transport failure from an unusable body,
+        and the two carry different oplog outcomes.
     """
     raw = llm_client.complete(system, user, stage=stage)
+    # The parse failure is the only signal of an unusable body: a
+    # provider reports `finish_reason` `stop` on a body it cut
+    # mid-string.
     parsed = parse_json_response(raw)
     if parsed is not None:
         return parsed, raw
     logger.debug(
         f'{stage} body of {len(raw)} chars did not decode; re-rolling')
+    # One re-roll: the failures are sampling accidents (an unescaped
+    # quote in a string value, a stream the provider cut), so a second
+    # draw clears one or the shape is out of the model's reach.
     raw = llm_client.complete(system, user, stage=stage)
     return parse_json_response(raw), raw
 
 
 def safe_json(resp: httpx.Response) -> object:
-    """Return parsed JSON or the raw text if decoding fails."""
+    """Return parsed JSON or the raw text if decoding fails.
+    """
     try:
         return resp.json()
     except Exception:

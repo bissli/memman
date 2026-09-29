@@ -36,7 +36,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
 
     A bare `max(ANCHOR_TOP_K, limit)` would silently override the
     ablation harness's `anchor_top_k` sweep on every unfiltered
-    config; unfiltered recall must stay byte-identical to 0.17.3.
+    config; unfiltered recall must keep exactly `ANCHOR_TOP_K` anchors.
 
     Mutation: applying the `max()` anchor bump unconditionally -
         `limit=50` would then produce 50 time anchors.
@@ -50,7 +50,8 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
 
 
 def _vec512(second):
-    """Unit vector [1, second, 0, ...]/norm at the snapshot dim (512)."""
+    """Unit vector [1, second, 0, ...]/norm at the snapshot dim (512).
+    """
     n = math.sqrt(1.0 + second * second)
     v = [0.0] * 512
     v[0] = 1.0 / n
@@ -102,21 +103,17 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
 def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
     """Verify a dead keyword channel still answers instead of raising.
 
+    A store with no embeddings has only keyword and time, so this
+    degrade path decides whether an operator error returns a wrong
+    answer or raises. The response carries no degradation flag: an
+    all-zero keyword column in the per-row `signals` is what a dead
+    channel looks like.
+
     Mutation: letting the exception escape, or substituting a
         non-zero keyword score for the channel that just failed.
     Oracle: the SAME query run healthy, which scores at least one row
         above zero on the keyword signal; the degraded run must score
         every row at exactly 0.0 and still return rows.
-
-    Notes
-    -----
-    - This is the channel with no fallback: a store with no
-      embeddings has only keyword and time, so its degrade path
-      decides whether an operator error returns a wrong answer or
-      raises.
-    - The response deliberately carries no degradation flag. A caller
-      reads the per-row `signals`, where an all-zero keyword column
-      is what a dead channel looks like.
     """
     _seed(backend, 12, 'fact', 'kombu serialization body {i}')
 

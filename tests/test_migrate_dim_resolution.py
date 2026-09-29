@@ -1,8 +1,7 @@
 """Tests for source-dim resolution in the SQLite -> Postgres migrate path.
 
-Slice 1.1 of the per-store backend routing plan: the migrate path must
-resolve the embedding dim from the source store's
-`meta.embed_fingerprint`, not a hardcoded 512.
+The migrate path resolves the embedding dim from the source store's
+`meta.embed_fingerprint`, with no fixed default of 512.
 """
 
 import sqlite3
@@ -16,7 +15,9 @@ import pytest
 
 psycopg = pytest.importorskip('psycopg')
 
+from memman.migrate import MigrateError
 from memman.store.db import _BASELINE_SCHEMA
+from memman.store.sqlite import SqliteMigrator
 
 
 def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
@@ -31,13 +32,13 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
         for i in range(n_rows):
             vec = rng.uniform(-1.0, 1.0, dim).astype(np.float64).tolist()
             conn.execute(
-                'INSERT INTO insights (id, content, category,'
+                'insert into insights (id, content, category,'
                 ' embedding, created_at, updated_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?)',
+                ' values (?, ?, ?, ?, ?, ?)',
                 (str(uuid.uuid4()), f'row-{i}', 'fact',
                  struct.pack(f'<{dim}d', *vec), now, now))
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":' +
              str(dim) + '}'))
@@ -48,10 +49,12 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
 
 @pytest.mark.postgres
 def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
-    """A 1024-dim source store yields a `vector(1024)` destination.
+    """Verify a 1024-dim source store yields a `vector(1024)` column.
+
+    Mutation: the migrator creating the embedding column at a fixed 512.
+    Oracle: pg_attribute atttypmod of 1024 and all 3 seeded rows copied.
     """
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_dim_1024'
     sdir = tmp_path / 'data' / store
@@ -65,7 +68,7 @@ def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -88,12 +91,13 @@ def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
 
 @pytest.mark.postgres
 def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
-    """A source row whose blob size disagrees with the fingerprint dim
-    surfaces as ValueError, not a silent vector loss.
+    """Verify a row whose blob size disagrees with the fingerprint dim fails.
+
+    Mutation: truncating or padding the 256-dim vector to the 512-dim
+        fingerprint, which loses the vector silently.
+    Oracle: MigrateError matching '256|dim' from a hand-built store.
     """
-    from memman.migrate import MigrateError
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_mixed_dim'
     sdir = tmp_path / 'data' / store
@@ -106,13 +110,13 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
         bad = [0.2] * 256
         for i, vec in enumerate([good, bad]):
             conn.execute(
-                'INSERT INTO insights (id, content, category,'
+                'insert into insights (id, content, category,'
                 ' embedding, created_at, updated_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?)',
+                ' values (?, ?, ?, ?, ?, ?)',
                 (str(uuid.uuid4()), f'row-{i}', 'fact',
                  struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":512}'))
         conn.commit()
@@ -128,7 +132,7 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
             src_mig = SqliteMigrator(str(tmp_path))
             src_mig.preflight_source(store)
             payload = src_mig.gather(store)
-            tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+            tgt_mig = PostgresMigrator(dsn=pg_dsn)
             tgt_mig.preflight_target(store)
             tgt_mig.apply(store, payload)
     finally:

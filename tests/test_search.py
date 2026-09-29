@@ -1,4 +1,5 @@
-"""Tests for memman.search -- keyword and recall."""
+"""Tests for memman.search -- keyword and recall.
+"""
 
 import pytest
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
@@ -9,8 +10,8 @@ from memman.store.model import Insight
 def _counts_for(insights: list[Insight], query: str) -> dict[str, int]:
     """Distinct query-token overlap per insight id, computed in Python.
 
-    Stands in for the index probe `keyword_search` now requires,
-    since these tests exercise ranking over an in-memory pool with no
+    Stands in for the index probe `keyword_search` requires, since
+    these tests exercise ranking over an in-memory pool with no
     index behind it.
     """
     query_tokens = tokenize(query)
@@ -21,10 +22,16 @@ def _counts_for(insights: list[Insight], query: str) -> dict[str, int]:
 
 
 class TestKeywordSearch:
-    """Tokenization and keyword search ranking."""
+    """Tokenization and keyword search ranking.
+    """
 
     def test_tokenize_english(self):
-        """English words are lowercased and split."""
+        """English words are lowercased and split.
+
+        Mutation: dropping the `.lower()` before matching, or leaving
+        a stopword such as `for` in the token set.
+        Oracle: hand-listed tokens of a mixed-case sentence.
+        """
         tokens = tokenize('Go uses SQLite for persistent storage')
         assert 'go' in tokens
         assert 'sqlite' in tokens
@@ -33,7 +40,12 @@ class TestKeywordSearch:
         assert 'for' not in tokens
 
     def test_tokenize_stopwords(self):
-        """Common stopwords are filtered out."""
+        """Common stopwords are filtered out.
+
+        Mutation: skipping the `STOPWORDS` test in `tokenize`, or
+        filtering on a truncated stopword list.
+        Oracle: hand-picked stopwords absent and content words present.
+        """
         tokens = tokenize('the quick fox is very fast')
         assert 'the' not in tokens
         assert 'is' not in tokens
@@ -43,15 +55,30 @@ class TestKeywordSearch:
         assert 'fast' in tokens
 
     def test_tokenize_empty(self):
-        """Empty string produces empty set."""
+        """Empty string produces empty set.
+
+        Mutation: `tokenize` returning a set holding the empty string.
+        Oracle: length 0.
+        """
         assert len(tokenize('')) == 0
 
     def test_tokenize_all_stopwords(self):
-        """All-stopword input produces empty set."""
+        """All-stopword input produces empty set.
+
+        Mutation: a stopword filter that keeps a sentence's first or
+        only word.
+        Oracle: length 0 for four hand-picked stopwords.
+        """
         assert len(tokenize('the is a an')) == 0
 
     def test_keyword_search_ranking(self):
-        """Best match ranks first."""
+        """Best match ranks first.
+
+        Mutation: `keyword_search` returning hits in input order, or
+        ascending by score.
+        Oracle: the hand-checked best row (id 1, all three query
+        tokens) first, with scores non-increasing after it.
+        """
         insights = [
             Insight(id='1', content='Go language for building CLI tools'),
             Insight(id='2', content='SQLite database for Go applications'),
@@ -65,7 +92,12 @@ class TestKeywordSearch:
             assert results[i][1] <= results[i - 1][1]
 
     def test_keyword_search_limit(self):
-        """Limit caps the result count."""
+        """Limit caps the result count.
+
+        Mutation: the heap pushing past `limit`, so every matching row
+        comes back.
+        Oracle: 20 rows that all match, and a limit of 5.
+        """
         words = ['common', 'shared', 'words', 'alpha', 'beta', 'gamma',
                  'delta', 'epsilon', 'zeta', 'theta']
         insights = [
@@ -79,14 +111,20 @@ class TestKeywordSearch:
         assert len(results) <= 5
 
     def test_keyword_search_empty_query(self):
-        """Empty query returns empty results."""
+        """Empty query returns empty results.
+
+        Mutation: dropping the `if not query_tokens` guard, which
+        divides by zero.
+        Oracle: an empty list for an empty query over a matching row.
+        """
         insights = [Insight(id='1', content='some content')]
         results = keyword_search(insights, '', 10, {})
         assert len(results) == 0
 
 
 class TestRecallRanking:
-    """Rerank signal weights."""
+    """Rerank signal weights.
+    """
 
     def test_rerank_weights_are_pinned_to_the_measured_table(self):
         """The raw weight table is exactly the measured GENERAL row.
@@ -133,6 +171,11 @@ class TestRecallRanking:
                         rel=1e-12), f'turned at ({i}, {j})'
 
     def test_rerank_general_similarity_highest(self):
-        """The surviving GENERAL row weights similarity highest."""
+        """The surviving GENERAL row weights similarity highest.
+
+        Mutation: retuning the raw row so keyword or anchor outweighs
+        similarity.
+        Oracle: `w_sim` compared against the larger of the other two.
+        """
         w_kw, w_sim, w_anchor = RERANK_WEIGHTS
         assert w_sim > max(w_kw, w_anchor)

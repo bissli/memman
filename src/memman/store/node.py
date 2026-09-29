@@ -1,4 +1,5 @@
-"""Insight CRUD, lifecycle, statistics, and embedding operations."""
+"""Insight CRUD, lifecycle, statistics, and embedding operations.
+"""
 
 import logging
 from datetime import datetime, timezone
@@ -13,13 +14,15 @@ logger = logging.getLogger('memman')
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:
-    """Insert a new insight into the database.
+    """Insert a new insight.
 
-    Stamps `created_at` / `updated_at` server-side: caller-passed
-    `i.created_at` / `i.updated_at` are IGNORED. Tests that need to
-    control insertion time use the `_set_created_at` helper in
-    `tests/conftest.py` to issue a raw update after insert. Mirrors
-    `PostgresNodeStore.insert` which relies on `DEFAULT now()`.
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    i : Insight
+        The row to insert. Its `created_at` and `updated_at` are
+        ignored; both are stamped with the current time.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     sql = """
@@ -36,9 +39,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         i.queue_uuid, i.author))
 
 
-# `queue_uuid`, then `replaced_by`, then `author`, appended last --
-# must stay byte-identical to postgres.py's _INSIGHT_COLS (see
-# test_insight_column_lists_are_identical_across_backends).
+# Must stay byte-identical to postgres.py's _INSIGHT_COLS.
 _INSIGHT_COLUMNS = (
     'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
@@ -47,7 +48,8 @@ _INSIGHT_COLUMNS = (
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
-    """Return a single insight by ID (excludes soft-deleted)."""
+    """The current insight with this ID; None if deleted or replaced.
+    """
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
@@ -60,7 +62,8 @@ where id = ? and deleted_at is null and replaced_by is null
 
 
 def get_insight_by_id_include_deleted(db: 'DB', id: str) -> Insight | None:
-    """Return a single insight by ID, including soft-deleted."""
+    """Return a single insight by ID, including soft-deleted.
+    """
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
@@ -74,7 +77,8 @@ where id = ?
 
 def query_insights(
         db: 'DB', keyword: str = '', limit: int = 20) -> list[Insight]:
-    """Return current insights holding every keyword word, newest first."""
+    """Return current insights holding every keyword word, newest first.
+    """
     conditions = ['deleted_at is null and replaced_by is null']
     args: list[Any] = []
 
@@ -135,13 +139,10 @@ def mark_insight_replaced(
         True when the pointer was written. False when the predecessor
         is missing, deleted, or already replaced; the caller
         degrades to a plain add.
-
-    Notes
-    -----
-    - The guard makes a row replaced at most once, which is what
-      rules out forks in the chain.
     """
     now = format_timestamp(datetime.now(timezone.utc))
+    # The `replaced_by is null` guard replaces a row at most once,
+    # which rules out forks in the chain.
     sql = """
 update insights
 set replaced_by = ?, updated_at = ?
@@ -232,12 +233,14 @@ order by created_at, id
 
 
 def update_enrichment(db: 'DB', id: str, summary: str) -> None:
-    """Store the enrichment summary for an insight."""
+    """Store the enrichment summary for an insight.
+    """
     db._exec('update insights set summary = ? where id = ?', (summary, id))
 
 
 def count_active_insights(db: 'DB') -> int:
-    """Return the number of current insights, neither deleted nor replaced."""
+    """Return the number of current insights, neither deleted nor replaced.
+    """
     row = db._query(
         'select count(*) from insights'
         ' where deleted_at is null and replaced_by is null'
@@ -246,12 +249,11 @@ def count_active_insights(db: 'DB') -> int:
 
 
 def count_total_insights(db: 'DB') -> int:
-    """Return the total number of insights (active + soft-deleted).
+    """Return the number of insights, soft-deleted and replaced included.
 
-    Distinct from `count_active_insights`: used by
-    `embed.fingerprint.seed_if_fresh` to detect a genuinely empty
-    store. A soft-deleted row is still data with provenance, so the
-    fingerprint must not be re-seeded against it.
+    A soft-deleted row still carries provenance, so
+    `embed.fingerprint.seed_if_fresh` counts it and seeds only an
+    empty store.
     """
     row = db._query('select count(*) from insights').fetchone()
     return int(row[0])
@@ -260,18 +262,24 @@ def count_total_insights(db: 'DB') -> int:
 def has_row_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
     """Return True if any insight, forgotten ones included, carries the uuid.
 
-    Notes
-    -----
-    - The idempotency check for queue replays answers "did this write
-      land". A replaced row counts: a later `replace` retired it, and
-      a re-insert would bring back a fact the store already corrected.
-    - A forgotten row counts too: the agent dropped the write after it
-      landed, and the row still holds the write's id, so a re-insert
-      would collide on the primary key.
-    - SQL `= ?` never matches NULL, so a row with a null `queue_uuid`
-      can never satisfy it. Do not add a Python-side default that
-      would.
+    Answers "did this write land" for queue replays.
+
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    queue_uuid : str
+        The queued write's uuid.
+
+    Returns
+    -------
+    bool
+        True for a replaced row too, since a re-insert would revive a
+        fact a later `replace` corrected. True for a forgotten row,
+        since a re-insert would collide on its primary key.
     """
+    # SQL `= ?` never matches NULL, so a row with a null `queue_uuid`
+    # never satisfies it. Keep any default out of Python.
     row = db._query(
         'select 1 from insights where queue_uuid = ? limit 1',
         (queue_uuid,)).fetchone()
@@ -283,9 +291,20 @@ def iter_for_reembed(
         ) -> list[tuple[str, str, str | None, int | None]]:
     """Return a batch of insights for the reembed sweep.
 
-    Returns rows of (id, content, embedding_model, blob_length).
-    The blob length is SQLite-specific (`length(blob)`); on Postgres
-    the dimension is invariant from the column type.
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+    cursor : str
+        Last id of the previous batch; only larger ids are returned.
+    batch : int
+        Maximum rows returned.
+
+    Returns
+    -------
+    list[tuple[str, str, str | None, int | None]]
+        `(id, content, embedding_model, blob_length)` in id order,
+        where `blob_length` is `length(embedding)`.
     """
     sql = """
 select id, content, embedding_model, length(embedding)
@@ -302,8 +321,7 @@ def provenance_distribution(
         db: 'DB') -> list[tuple[str | None, int]]:
     """Return (prompt_version, count) groups for active rows.
 
-    Used by `doctor.check_provenance_drift` to detect rows enriched
-    by older prompt versions. Sorted by count descending.
+    Sorted by count descending.
     """
     sql = """
 select prompt_version, count(*) as n
@@ -317,7 +335,8 @@ order by n desc
 
 
 def get_all_active_insights(db: 'DB') -> list[Insight]:
-    """Return all non-deleted insights."""
+    """Every current insight (not deleted, not replaced), newest first.
+    """
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
@@ -375,10 +394,8 @@ def iter_for_swap(
         db: 'DB', cursor: str, batch: int) -> list[tuple[str, str]]:
     """Return rows still needing embedding_pending under the swap.
 
-    Picks active rows where `embedding_pending is null`, ordered by id
-    after `cursor`. Self-healing predicate -- a crash mid-backfill
-    skips the cursor and the next call still finds whatever rows
-    haven't yet been filled.
+    Returns `(id, content)` for active rows after `cursor`, in id
+    order, whose `embedding_pending` is still null.
     """
     sql = """
 select id, content
@@ -431,10 +448,9 @@ def update_embedding(db: 'DB', id: str, blob: bytes,
                      model: str) -> None:
     """Store an embedding vector and its model name for an insight.
 
-    Both the blob and `embedding_model` are persisted atomically so
-    the row's per-row provenance stays in sync with its vector. The
-    `embed reembed` loop's idempotency check depends on this column
-    being current.
+    The vector and `embedding_model` are written in one statement, so
+    the recorded model always matches the stored vector. The reembed
+    sweep skips a row by reading this column.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     sql = """
@@ -446,7 +462,8 @@ where id = ?
 
 
 def embedding_stats(db: 'DB') -> tuple[int, int]:
-    """Return (total_active, embedded_count)."""
+    """Return (total_active, embedded_count).
+    """
     total = db._query(
         'select count(*) from insights'
         ' where deleted_at is null and replaced_by is null'
@@ -459,7 +476,8 @@ def embedding_stats(db: 'DB') -> tuple[int, int]:
 
 
 def stamp_enrich_attempted(db: 'DB', insight_id: str, ts: str) -> None:
-    """Set enrich_attempted_at timestamp for an insight."""
+    """Set enrich_attempted_at timestamp for an insight.
+    """
     db._exec(
         'update insights set enrich_attempted_at = ? where id = ?',
         (ts, insight_id))
@@ -494,8 +512,7 @@ def stamp_enriched(
 
 
 def get_pending_enrich_ids(db: 'DB', limit: int) -> list[str]:
-    """Return IDs of insights with NULL enrich_attempted_at, ordered by
-    created_at.
+    """Ids of insights with NULL enrich_attempted_at, oldest first.
     """
     sql = """
 select id from insights
@@ -509,7 +526,8 @@ limit ?
 
 
 def get_active_insight_ids(db: 'DB') -> list[str]:
-    """Return all active insight IDs in creation order."""
+    """Return all active insight IDs in creation order.
+    """
     sql = """
 select id from insights
 where deleted_at is null and replaced_by is null
@@ -520,7 +538,8 @@ order by created_at asc
 
 
 def count_pending_enrich(db: 'DB') -> int:
-    """Count insights with NULL enrich_attempted_at that are not deleted."""
+    """Count current insights with a NULL enrich_attempted_at.
+    """
     row = db._query(
         'select count(*) from insights'
         ' where enrich_attempted_at is null and deleted_at is null'
@@ -531,9 +550,8 @@ def count_pending_enrich(db: 'DB') -> int:
 def get_unenriched_attempted_ids(db: 'DB', limit: int) -> list[str]:
     """Return IDs of attempted-but-unenriched insights, oldest first.
 
-    These rows were stamped `enrich_attempted_at` (so the pending-enrich
-    retry path skips them) but never stamped `enriched_at` -- e.g. a
-    prior enrichment LLM call failed. They are otherwise stranded.
+    Such a row carries `enrich_attempted_at`, so the pending-enrich
+    path skips it, but no `enriched_at`.
     """
     sql = """
 select id from insights
@@ -563,16 +581,12 @@ def iter_stale_insight_ids(
     list[str]
         Ids oldest first: rows whose `prompt_version` is present and
         differs from `active_pv`, plus stranded rows (attempted,
-        never enriched), whatever their key.
-
-    Notes
-    -----
-    - Keep the key term aligned with `doctor._is_provenance_stale`,
-      and the whole predicate aligned with `count_stale_insights`
-      and the Postgres copies.
-    - An enriched row with a null key stays out: the active config
-      may never have run on it, but nothing says it drifted.
+        never enriched), whatever their key. An enriched row with a
+        null key stays out.
     """
+    # Keep the key term aligned with `doctor._is_provenance_stale`,
+    # and the whole predicate aligned with `count_stale_insights` and
+    # the Postgres copies.
     sql = """
 select id from insights
 where deleted_at is null and replaced_by is null
@@ -601,7 +615,8 @@ where deleted_at is null and replaced_by is null
 
 def reset_for_rebuild(
         db: 'DB', insight_ids: list[str]) -> None:
-    """Clear enriched_at and enrich_attempted_at for given insight IDs."""
+    """Clear enriched_at and enrich_attempted_at for given insight IDs.
+    """
     if not insight_ids:
         return
     placeholders = ','.join('?' for _ in insight_ids)
@@ -614,7 +629,8 @@ where id in ({placeholders})
 
 
 def _scan_insight(row: tuple[Any, ...]) -> Insight:
-    """Parse a database row into an Insight dataclass."""
+    """Parse a database row into an Insight dataclass.
+    """
     i = Insight()
     i.id = row[0]
     i.content = row[1]

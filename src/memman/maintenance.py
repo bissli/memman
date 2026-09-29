@@ -3,10 +3,13 @@
 Steps:
 1. `queue.purge_done` -- drop completed queue rows.
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
-3. Per store where the drain completed a row:
-   - `trim_oplog_by_age` (once per drain, not per row).
+3. `queue.retry_stale` -- return stale claimed rows to pending.
+4. Per store where the drain completed a row:
+   - Trim the oplog by age.
+   - Re-queue stranded (attempted but unenriched) rows.
    - `enrich_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.
+   - Run the oplog maintenance step.
 
 A store the drain did not touch is never opened, so a row left
 pending in a quiet store waits for that store's next write or a
@@ -21,6 +24,8 @@ import logging
 import time
 from typing import Any
 
+from memman.queue import purge_done, purge_worker_runs, retry_stale
+
 logger = logging.getLogger('memman')
 
 MAINTENANCE_MIN_BUDGET_SECONDS = 30
@@ -33,14 +38,26 @@ def run_maintenance(
         touched_stores: set[str],
         store_contexts: dict[str, Any],
         deadline_monotonic: float) -> None:
-    """Execute the post-drain maintenance pass."""
+    """Execute the post-drain maintenance pass.
+
+    Parameters
+    ----------
+    queue_conn : Any
+        Queue database connection.
+    touched_stores : set[str]
+        Names of stores the drain wrote to; only these get per-store work.
+    store_contexts : dict[str, Any]
+        Open store context per store name. A touched store with no
+        entry is skipped.
+    deadline_monotonic : float
+        `time.monotonic()` value at which the drain must end. The pass
+        is skipped when less than `MAINTENANCE_MIN_BUDGET_SECONDS` remain.
+    """
     if time.monotonic() + MAINTENANCE_MIN_BUDGET_SECONDS > deadline_monotonic:
         logger.debug(
             'maintenance: skipped, less than'
             f' {MAINTENANCE_MIN_BUDGET_SECONDS}s of budget remains')
         return
-
-    from memman.queue import purge_done, purge_worker_runs, retry_stale
 
     try:
         dropped = purge_done(queue_conn)
@@ -80,7 +97,8 @@ def run_maintenance(
 def _run_per_store_maintenance(
         ctx: Any, store_name: str,
         deadline_monotonic: float) -> None:
-    """Run oplog trim + bounded enrich_pending for one store."""
+    """Run oplog trim + bounded enrich_pending for one store.
+    """
     from memman.pipeline.enrich import enrich_pending
 
     try:

@@ -1,10 +1,9 @@
 """CLI-level e2e for `memman migrate` (SQLite -> Postgres).
 
 The unit suite at `tests/test_migrate.py` covers the migrate functions
-directly. This test exercises the CLI orchestration end-to-end:
-plan-echo, --yes confirmation flow, drain.lock guard, target schema
-population, and the per-store `MEMMAN_BACKEND_<store>=postgres` env
-write on success.
+directly. This test covers the CLI orchestration: plan-echo, --yes
+confirmation flow, drain.lock guard, target schema population, and the
+per-store `MEMMAN_BACKEND_<store>=postgres` env write on success.
 """
 
 from __future__ import annotations
@@ -15,6 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from memman.store.db import open_db, set_meta, store_dir
+from memman.store.model import Insight
+from memman.store.node import insert_insight
 
 psycopg = pytest.importorskip('psycopg')
 
@@ -22,11 +24,8 @@ pytestmark = [pytest.mark.e2e_cli, pytest.mark.postgres]
 
 
 def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
-    """Build a minimal SQLite store with one insight + embed fingerprint."""
-    from memman.store.db import open_db, set_meta, store_dir
-    from memman.store.model import Insight
-    from memman.store.node import insert_insight
-
+    """Build a minimal SQLite store with one insight + embed fingerprint.
+    """
     sdir = store_dir(str(data_dir), store)
     db = open_db(sdir)
     try:
@@ -46,7 +45,13 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
 
 
 def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
-    """`memman migrate --yes` drives the full CLI flow into Postgres.
+    """Verify `memman migrate --yes` copies a SQLite store into Postgres.
+
+    Mutation: migrate exiting 0 without importing the insight rows,
+        or without writing the per-store `MEMMAN_BACKEND_<store>`
+        key to the env file.
+    Oracle: one row with the seeded content in the target schema,
+        and the backend key in the env file.
     """
     from memman.store.postgres import _store_schema
 
@@ -62,7 +67,7 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
     schema = _store_schema(store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
     env = {**os.environ, 'HOME': str(home)}
 
@@ -78,11 +83,11 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f'SELECT count(*) FROM {schema}.insights')
+                    f'select count(*) from {schema}.insights')
                 assert cur.fetchone()[0] == 1
                 cur.execute(
-                    f'SELECT content FROM {schema}.insights '
-                    f"WHERE id = 'mig-cli-1'")
+                    f'select content from {schema}.insights '
+                    f"where id = 'mig-cli-1'")
                 row = cur.fetchone()
                 assert row
                 assert row[0] == 'migrate cli round-trip insight'
@@ -95,4 +100,4 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')

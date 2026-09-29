@@ -1,4 +1,5 @@
-"""Database connection, schema migration, and store management."""
+"""Database connection, schema migration, and store management.
+"""
 
 import logging
 import os
@@ -19,7 +20,8 @@ _VALID_STORE_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')
 
 
 def valid_store_name(name: str) -> bool:
-    """Return True if name matches [a-zA-Z0-9][a-zA-Z0-9_-]*."""
+    """True if name matches `[a-zA-Z0-9][a-zA-Z0-9_-]*`.
+    """
     return bool(_VALID_STORE_NAME_RE.match(name))
 
 
@@ -42,82 +44,78 @@ def portable_store_name(name: str) -> str:
 
     Notes
     -----
-    - Suggestion text only. The caller renames nothing. There is no
-      `memman store rename`, so an operator acts by hand.
-    - The output clears `_check_identifier` AND `valid_store_name`,
-      because an operator types it into `memman store create`.
-      Meeting only the first would suggest a name that command
-      rejects, which is why a leading digit or underscore takes the
-      `s_` prefix.
-    - Rewriting every illegal character, not just the hyphen, is what
-      keeps the suggestion creatable: `default.bak` must not come
-      back unchanged.
-    - The output is not unique: `a-b` and `a_b` both yield `a_b`,
-      which may name a different live store.
+    - Suggestion text only; the caller renames nothing.
+    - Not unique: `a-b` and `a_b` both yield `a_b`, which may name a
+      different live store.
     """
     portable = re.sub(r'[^A-Za-z0-9_]', '_', name)
+    # The result must pass `_check_identifier` and `valid_store_name`,
+    # since an operator types it into `memman store create`. A leading
+    # digit or underscore takes the prefix for that reason.
     if not portable[:1].isalpha():
         portable = f's_{portable}'
     return portable
 
 
 def default_data_dir() -> str:
-    """Return ~/.memman."""
+    """Return ~/.memman.
+    """
     home = Path.home()
     return str(home / '.memman')
 
 
 def store_dir(base_dir: str, name: str) -> str:
-    """Return <base_dir>/data/<name>."""
+    """Return <base_dir>/data/<name>.
+    """
     return os.path.join(base_dir, 'data', name)
 
 
 def active_file(base_dir: str) -> str:
-    """Return path to <base_dir>/active."""
+    """Return path to <base_dir>/active.
+    """
     return os.path.join(base_dir, 'active')
 
 
 def read_active(base_dir: str) -> str:
-    """Read the active store name from <base_dir>/active."""
+    """Read the active store name from <base_dir>/active.
+    """
     try:
         data = Path(active_file(base_dir)).read_text()
-    except (OSError, FileNotFoundError):
+    except OSError:
         return DEFAULT_STORE_NAME
     name = data.strip()
     return name or DEFAULT_STORE_NAME
 
 
 def write_active(base_dir: str, name: str) -> None:
-    """Write the active store name to <base_dir>/active."""
+    """Write the active store name to <base_dir>/active.
+    """
     Path(base_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
     Path(active_file(base_dir)).write_text(name + '\n')
 
 
 def list_local_store_dirs(base_dir: str) -> list[str]:
-    """Return sorted names of every SQLite store dir under
-    `<base_dir>/data/`.
+    """Sorted names of the SQLite store dirs under `<base_dir>/data/`.
 
-    SQLite-only filesystem scanner. Cross-backend enumeration
-    (filesystem dirs plus Postgres `pg_namespace`) lives in
-    `memman.store.factory.list_stores`; that is the helper to use
-    from any code path that can encounter postgres-routed stores.
+    Lists SQLite stores only. `memman.store.factory.list_stores`
+    covers every backend.
     """
     data_dir = os.path.join(base_dir, 'data')
     if not Path(data_dir).is_dir():
         return []
-    names = sorted(
-        e.name for e in os.scandir(data_dir) if e.is_dir())
-    return names
+    return sorted(e.name for e in os.scandir(data_dir) if e.is_dir())
 
 
 def store_exists(base_dir: str, name: str) -> bool:
-    """Check whether the named store directory exists."""
+    """Check whether the named store directory exists.
+    """
     path = store_dir(base_dir, name)
     return Path(path).is_dir()
 
 
 class DB:
-    """Wraps a SQLite database connection."""
+    """Wraps a SQLite database connection.
+    """
 
     def __init__(self, conn: sqlite3.Connection, path: str) -> None:
         self._conn = conn
@@ -126,11 +124,13 @@ class DB:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        """Return the underlying connection."""
+        """Return the underlying connection.
+        """
         return self._conn
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection.
+        """
         self._conn.close()
 
     def __enter__(self) -> Self:
@@ -146,25 +146,29 @@ class DB:
     def _exec(
             self, sql: str,
             params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
-        """Execute a write SQL statement."""
+        """Execute a write SQL statement.
+        """
         return self._conn.execute(sql, params)
 
     def _query(
             self, sql: str,
             params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
-        """Query SQL using the transaction cursor or connection."""
+        """Execute a read SQL statement.
+        """
         return self._conn.execute(sql, params)
 
 
 def get_meta(db: 'DB', key: str) -> str | None:
-    """Read a value from the meta key-value table."""
+    """Read a value from the meta key-value table.
+    """
     row = db._query(
         'select value from meta where key = ?', (key,)).fetchone()
     return row[0] if row else None
 
 
 def set_meta(db: 'DB', key: str, value: str) -> None:
-    """Write a value to the meta key-value table."""
+    """Write a value to the meta key-value table.
+    """
     db._exec(
         'insert or replace into meta (key, value) values (?, ?)',
         (key, value))
@@ -199,9 +203,8 @@ def open_db(data_dir: str) -> DB:
     Notes
     -----
     - A zero-length `memman.db` raises nothing: SQLite reads it as a
-      fresh database, so this function recreates the baseline schema
-      in it and returns a working, empty store. Only a partially
-      truncated file reads as malformed.
+      fresh database, so the baseline schema is recreated in it.
+      Only a partially truncated file reads as malformed.
     """
     try:
         Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
@@ -258,15 +261,6 @@ def open_read_only(data_dir: str) -> DB:
     BackendError
         When `<data_dir>/memman.db` is absent, or cannot be opened or
         read as a database. Never a bare `OSError` or `sqlite3.Error`.
-
-    Notes
-    -----
-    - Of the two callers, only `_count_active_rows` (under `memman
-      embed reembed`) reports the failure: it reaches the CLI root
-      group, which catches `BackendError` alone. `memman prime`'s
-      status line wraps its call in `except Exception` and carries on
-      without the read-only handle, so a raised error there is a
-      silent degrade, not a message.
     """
     db_path = os.path.join(data_dir, 'memman.db')
     try:
@@ -277,9 +271,9 @@ def open_read_only(data_dir: str) -> DB:
     if not found:
         raise BackendError(f'database not found: {db_path}')
     # Percent-encode: SQLite cuts a URI at the first `?`, so a raw `#`
-    # or `?` in the path both truncates the filename and demotes
-    # `mode=ro` to an unrecognized parameter, which opens -- and
-    # creates -- a different file read-write.
+    # or `?` in the path truncates the filename and demotes `mode=ro`
+    # to an unrecognized parameter, which opens (and creates) a
+    # different file read-write.
     uri = f'file:{quote(db_path)}?mode=ro'
     try:
         conn = sqlite3.connect(uri, uri=True, isolation_level=None)
@@ -290,12 +284,10 @@ def open_read_only(data_dir: str) -> DB:
         conn.execute('pragma foreign_keys=on')
         # Notes:
         # - Forces the header read, so a malformed file fails here
-        #   rather than at the caller's first query, outside any
-        #   translation. `pragma foreign_keys` alone does not touch
-        #   the file and returns cleanly on corrupt bytes.
-        # - Must stay a READ. A write pragma (`journal_mode`) fails
-        #   on `mode=ro` against any store not already in WAL, which
-        #   is every store a `backup restore` just laid down.
+        #   rather than at the caller's first query. `pragma
+        #   foreign_keys` alone returns cleanly on corrupt bytes.
+        # - Must stay a read. A write pragma (`journal_mode`) fails
+        #   on `mode=ro` against any store not already in WAL.
         conn.execute('pragma schema_version')
     except sqlite3.Error as exc:
         conn.close()
@@ -368,13 +360,15 @@ create table if not exists meta (
 
 
 # Keyword channel index, applied by `_migrate` in one transaction
-# rather than from `_BASELINE_SCHEMA`. External content: FTS5 holds
-# the terms, the text stays in `insights`. Every row is indexed,
-# soft-deleted and replaced ones included, and the active
-# predicate is applied by joining `insights` at read -- an
-# active-only index would need conditional delete triggers, and a
-# 'delete' whose old values are not exactly
-# what was indexed corrupts the index silently.
+# rather than from `_BASELINE_SCHEMA`.
+# Notes:
+# - External content: FTS5 holds the terms, the text stays in
+#   `insights`.
+# - Every row is indexed, soft-deleted and replaced ones included.
+#   The active predicate is applied by joining `insights` at read.
+# - An active-only index would need conditional delete triggers, and
+#   a 'delete' whose old values are not exactly what was indexed
+#   corrupts the index silently.
 _FTS_STATEMENTS = (
     """
 create virtual table insights_fts using fts5(
@@ -417,31 +411,21 @@ def _migrate(db: DB) -> None:
     shape -- a schema change is applied to each live store by hand,
     once, rather than carried here as an `alter` migration.
 
+    Raises
+    ------
+    BackendError
+        When a baseline statement names a column the store lacks.
+
     Notes
     -----
     - `create table if not exists` no-ops on an existing table, so a
-      store missing a baseline column fails here only through a
-      baseline `create index` that names the column. This is the
-      primary schema diagnostic: nothing that needs a live Backend
-      can report on such a store.
-    - Postgres resolves an index's columns and predicate before its
-      if-not-exists check, so every baseline index naming the column
-      raises. SQLite resolves nothing for an index name the store
-      already has, so only an index the store lacks raises.
-    - So on SQLite only a new index name catches a store the hand DDL
-      missed. A renamed column keeps its index names, and a SQLite
-      store the rename missed opens without error, then fails at its
-      first read of the column with a raw OperationalError.
-    - Creating `insights_fts` also populates it, in ONE transaction.
-      The triggers only carry rows written after the table exists, so
-      a store with no `insights_fts` table, including one restored
-      from a backup without it, would otherwise open with an empty
-      index and silently lose the keyword channel. Atomicity is what
-      makes that safe:
-      the connection is autocommit and `executescript` commits before
-      it runs, so creating the table there would leave an empty index
-      durable if the backfill were interrupted, and the absence check
-      would then read as "already migrated" forever.
+      store missing a baseline column fails only through a baseline
+      `create index` that names the column. This is the primary
+      schema diagnostic.
+    - SQLite skips an index name the store already has, so only a
+      new index name catches a store the hand DDL missed. A renamed
+      column keeps its index names, so a store the rename missed
+      opens without error and fails at its first read of the column.
     """
     try:
         db._conn.executescript(_BASELINE_SCHEMA)
@@ -459,6 +443,14 @@ def _migrate(db: DB) -> None:
         " where type = 'table' and name = 'insights_fts'").fetchone()
     if has_fts:
         return
+    # Notes:
+    # - The triggers carry only rows written after the table exists,
+    #   so creation also backfills the index, or a restored store
+    #   opens with an empty keyword channel.
+    # - One transaction: `executescript` commits first and the
+    #   connection is autocommit, so an interrupted backfill would
+    #   leave an empty index durable, and the absence check above
+    #   would read it as migrated.
     db._conn.execute('begin immediate')
     try:
         for statement in _FTS_STATEMENTS:

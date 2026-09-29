@@ -1,12 +1,13 @@
 """Stale-post-migrate-source doctor tests.
 
-The migrate flow preserves the source SQLite artifacts
-(`memman.db`, `memman.db-wal`, `memman.db-shm`) so the operator has
-a forensic copy of pre-migrate state. Doctor's `check_stale_post_migrate_source`
-warns (not fails) for any store whose resolved backend is
-`postgres` and that still has the SQLite source on disk.
+The migrate flow leaves the source SQLite artifacts (`memman.db`,
+`memman.db-wal`, `memman.db-shm`) in place until the archive step.
+Doctor's `check_stale_post_migrate_source` warns for any store whose
+resolved backend is `postgres` and that still has the SQLite source on
+disk.
 """
 
+import os
 import sqlite3
 import struct
 import uuid
@@ -14,7 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from memman.doctor import check_stale_post_migrate_source, run_all_checks
 from memman.store.db import _BASELINE_SCHEMA
+from memman.store.sqlite import SqliteBackend, SqliteMigrator
 
 try:
     import psycopg
@@ -28,18 +31,18 @@ def _seed_with_artifacts(store_dir: Path) -> None:
     store_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(store_dir / 'memman.db'))
     try:
-        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('pragma journal_mode=WAL')
         conn.executescript(_BASELINE_SCHEMA)
         now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         vec = [0.5] * 512
         conn.execute(
-            'INSERT INTO insights (id, content, category,'
+            'insert into insights (id, content, category,'
             ' embedding, created_at, updated_at)'
-            ' VALUES (?, ?, ?, ?, ?, ?)',
+            ' values (?, ?, ?, ?, ?, ?)',
             (str(uuid.uuid4()), 'cleanup test', 'fact',
              struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":512}'))
         conn.commit()
@@ -49,16 +52,14 @@ def _seed_with_artifacts(store_dir: Path) -> None:
 
 @pytest.mark.postgres
 def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
-    """After successful verify, the source files are preserved.
+    """Verify gather and apply leave the SQLite source file in place.
 
-    Pre-0.14.2 the migrate flow auto-deleted the SQLite source. That
-    cleanup was accidental drift introduced after the docs were
-    written; preserving the source is the documented contract and
-    the documented operator-driven cleanup is `rm <store>/memman.db*`
-    once the postgres data is verified.
+    Mutation: PostgresMigrator.apply or SqliteMigrator.gather deleting
+        `memman.db`, which removes the copy of the pre-migrate state
+        before the archive step runs.
+    Oracle: the source file's existence after gather and apply.
     """
     from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_preserve'
     sdir = tmp_path / 'data' / store
@@ -71,7 +72,7 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         assert (sdir / 'memman.db').exists()
@@ -83,15 +84,12 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
 
 def test_doctor_warns_on_stale_post_migrate_source(
         tmp_path, env_file):
-    """A `memman.db` survivor in a postgres-routed store raises `warn`.
+    """Verify a `memman.db` survivor in a postgres-routed store warns.
 
-    The artifact is intentional preservation, not corruption -- so
-    the check is `warn` (operator-burden) rather than `fail`.
+    Mutation: reporting `fail` or `pass` for a preserved source, or
+        omitting the store from the detail list.
+    Oracle: status 'warn' and the store name in detail['stores'].
     """
-    import os
-
-    from memman.doctor import check_stale_post_migrate_source
-
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'stale_store'
     sdir.mkdir(parents=True, exist_ok=True)
@@ -105,12 +103,12 @@ def test_doctor_warns_on_stale_post_migrate_source(
 
 def test_doctor_passes_when_postgres_store_is_clean(
         tmp_path, env_file):
-    """A store dir with no SQLite artifacts under postgres routing passes.
+    """Verify a store dir with no SQLite artifacts under postgres passes.
+
+    Mutation: warning on every postgres-routed store directory whether
+        or not `memman.db` remains.
+    Oracle: status 'pass' for a directory holding no `memman.db`.
     """
-    import os
-
-    from memman.doctor import check_stale_post_migrate_source
-
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'clean_store'
     sdir.mkdir(parents=True, exist_ok=True)
@@ -121,13 +119,12 @@ def test_doctor_passes_when_postgres_store_is_clean(
 
 
 def test_doctor_skips_sqlite_routed_stores(tmp_path, env_file):
-    """A sqlite-routed store with `memman.db` is the source of truth,
-    not a stale artifact -- do not flag.
+    """Verify a sqlite-routed store holding `memman.db` is not flagged.
+
+    Mutation: flagging every `memman.db` regardless of the store's
+        resolved backend, which warns on live sqlite stores.
+    Oracle: status 'pass' with the default backend set to sqlite.
     """
-    import os
-
-    from memman.doctor import check_stale_post_migrate_source
-
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'sqlite_store'
     sdir.mkdir(parents=True, exist_ok=True)
@@ -140,11 +137,11 @@ def test_doctor_skips_sqlite_routed_stores(tmp_path, env_file):
 
 def test_run_all_checks_includes_stale_post_migrate_source(
         tmp_db, tmp_path, env_file):
-    """The check is registered in `run_all_checks` output (data_dir gated).
-    """
-    from memman.doctor import run_all_checks
-    from memman.store.sqlite import SqliteBackend
+    """Verify run_all_checks includes the stale-source check.
 
+    Mutation: leaving the check out of the run_all_checks registry.
+    Oracle: the check name in the output's checks list.
+    """
     backend = SqliteBackend(tmp_db)
     out = run_all_checks(backend, str(tmp_path / 'memman'))
     names = [c['name'] for c in out['checks']]

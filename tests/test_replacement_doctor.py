@@ -10,7 +10,8 @@ from tests.conftest import make_insight
 
 
 def _sql(backend, sqlite_sql, postgres_sql, params=()):
-    """Run one raw statement against whichever backend is under test."""
+    """Run one raw statement against whichever backend is under test.
+    """
     if isinstance(backend, SqliteBackend):
         backend._db._exec(sqlite_sql, params)
     else:
@@ -20,7 +21,8 @@ def _sql(backend, sqlite_sql, postgres_sql, params=()):
 
 
 def _point(backend, row_id, target):
-    """Set `replaced_by` by raw SQL, touching nothing else."""
+    """Set `replaced_by` by raw SQL, touching nothing else.
+    """
     _sql(backend,
          'update insights set replaced_by = ? where id = ?',
          'update {s}.insights set replaced_by = %s where id = %s',
@@ -71,11 +73,10 @@ def test_integrity_fails_on_a_dangling_pointer(backend):
 
 
 def test_integrity_fails_on_a_self_pointer_and_passes_a_join(backend):
-    """Verify a self-pointer fails while two predecessors on one successor pass.
+    """Verify a self-pointer fails and a two-predecessor join passes.
 
     Mutation: treating a join (two predecessors on one successor,
-        which stored rows may hold) as a failure, which the live
-        fleet's own replacement history trips on; or dropping the
+        which stored rows may hold) as a failure; or dropping the
         self-pointer population.
     Oracle: `m-1` and `m-2` both replaced by `m-3` pass every
         population; `s-1` pointing at itself, set by raw SQL, fails

@@ -1,14 +1,15 @@
 """Source-side precondition tests for sqlite -> postgres migration.
 
-Slice 1.2: source SQLite is opened read-only and an empty source
-(zero insights and no fingerprint) is rejected with a clear error
-before any destination work happens.
+The source SQLite is opened read-only, and an empty source (zero
+insights and no fingerprint) is rejected with a clear error before any
+destination work happens.
 """
 
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
+import memman.store.sqlite as sqlite_mod
 import pytest
 from memman.migrate import MigrateError
 from memman.store.db import _BASELINE_SCHEMA
@@ -35,7 +36,7 @@ def _seed_with_fingerprint_only(store_dir: Path, dim: int = 512) -> None:
     try:
         conn.executescript(_BASELINE_SCHEMA)
         conn.execute(
-            'INSERT INTO meta (key, value) VALUES (?, ?)',
+            'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
              '{"provider":"fixture","model":"fixture","dim":'
              + str(dim) + '}'))
@@ -45,7 +46,11 @@ def _seed_with_fingerprint_only(store_dir: Path, dim: int = 512) -> None:
 
 
 def test_migrate_rejects_truly_empty_source(tmp_path):
-    """Source with no insights AND no fingerprint raises MigrateError.
+    """Verify a source with no insights and no fingerprint is rejected.
+
+    Mutation: preflight_source accepting an empty store, so migrate
+        creates an empty destination with no dim to resolve.
+    Oracle: MigrateError matching 'empty' for a baseline-schema store.
     """
     sdir = tmp_path / 'data' / 'empty_store'
     _empty_store(sdir)
@@ -55,7 +60,11 @@ def test_migrate_rejects_truly_empty_source(tmp_path):
 
 
 def test_migrate_opens_source_in_readonly_mode(tmp_path):
-    """`sqlite3.connect` is called with the read-only URI form.
+    """Verify the source is opened with the read-only URI form.
+
+    Mutation: opening the source with a plain writable connect, so
+        migrate can modify or lock the source store.
+    Oracle: a spy on sqlite3.connect recording a `mode=ro` URI call.
     """
     sdir = tmp_path / 'data' / 'ro_check'
     _seed_with_fingerprint_only(sdir)
@@ -67,14 +76,11 @@ def test_migrate_opens_source_in_readonly_mode(tmp_path):
         return real_connect(conn_str, *args, **kwargs)
 
     with patch('sqlite3.connect', side_effect=spy):
-        try:
-            src_mig = SqliteMigrator(str(tmp_path))
-            src_mig.preflight_source('ro_check')
-            src_mig.gather('ro_check')
-        except MigrateError:
-            pass
-        except Exception:
-            pass
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source('ro_check')
+        payload = src_mig.gather('ro_check')
+
+    assert payload.insights == []
 
     assert any('mode=ro' in s and uri for s, uri in seen_uris), (
         f'expected sqlite3.connect to be called with read-only URI;'
@@ -82,7 +88,7 @@ def test_migrate_opens_source_in_readonly_mode(tmp_path):
 
 
 def test_preflight_source_reports_a_store_with_no_schema(tmp_path):
-    """A store that opens but holds no tables fails as `MigrateError`.
+    """Verify a store that opens but holds no tables fails as `MigrateError`.
 
     Mutation: dropping `preflight_source`'s own `sqlite3.Error`
         handler. `_connect_ro` cannot cover this -- the file is a
@@ -102,11 +108,11 @@ def test_preflight_source_reports_a_store_with_no_schema(tmp_path):
 
 
 def test_gather_reports_an_unreadable_store(tmp_path):
-    """A corrupt source store fails as `MigrateError` from `gather` too.
+    """Verify a corrupt source store fails as `MigrateError` from `gather`.
 
-    Mutation: routing `gather` back to a bare `sqlite3.connect`.
+    Mutation: `gather` using a bare `sqlite3.connect`.
         `connect` is lazy, so the failure would land on the first
-        select inside a hundred-line `with` block and escape
+        select inside a long `with` block and escape
         untranslated; `preflight_source` above cannot catch that,
         because `migrate --all` reaches `gather` on stores it already
         preflighted.
@@ -122,7 +128,7 @@ def test_gather_reports_an_unreadable_store(tmp_path):
 
 def test_connect_ro_closes_the_connection_when_the_probe_fails(
         tmp_path, monkeypatch):
-    """A failed migration read leaves no connection behind.
+    """Verify a failed migration read leaves no connection behind.
 
     Mutation: dropping `conn.close()` from `_connect_ro`'s handler.
         `sqlite3.connect` is lazy, so it returns a live handle and the
@@ -134,8 +140,6 @@ def test_connect_ro_closes_the_connection_when_the_probe_fails(
         `DatabaseError` on these bytes instead, so the probe
         discriminates on the type, not on the query succeeding.
     """
-    import memman.store.sqlite as sqlite_mod
-
     captured = []
     real_connect = sqlite_mod.sqlite3.connect
 
@@ -156,11 +160,11 @@ def test_connect_ro_closes_the_connection_when_the_probe_fails(
 
 
 def test_preflight_source_refuses_a_store_mid_swap(tmp_path):
-    """A store with an embed swap in flight is refused before any work.
+    """Verify a store with an embed swap in flight is refused.
 
     Mutation: dropping the swap check from `preflight_source`. The
-        migrators never carried `embed_swap_state`, so a store migrated
-        mid-swap restarted its swap on the target with the cursor
+        migrators do not carry `embed_swap_state`, so a store migrated
+        mid-swap would restart its swap on the target with the cursor
         reset.
     Oracle: `run_swap` leaves `embed_swap_state` set from its first
         backfill batch until cutover clears it, so its presence means a

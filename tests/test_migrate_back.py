@@ -13,19 +13,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
+from memman.cli import cli
+from memman.migrate import MigrateError
+from memman.store.db import open_db, set_meta, store_dir
+from memman.store.model import Insight, format_timestamp
+from memman.store.node import insert_insight
+from memman.store.postgres import PostgresMigrator, _store_schema
+from memman.store.sqlite import SqliteMigrator
 
 psycopg = pytest.importorskip('psycopg')
-
-from click.testing import CliRunner
 
 pytestmark = pytest.mark.postgres
 
 
 def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
-    """Build a minimal SQLite store with one insight + one meta row."""
-    from memman.store.db import open_db, set_meta, store_dir
-    from memman.store.model import Insight
-    from memman.store.node import insert_insight
+    """Build a minimal SQLite store with one insight + one meta row.
+    """
     sdir = store_dir(str(data_dir), store)
     db = open_db(sdir)
     try:
@@ -44,18 +48,18 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
 
 
 def _drop_schema(pg_dsn: str, store: str) -> None:
-    from memman.store.postgres import _store_schema
     schema = _store_schema(store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+            cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
-    """SQLite -> Postgres -> SQLite round-trip preserves row counts."""
-    from memman.store.db import open_db, store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify a sqlite -> postgres -> sqlite round-trip keeps row counts.
+
+    Mutation: the reverse gather or apply drops the insight or the meta rows.
+    Oracle: one seeded insight, counted in the payload and the restored db.
+    """
 
     store = 'rb_round'
     _seed_sqlite_store(tmp_path, store)
@@ -65,13 +69,13 @@ def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         rev_src.preflight_source(store)
         rev_payload = rev_src.gather(store)
         rev_tgt = SqliteMigrator(str(tmp_path))
@@ -92,10 +96,11 @@ def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
 
 
 def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
-    """Insight ids survive the round-trip bit-exact."""
-    from memman.store.db import open_db, store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify an insight id survives the round-trip unchanged.
+
+    Mutation: the reverse apply mints a fresh id instead of copying the id.
+    Oracle: the literal id the seed helper wrote.
+    """
 
     store = 'rb_ids'
     _seed_sqlite_store(tmp_path, store)
@@ -105,13 +110,13 @@ def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         rev_src.preflight_source(store)
         rev_payload = rev_src.gather(store)
         rev_tgt = SqliteMigrator(str(tmp_path))
@@ -130,10 +135,12 @@ def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
 
 
 def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
-    """Round-trip oplog ids match the original sqlite ids via legacy_id."""
-    from memman.store.db import open_db, store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify restored oplog ids equal the original sqlite ids.
+
+    Mutation: the reverse apply numbers oplog rows anew instead of using
+        coalesce(legacy_id, id).
+    Oracle: oplog ids read from the source db before the migration.
+    """
 
     store = 'rb_oplog'
     _seed_sqlite_store(tmp_path, store)
@@ -161,13 +168,13 @@ def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         rev_src.preflight_source(store)
         rev_payload = rev_src.gather(store)
         rev_tgt = SqliteMigrator(str(tmp_path))
@@ -207,9 +214,8 @@ _FIDELITY_ROW = {
 
 
 def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
-    """Write one insight whose every column carries a distinct value."""
-    from memman.store.db import open_db, set_meta, store_dir
-    from memman.store.model import format_timestamp
+    """Write one insight whose every column carries a distinct value.
+    """
     r = _FIDELITY_ROW
     sdir = store_dir(str(data_dir), store)
     db = open_db(sdir)
@@ -240,27 +246,16 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
 
 
 def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
-    """Each insight column survives sqlite -> postgres -> sqlite in place.
-
-    All four migrator halves read and write the `insights` column
-    list POSITIONALLY -- two `select ... r[N]` scans whose trailing
-    optional columns are addressed off a hardcoded base offset, and
-    two `insert` column lists paired with a value tuple by position.
-    Adding or removing one column shifts every later index, and the
-    shifted read still type-checks, so the corruption is silent.
-    Distinct values per column are what make it audible.
+    """Verify each insight column survives sqlite -> postgres -> sqlite.
 
     Mutation: dropping or inserting a column in either migrator's
         `iter_for_swap` select or apply insert without moving the
-        `r[N]` indices and the `idx` base offset with it -- e.g.
+        `r[N]` indices and the `idx` base offset with it, e.g.
         `enrich_attempted_at` landing in `enriched_at`, or a
         timestamp landing in `deleted_at` and soft-deleting the row.
     Oracle: `_FIDELITY_ROW`, hand-written with a different value in
         every column, compared field by field after the round-trip.
     """
-    from memman.store.db import open_db, store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_fidelity'
     _seed_fidelity_store(tmp_path, store)
@@ -270,13 +265,13 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
         src_mig = SqliteMigrator(str(tmp_path))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         rev_src.preflight_source(store)
         rev_payload = rev_src.gather(store)
         rev_tgt = SqliteMigrator(str(tmp_path))
@@ -315,22 +310,27 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
 
 
 def test_migrate_to_sqlite_errors_when_schema_missing(tmp_path, pg_dsn):
-    """Reverse migrate of a non-existent schema raises MigrateError."""
-    from memman.migrate import MigrateError
-    from memman.store.postgres import PostgresMigrator
+    """Verify reverse migrate of a missing postgres schema raises MigrateError.
+
+    Mutation: preflight_source accepts a missing schema.
+    Oracle: MigrateError matching 'does not exist' after the schema is dropped.
+    """
 
     store = 'rb_missing'
     _drop_schema(pg_dsn, store)
-    rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+    rev_src = PostgresMigrator(dsn=pg_dsn)
     with pytest.raises(MigrateError, match='does not exist'):
         rev_src.preflight_source(store)
 
 
 def test_migrate_to_sqlite_errors_when_fingerprint_missing(
         tmp_path, pg_dsn):
-    """Schema without meta.embed_fingerprint raises MigrateError."""
-    from memman.migrate import MigrateError
-    from memman.store.postgres import PostgresMigrator, _store_schema
+    """Verify a schema with no embed_fingerprint row raises MigrateError.
+
+    Mutation: preflight_source skips the fingerprint check, so the migrated
+        store carries no embed fingerprint.
+    Oracle: a hand-built schema whose meta table is empty.
+    """
 
     store = 'rb_nofp'
     schema = _store_schema(store)
@@ -351,7 +351,7 @@ def test_migrate_to_sqlite_errors_when_fingerprint_missing(
                     '  primary key (source_id, target_id, edge_type))')
                 cur.execute(
                     f'create table {schema}.oplog (id bigserial primary key)')
-        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src = PostgresMigrator(dsn=pg_dsn)
         with pytest.raises(MigrateError, match='embed_fingerprint'):
             rev_src.preflight_source(store)
     finally:
@@ -360,11 +360,12 @@ def test_migrate_to_sqlite_errors_when_fingerprint_missing(
 
 def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
         tmp_path, env_file, pg_dsn):
-    """CLI reverse migrate writes dump.pgdump, drops schema, flips env."""
-    from memman.cli import cli
-    from memman.store.db import store_dir
-    from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
+    """Verify the CLI reverse migrate archives, drops the schema, flips env.
+
+    Mutation: the dump is not archived, the schema is not dropped, or the
+        env row keeps pointing at postgres.
+    Oracle: the archive file, a pg_namespace query, and the env file text.
+    """
 
     store = 'rb_cli_full'
     data_dir = tmp_path / 'memman'
@@ -375,7 +376,7 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
         src_mig = SqliteMigrator(str(data_dir))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
@@ -419,11 +420,12 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
 
 def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
         tmp_path, env_file, pg_dsn, monkeypatch):
-    """`shutil.which('pg_dump') is None` -> ClickException with install hint."""
-    from memman.cli import cli
-    from memman.store.db import store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify a reverse migrate without pg_dump fails with an install hint.
+
+    Mutation: the pg_dump gate is dropped, so the migrate runs with no dump.
+    Oracle: shutil.which stubbed to None; output names postgresql-client and
+        no target data dir exists.
+    """
 
     store = 'rb_nopgdump'
     data_dir = tmp_path / 'memman'
@@ -434,7 +436,7 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
         src_mig = SqliteMigrator(str(data_dir))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
@@ -467,22 +469,17 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
 
 def test_migrate_cli_to_postgres_errors_when_pg_dump_missing(
         tmp_path, env_file, pg_dsn, monkeypatch):
-    """Forward (sqlite -> postgres) migrate also requires pg_dump.
+    """Verify a forward migrate also fails at entry without pg_dump.
 
-    Reverse migration is always a possibility after a forward run; the
-    operator must have `pg_dump` available before any postgres-touching
-    migration so a roll-back path exists. The gate fires at command
-    entry, before any DB work or filesystem mutation.
+    Mutation: the pg_dump gate covers only the reverse direction.
+    Oracle: shutil.which stubbed to None; output names postgresql-client.
     """
-    import shutil as _shutil
-
-    from memman.cli import cli
 
     store = 'fwd_nopgdump'
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, store)
 
-    real_which = _shutil.which
+    real_which = shutil.which
 
     def fake_which(name, *args, **kwargs):
         if name == 'pg_dump':
@@ -506,10 +503,11 @@ def test_migrate_cli_to_postgres_errors_when_pg_dump_missing(
 
 def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
         tmp_path, env_file, pg_dsn):
-    """Pre-existing data/<store>/ guards against accidental overwrite."""
-    from memman.cli import cli
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify a reverse migrate refuses to overwrite an existing data/<store>/.
+
+    Mutation: the target-dir guard is dropped, so the existing db is replaced.
+    Oracle: nonzero exit and 'already exists' in the output.
+    """
 
     store = 'rb_target_exists'
     data_dir = tmp_path / 'memman'
@@ -519,7 +517,7 @@ def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
         src_mig = SqliteMigrator(str(data_dir))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
@@ -540,8 +538,11 @@ def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
 
 def test_migrate_cli_to_sqlite_warns_when_already_sqlite(
         tmp_path, env_file, pg_dsn):
-    """`--to sqlite` against a sqlite-routed store warns and exits 0."""
-    from memman.cli import cli
+    """Verify --to sqlite on a sqlite-routed store warns and exits 0.
+
+    Mutation: the routing check is dropped, so the migrate runs or errors.
+    Oracle: exit code 0 and 'already on sqlite' in the output.
+    """
 
     store = 'rb_already_sqlite'
     data_dir = tmp_path / 'memman'
@@ -560,11 +561,11 @@ def test_migrate_cli_to_sqlite_warns_when_already_sqlite(
 
 def test_migrate_cli_to_postgres_warns_when_already_postgres(
         tmp_path, env_file, pg_dsn):
-    """`--to postgres` against a postgres-routed store warns and exits 0."""
-    from memman.cli import cli
-    from memman.store.db import store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify --to postgres on a postgres-routed store warns and exits 0.
+
+    Mutation: the routing check is dropped, so the migrate runs or errors.
+    Oracle: exit code 0 and 'already on postgres' in the output.
+    """
 
     store = 'rb_already_pg'
     data_dir = tmp_path / 'memman'
@@ -575,7 +576,7 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
         src_mig = SqliteMigrator(str(data_dir))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
@@ -597,11 +598,11 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
 
 def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
         tmp_path, env_file, pg_dsn, monkeypatch):
-    """Drop-schema failure logs a warning but completes successfully."""
-    from memman.cli import cli
-    from memman.store.db import store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.sqlite import SqliteMigrator
+    """Verify a schema-drop failure warns and the migrate still succeeds.
+
+    Mutation: the drop exception propagates and aborts after the data moved.
+    Oracle: exit 0, the warning text, the restored db, and the flipped env row.
+    """
 
     store = 'rb_dropfail'
     data_dir = tmp_path / 'memman'
@@ -612,7 +613,7 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
         src_mig = SqliteMigrator(str(data_dir))
         src_mig.preflight_source(store)
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         shutil.rmtree(source)
@@ -644,8 +645,11 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
 
 def test_migrate_to_postgres_explicit_flag_matches_default(
         tmp_path, env_file, pg_dsn):
-    """`--to postgres` is equivalent to default (no flag)."""
-    from memman.cli import cli
+    """Verify --to postgres behaves like the flagless default.
+
+    Mutation: the --to value is ignored or mapped to the wrong direction.
+    Oracle: '(verified)' and the postgres env row in the output.
+    """
 
     store = 'rb_explicit_pg'
     data_dir = tmp_path / 'memman'
@@ -669,7 +673,7 @@ def test_migrate_to_postgres_explicit_flag_matches_default(
 
 def test_postgres_preflight_source_refuses_a_store_mid_swap(
         tmp_path, pg_dsn):
-    """A Postgres store with an embed swap in flight is refused.
+    """Verify a Postgres store with an embed swap in flight is refused.
 
     Mutation: dropping the swap check from the Postgres
         `preflight_source`, so a migrate back to SQLite restarts the
@@ -677,9 +681,6 @@ def test_postgres_preflight_source_refuses_a_store_mid_swap(
     Oracle: `embed_swap_state` set in the schema's meta table, as
         `run_swap` leaves it until cutover.
     """
-    from memman.migrate import MigrateError
-    from memman.store.postgres import PostgresMigrator, _store_schema
-    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_mid_swap'
     _seed_sqlite_store(tmp_path, store)
@@ -687,7 +688,7 @@ def test_postgres_preflight_source_refuses_a_store_mid_swap(
     try:
         src_mig = SqliteMigrator(str(tmp_path))
         payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
         tgt_mig.preflight_target(store)
         tgt_mig.apply(store, payload)
         schema = _store_schema(store)
