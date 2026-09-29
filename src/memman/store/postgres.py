@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from memman import config
 from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
+from memman.embed.swap import swap_remedy
 from memman.exceptions import ConfigError as RuntimeConfigError
 from memman.migrate import Artifact, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
@@ -1754,10 +1755,8 @@ class PostgresMigrator(Migrator):
             if swap_row is not None and swap_row[0]:
                 raise MigrateError(
                     f'store {store!r} has an embed swap in flight'
-                    f' (state={swap_row[0]!r}); run `memman --store'
-                    f' {store} embed swap --resume` to finish it,'
-                    f' or `memman --store {store} embed swap'
-                    f' --abort` to discard it')
+                    f' (state={swap_row[0]!r});'
+                    f' {swap_remedy(store, swap_row[0])}')
 
     def preflight_target(self, store: str) -> None:
         sanitize_identifier(store)

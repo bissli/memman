@@ -182,3 +182,28 @@ def test_preflight_source_refuses_a_store_mid_swap(tmp_path):
         conn.close()
     with pytest.raises(MigrateError, match='embed swap'):
         SqliteMigrator(str(tmp_path)).preflight_source('mid_swap')
+
+
+def test_preflight_source_offers_only_resume_for_a_swap_at_cutover(tmp_path):
+    """Verify a store at swap cutover is pointed at --resume alone.
+
+    Mutation: the refusal offering `--abort` in every swap state, so an
+        operator at cutover follows advice that `abort_swap` refuses.
+    Oracle: `abort_swap` raises at the cutover state, so the one remedy
+        that works there is `--resume`.
+    """
+    sdir = tmp_path / 'data' / 'at_cutover'
+    _seed_with_fingerprint_only(sdir)
+    conn = sqlite3.connect(str(sdir / 'memman.db'))
+    try:
+        conn.execute(
+            'insert into meta (key, value) values (?, ?)',
+            ('embed_swap_state', 'cutover'))
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(MigrateError) as exc:
+        SqliteMigrator(str(tmp_path)).preflight_source('at_cutover')
+
+    assert '--resume' in str(exc.value)
+    assert '--abort' not in str(exc.value)

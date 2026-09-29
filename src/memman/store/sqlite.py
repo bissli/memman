@@ -11,8 +11,10 @@ store's active set by construction.
 """
 
 import contextlib
+import fcntl
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from collections.abc import Iterator
@@ -26,6 +28,7 @@ from urllib.parse import quote
 
 import numpy as np
 from memman.embed.fingerprint import Fingerprint
+from memman.embed.swap import swap_remedy
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.migrate import Artifact, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
@@ -472,9 +475,28 @@ class SqliteBackend(Backend):
 
     @contextmanager
     def swap_lock(self) -> Iterator[bool]:
-        """Yield True: `_require_stopped('swap')` already excludes the drain.
+        """Yield whether this handle holds the store's swap lock.
+
+        An exclusive, non-blocking flock on `swap.lock` beside the
+        store's `memman.db`. The kernel releases it when the holder
+        exits, so a crash leaves no stale lock. `_require_stopped`
+        already excludes the drain; this excludes a second swap or an
+        abort from another shell.
         """
-        yield True
+        path = Path(self._db.path).parent / 'swap.lock'
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def swap_prepare(self, target_dim: int) -> None:
         """No-op: `embedding_pending` is in the baseline schema.
@@ -712,10 +734,8 @@ class SqliteMigrator(Migrator):
         if swap_state and swap_state[0]:
             raise MigrateError(
                 f'sqlite store {store!r} has an embed swap in'
-                f' flight (state={swap_state[0]!r}); run `memman'
-                f' --store {store} embed swap --resume` to finish'
-                f' it, or `memman --store {store} embed swap'
-                f' --abort` to discard it')
+                f' flight (state={swap_state[0]!r});'
+                f' {swap_remedy(store, swap_state[0])}')
 
     def preflight_target(self, store: str) -> None:
         sanitize_identifier(store)

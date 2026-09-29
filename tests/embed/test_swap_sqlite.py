@@ -279,3 +279,35 @@ def test_swap_abort_refuses_once_the_cutover_state_is_recorded(
 
     assert read_progress(swap_backend).state == 'cutover'
     assert stored_fingerprint(swap_backend) == old_fp
+
+
+def test_swap_abort_refuses_while_another_handle_holds_the_lock(
+        swap_backend, tmp_path):
+    """abort_swap refuses while another handle on the store holds the lock.
+
+    Mutation: a SQLite `swap_lock` that always yields True, so an abort
+        from a second shell clears `embedding_pending` under a running
+        swap whose cutover then copies nothing and writes the target
+        fingerprint over the old vectors.
+    Oracle: the pending vector the first handle wrote, still present
+        after the refused abort.
+    """
+    ids = _seed_insights(swap_backend, 2)
+    with swap_backend.transaction():
+        swap_backend._db._exec(
+            'update insights set embedding_pending = ? where id = ?',
+            (serialize_vector([0.5] * 768), ids[0]))
+        swap_backend.meta.set('embed_swap_state', 'backfilling')
+    other_db = open_db(str(tmp_path))
+    try:
+        with swap_backend.swap_lock() as held:
+            assert held is True
+            with pytest.raises(RuntimeError, match='another swap'):
+                abort_swap(SqliteBackend(other_db))
+    finally:
+        other_db.close()
+
+    pending = swap_backend._db._query(
+        'select embedding_pending from insights where id = ?',
+        (ids[0],)).fetchone()
+    assert pending[0] is not None

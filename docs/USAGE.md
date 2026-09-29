@@ -342,6 +342,7 @@ After a failed swap, `embed status` shows its state, and `--resume` or `--abort`
 - It needs a stopped scheduler, except with `--abort`. Recall keeps reading the old vectors while the swap writes new ones into the `embedding_pending` column in batches of `MEMMAN_EMBED_SWAP_BATCH_SIZE` (default 200).
 - On Postgres, the swap first builds an HNSW index on the new column.
 - The final switch, called cutover, replaces the old vectors in one transaction. Returning to the old model requires another full swap.
+- One swap or abort runs per store at a time. A second one, from any shell, refuses while the first holds the store's swap lock.
 - `--resume` continues an interrupted swap from its recorded cursor. `--abort` discards pending vectors and swap state. Once a swap reaches cutover, `--abort` refuses and `--resume` finishes it, because the cutover may already have committed.
 - `--provider` defaults to `MEMMAN_EMBED_PROVIDER`. The swap leaves `MEMMAN_EMBED_PROVIDER` unchanged.
 
@@ -425,7 +426,7 @@ memman migrate --all --yes               # every store, no prompt
 - The DSN for `--to postgres` is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. `--all` needs `MEMMAN_DEFAULT_POSTGRES_DSN`.
 - The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also labels each target schema `[will create]`, `[EMPTY, will recreate]`, or `[POPULATED, will DROP CASCADE and recreate]`. `--to sqlite` refuses a store whose SQLite directory already exists.
 - A store already on the target backend is skipped with a message.
-- A store with an embedding swap in flight is refused. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and `--abort` discards it.
+- A store with an embedding swap in flight is refused. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and before cutover `--abort` discards it.
 - A store whose name is not a valid Postgres identifier is refused, or skipped under `--all`, and the message names a fix, such as a portable name to create and migrate.
 - To reverse the change, migrate in the other direction. `memman doctor` checks the result: its `stale_post_migrate_source` check warns when SQLite files remain in a store that routes to Postgres.
 

@@ -103,6 +103,30 @@ def read_progress(backend: Backend) -> SwapProgress:
         target_dim=dim)
 
 
+def swap_remedy(store: str, state: str) -> str:
+    """The commands that settle an in-flight swap, for an error message.
+
+    Parameters
+    ----------
+    store : str
+        Store name, spliced into each command.
+    state : str
+        Recorded `embed_swap_state`. At `cutover` only `--resume`
+        works, since `abort_swap` refuses there.
+
+    Returns
+    -------
+    str
+        A clause naming `--resume`, and `--abort` before cutover.
+    """
+    resume = f'run `memman --store {store} embed swap --resume` to finish it'
+    if state == STATE_CUTOVER:
+        return resume
+    return (
+        f'{resume}, or `memman --store {store} embed swap --abort`'
+        ' to discard it')
+
+
 def abort_swap(backend: Backend) -> None:
     """Drop `embedding_pending`/null shadow values and clear all swap meta.
 
