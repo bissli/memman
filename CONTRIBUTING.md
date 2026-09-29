@@ -20,11 +20,11 @@ The project uses Poetry. `poetry run <cmd>` runs a command inside the project en
 
 ## Configuration
 
-[USAGE.md](docs/USAGE.md#configuration) describes the env file, the order in which installation uses configuration sources, and `memman config set`. [Variable reference](#variable-reference) lists every variable. Contributors need to know the following:
+[USAGE.md](docs/USAGE.md#configuration) describes the env file, the order in which installation uses configuration sources, and `memman config set`. [Variable reference](#variable-reference) lists every variable. The implementation follows these rules:
 
 - `src/memman/config.py` names every variable as a module constant. `INSTALLABLE_KEYS` lists the settings `memman install` writes to `<data dir>/env`, and `INSTALL_DEFAULTS` holds their defaults.
 - A new setting is one `INSTALLABLE_KEYS` entry, plus an `INSTALL_DEFAULTS` row when it has a default. A secret also goes in `SECRET_VARS`, which `memman uninstall` strips from the env file and `memman config show` redacts.
-- `config.get` has no code default. It reads the env file only and returns `None` for a missing key. `config.require` raises `ConfigError`, which tells the user to run `memman install`.
+- `config.get` has no code default. It reads the env file only and returns `None` for a missing key. `config.require` raises `ConfigError`, whose message directs the user to run `memman install`.
 - Installation copies a missing key from the shell once. It reads the `MEMMAN_` name first, then the vendor name for three keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `OPENAI_API_KEY`). A value already in the file takes precedence.
 - Process variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_AUTHOR`) and tuning variables (`MEMMAN_EMBED_SWAP_BATCH_SIZE`, `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, `MEMMAN_REINDEX_TIMEOUT`) come from `os.environ` and are never written to the env file.
 - `memman doctor` runs `env_completeness`, which warns when the env file lacks an `INSTALLABLE_KEYS` entry, and `optional_extras`, which reports which `memman[...]` extras can be imported. `env_completeness` skips `MEMMAN_LLM_API_KEY`, every provider key (`MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) that neither the configured embed provider nor the reranker reads, the three backup settings, and `MEMMAN_DEFAULT_POSTGRES_DSN` unless the default backend is `postgres`. The reranker reads `MEMMAN_VOYAGE_API_KEY` while reranking is on for any store, and an unset `MEMMAN_RERANK_ENABLED` counts as on.
@@ -42,7 +42,7 @@ A secret is stripped by `memman uninstall`, left out of backups, and redacted by
 | Variable                          | Type      | Default                              | Purpose                                                                                                                                                                                         |
 | --------------------------------- | --------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MEMMAN_LLM_ENDPOINT`             | installed | `https://openrouter.ai/api/v1`       | OpenAI-compatible `/chat/completions` endpoint for enrichment.                                                                                                                                  |
-| `MEMMAN_LLM_API_KEY`              | installed | none                                 | Secret. Bearer token for the endpoint. The wizard accepts a blank key only on a loopback endpoint. On OpenRouter, install copies `MEMMAN_OPENROUTER_API_KEY` into it.                           |
+| `MEMMAN_LLM_API_KEY`              | installed | none                                 | Secret. Bearer token for the endpoint. The wizard accepts a blank key only on a loopback endpoint. On OpenRouter, installation copies `MEMMAN_OPENROUTER_API_KEY` into it.                      |
 | `MEMMAN_LLM_MODEL`                | installed | `qwen/qwen3-235b-a22b-2507`          | Enrichment model. Installation sets the default only on OpenRouter. On any other endpoint the wizard asks for a model ID, and an install without the wizard refuses to finish when none is set. |
 | `MEMMAN_LLM_PROVIDER_ONLY`        | installed | `amazon-bedrock,azure,google-vertex` | OpenRouter only. Comma-separated vendors allowed to serve the model. Empty means any vendor.                                                                                                    |
 | `MEMMAN_LLM_DATA_COLLECTION`      | installed | `deny`                               | OpenRouter only. The `data_collection` routing value.                                                                                                                                           |
@@ -64,17 +64,17 @@ A secret is stripped by `memman uninstall`, left out of backups, and redacted by
 | `MEMMAN_LOG_LEVEL`                | installed | `WARNING`                            | Stderr log level when neither `--verbose` nor `--debug` is given.                                                                                                                               |
 | `MEMMAN_DEFAULT_BACKEND`          | installed | `sqlite`                             | Backend for a store with no `MEMMAN_BACKEND_<store>`. `postgres` needs the `memman[postgres]` extra.                                                                                            |
 | `MEMMAN_DEFAULT_POSTGRES_DSN`     | installed | none                                 | Secret. DSN for a Postgres store with no `MEMMAN_POSTGRES_DSN_<store>`.                                                                                                                         |
-| `MEMMAN_INTERVAL`                 | installed | `60`                                 | Seconds between drains for `memman scheduler serve` without `--interval`.                                                                                                                       |
+| `MEMMAN_INTERVAL`                 | installed | `60`                                 | Seconds between worker runs for `memman scheduler serve` without `--interval`.                                                                                                                  |
 | `MEMMAN_BACKUP_CRON`              | installed | none                                 | Backup schedule, written by `memman backup schedule`.                                                                                                                                           |
 | `MEMMAN_BACKUP_TARGET`            | installed | none                                 | Backup directory, written by `memman backup schedule`.                                                                                                                                          |
 | `MEMMAN_BACKUP_KEEP`              | installed | `7`                                  | Bundles to keep, written by `memman backup schedule --keep`.                                                                                                                                    |
-| `MEMMAN_BACKEND_<store>`          | per store | none                                 | The store's backend. Written by install for `default`, by the first drain, by `memman migrate`, or by `memman config set`.                                                                      |
+| `MEMMAN_BACKEND_<store>`          | per store | none                                 | The store's backend. Written by installation for `default`, by the worker's first run, by `memman migrate`, or by `memman config set`.                                                          |
 | `MEMMAN_POSTGRES_DSN_<store>`     | per store | none                                 | The store's DSN. Redacted by `config show` and left out of backups. `memman uninstall` keeps it.                                                                                                |
 | `MEMMAN_RERANK_ENABLED_<store>`   | per store | none                                 | Enables or disables reranking for one store. Overrides `MEMMAN_RERANK_ENABLED`.                                                                                                                 |
 | `MEMMAN_DATA_DIR`                 | process   | `~/.memman`                          | Data directory containing the env file. `--data-dir` takes precedence.                                                                                                                          |
 | `MEMMAN_STORE`                    | process   | none                                 | Store for this process. `--store` takes precedence.                                                                                                                                             |
 | `MEMMAN_AUTHOR`                   | process   | login name                           | Author recorded when `remember` or `replace` queues a write, preserving the identity of the user who submitted it.                                                                              |
-| `MEMMAN_DEBUG`                    | process   | none                                 | A true value (`1`, `true`, `yes`, `on`) turns the trace on, and any other value turns it off. When unset, the `memman scheduler debug` state in `~/.memman/debug.state` decides.                |
+| `MEMMAN_DEBUG`                    | process   | none                                 | A true value (`1`, `true`, `yes`, `on`) turns the trace on, and any other value turns it off. When unset, the `memman scheduler debug` state in `~/.memman/debug.state` applies.                |
 | `MEMMAN_SCHEDULER_KIND`           | process   | none                                 | `serve` selects serve mode instead of systemd or launchd.                                                                                                                                       |
 | `MEMMAN_WORKER`                   | process   | none                                 | The scheduler unit and `memman scheduler serve` set `1`, which adds the rotating `<data dir>/logs/memman.log`.                                                                                  |
 | `MEMMAN_REINDEX_TIMEOUT`          | process   | `180`                                | Seconds allowed for the Postgres HNSW index build when a store opens. A build that times out is dropped and rebuilt on the next open.                                                           |
@@ -98,8 +98,8 @@ Each database has one baseline schema that defines its current structure:
 There are no incremental migrations, rebuild scripts, or checks for columns missing from older schemas. To change a schema:
 
 1. Update the baseline.
-2. Index the newest column in the baseline. `create table if not exists` skips an existing table, so that index makes an older store fail at open with the error `store <name> predates the current schema`.
-3. Apply the change manually to each live store. Drop each index whose definition changed so the baseline recreates it when the store next opens. The queue database is wiped and recreated instead.
+2. Index the newest column in the baseline. `create table if not exists` skips an existing table, so that index makes an older store fail on open with the error `store <name> predates the current schema`.
+3. Apply the change manually to each live store. Drop each index whose definition changed so the baseline recreates it when the store next opens. The queue database is deleted and recreated instead.
 4. Increment `BACKUP_FORMAT_VERSION` in `src/memman/backup/__init__.py` when a backed-up schema changes. Restore copies the data directly and rejects bundles with a different version.
 5. Include a test that checks the new schema.
 
@@ -109,7 +109,7 @@ There are no incremental migrations, rebuild scripts, or checks for columns miss
 
 - `memman migrate` needs `pg_dump` on the PATH in both directions.
 - Before migration, the command runs `select 1` against Postgres and checks for the `vector` extension and the `CREATE` privilege on the database.
-- The command holds `<data dir>/drain.lock` throughout, so a drain cannot change the source while migration reads it.
+- The command holds `<data dir>/drain.lock` throughout, so a worker run cannot change the source while migration reads it.
 - Before any write, the command classifies each target schema as ABSENT, EMPTY, or POPULATED. It prints the plan with the DSN password masked and asks to proceed. `--yes` skips the question. `--dry-run` works only with `--to postgres`. An EMPTY or POPULATED target schema is dropped and recreated.
 - `--to postgres` copies the SQLite store into `store_<name>` in one transaction (`autocommit=False`). It checks the `insights`, `oplog`, and `meta` row counts, writes `MEMMAN_BACKEND_<store>=postgres` and `MEMMAN_POSTGRES_DSN_<store>`, and then moves `data/<store>/` to `archive/<store>/<YYYYMMDD>_<NN>/`.
 - `--to sqlite` builds the SQLite store in a temporary directory and moves it into `data/<store>/`. It dumps the Postgres schema with `pg_dump -Fc` to `archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump`, writes `MEMMAN_BACKEND_<store>=sqlite`, removes `MEMMAN_POSTGRES_DSN_<store>`, and then drops the schema.
@@ -136,6 +136,6 @@ There are no incremental migrations, rebuild scripts, or checks for columns miss
 
 ## Submitting changes
 
-- No deprecated code and no backward-compatibility shims. A rename deletes the old reader in the same commit.
+- A change carries no deprecated code and no backward-compatibility shims. A rename removes the old reader in the same commit.
 - A new variable gets a constant in `src/memman/config.py`. Call sites import the constant and never repeat the name as a literal.
 - Most commands print JSON through `_json_out`, indented two spaces with sorted keys. `recall` prints one plain line per memory.

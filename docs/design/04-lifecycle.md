@@ -12,11 +12,11 @@ Memories have no expiry date or automatic size cap. A memory stays current until
 | `forget <id>`           | Set `deleted_at`; keep the row.                                                | Exclude the forgotten memory.                  |
 | `store remove <name>`   | Delete the store and its queued writes.                                        | Remove the entire collection.                  |
 
-No command undoes a forget or makes a replaced row current again. A wrong correction is fixed by replacing its successor. `insights show <id> --history` displays the chain; forgotten entries omit their content.
+No command undoes a forget or makes a replaced row current again. Replacing the successor corrects a wrong correction. `insights show <id> --history` displays the chain; forgotten entries omit their content.
 
 `forget` refuses a current memory whose predecessor has not been forgotten. The error directs the caller to `replace` so the correction history remains intact. Both commands require a started scheduler.
 
-The operation log has its own retention rules. Maintenance trims entries older than 180 days (`OPLOG_RETENTION_DAYS`) in stores where a drain completed work. A 5,000-entry cap (`MAX_OPLOG_ENTRIES`) applies when the enrichment pass that follows has work. Neither limit touches a stored memory ([drain maintenance](03-pipelines.md#maintenance-after-each-drain)).
+The operation log has its own retention rules. Maintenance trims entries older than 180 days (`OPLOG_RETENTION_DAYS`) in stores where a drain completed work. A 5,000-entry cap (`MAX_OPLOG_ENTRIES`) applies when the enrichment pass that follows has work. Neither limit affects a stored memory ([drain maintenance](03-pipelines.md#maintenance-after-each-drain)).
 
 ## 4.2 Inspecting memories
 
@@ -46,13 +46,13 @@ The global `MEMMAN_EMBED_PROVIDER` setting serves three purposes:
 
 The diagnostic and maintenance paths for `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` bypass the normal fingerprint initialization check. The related-memory read in `remember` also avoids model clients.
 
-If the store-bound provider lacks credentials, recall falls back to keyword and recency ranking, and the worker fails queued writes that need those credentials. This fallback cannot rescue a command that already failed while building the global provider's client.
+If the store-bound provider lacks credentials, recall falls back to keyword and recency ranking, and the worker fails queued writes that need those credentials. This fallback cannot recover a command that already failed while building the global provider's client.
 
-`embed status` reports the fingerprint, any swap in progress, and whether the fingerprint's provider has credentials. The `embed_fingerprint` check in `doctor` fails when that key is missing, and on a store that holds memories but has no fingerprint, which the drain refuses.
+`embed status` reports the fingerprint, any swap in progress, and whether the fingerprint's provider has credentials. The `embed_fingerprint` check in `doctor` fails when that key is missing, and on a store that holds memories but has no fingerprint. The drain refuses such a store.
 
 ### Supported providers
 
-These are the model defaults shipped with memman:
+memman ships these model defaults:
 
 | Provider     | Default model            | Credential                    | Install wizard      |
 | ------------ | ------------------------ | ----------------------------- | ------------------- |
@@ -61,7 +61,7 @@ These are the model defaults shipped with memman:
 | `openrouter` | `baai/bge-m3`            | `MEMMAN_OPENROUTER_API_KEY`   | Yes                 |
 | `ollama`     | `nomic-embed-text`       | None                          | Configure afterward |
 
-The Voyage default has a known dimension of 512. Other models take an initial embedding probe to learn their dimension. [Provider setup](../USAGE.md#provider-setup) lists endpoints and settings.
+The Voyage default has a known dimension of 512. Other models require an initial embedding probe to determine their dimension. [Provider setup](../USAGE.md#provider-setup) lists endpoints and settings.
 
 ### Vector storage
 
@@ -85,7 +85,7 @@ The worker attempts embedding after enrichment. A handled HTTP or provider runti
 
 ### Changing the embedding model
 
-A configuration change alone leaves an existing store's fingerprint as it was. One of these operations moves it, with the scheduler stopped:
+A configuration change alone leaves an existing store's fingerprint unchanged. One of these operations changes it, with the scheduler stopped:
 
 | Command         | Scope                                   | During the operation                                            |
 | --------------- | --------------------------------------- | --------------------------------------------------------------- |
@@ -96,7 +96,7 @@ The [embedding command reference](../USAGE.md#embedding-operations) gives comple
 
 ### Embedding swap
 
-A swap writes target-model vectors to `embedding_pending`, then switches the store to them. Progress is recorded in `embed_swap_*` metadata in [embed/swap.py](../../src/memman/embed/swap.py).
+A swap writes target-model vectors to `embedding_pending`, then switches the store to them. The swap records its progress in `embed_swap_*` metadata; the implementation is [embed/swap.py](../../src/memman/embed/swap.py).
 
 | State            | Meaning                                                            | Recovery after interruption                    |
 | ---------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
@@ -110,7 +110,7 @@ Postgres builds the pending HNSW index concurrently before backfill and requires
 
 Only current memories receive new vectors. At cutover, Postgres clears vectors on retired memories; SQLite keeps their old vectors. A swap to the current fingerprint does nothing. Returning to an earlier model requires another swap.
 
-`--abort` discards pending vectors and swap metadata and does not require a stopped scheduler. It refuses a swap in the `cutover` state, because the cutover may have committed before a crash, and clearing the metadata then would leave the old fingerprint over the new vectors. `--resume` finishes such a swap: on Postgres, a schema with no `embedding_pending` column counts as cut over, and on SQLite the copy touches only rows whose pending vector is set. `doctor` reports leftover swap metadata through `no_stale_swap_meta` until the swap completes or is aborted.
+`--abort` discards pending vectors and swap metadata and does not require a stopped scheduler. It refuses a swap in the `cutover` state, because the cutover may have committed before a crash, and clearing the metadata then would leave the old fingerprint recorded against the new vectors. `--resume` finishes such a swap: on Postgres, a schema with no `embedding_pending` column counts as cut over, and on SQLite the copy touches only rows whose pending vector is set. `doctor` reports leftover swap metadata through `no_stale_swap_meta` until the swap completes or is aborted.
 
 ### In-place re-embedding
 

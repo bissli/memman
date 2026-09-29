@@ -4,7 +4,7 @@
 
 ## 3.1 The turn and the background worker
 
-The agent waits for CLI commands during its turn. A separate worker processes queued writes. A **drain** is one worker run, scheduled every 60 seconds by default.
+The agent runs CLI commands during its turn and waits for each to return. A separate worker processes queued writes. A **drain** is one worker run, scheduled every 60 seconds by default.
 
 | Operation                               | Runs in      | Model work                               |
 | --------------------------------------- | ------------ | ---------------------------------------- |
@@ -24,11 +24,11 @@ Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drai
 
 ![Write submission, background processing, and storage](../diagrams/04-remember-pipeline.drawio.png)
 
-### Queue the write
+### Write queuing
 
 `remember` performs these steps before returning:
 
-1. Check that writes are enabled, then validate the text and category against the [input rules](../USAGE.md#what-remember-and-replace-refuse).
+1. Check that writes are enabled, then validate the text and category against the [input rules](../USAGE.md#rejected-input).
 2. Identify potentially temporary information and report it as advisory `quality_warnings`.
 3. Append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity.
 4. Look for up to three related current memories. This uses word overlap and calls no model.
@@ -40,13 +40,13 @@ The UUID returned as `id` becomes the memory's persistent ID. The numeric `queue
 
 `replace` also queues a write, with a `replaced_id`, and inherits the target's category unless `--cat` is supplied. It accepts a current memory or a queued write in the same store. It rejects forgotten or replaced targets and targets with a replacement already queued. Its response includes `replaced_id` instead of `related`.
 
-### Process the write
+### Write processing
 
 A systemd timer or launchd agent runs the hidden `scheduler drain` command, and the serve loop runs the same drain inside its own process. An exclusive file lock on `<data dir>/drain.lock` prevents overlapping drains; the operating system releases it if the process exits. A drain that cannot acquire the lock reports `skipped`.
 
 Each drain processes up to 100 entries by default, stopping when it reaches its limit or timeout, empties the queue, or sees the stopped state.
 
-1. **Claim an entry.** An atomic update claims the oldest eligible pending write and increments its attempt count. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no entry. A replacement waits for its pending target and for earlier replacements in the same store, so replacements land in queue order. A write that fails or goes stale stops holding the entries behind it.
+1. **Claim an entry.** An atomic update claims the oldest eligible pending write and increments its attempt count. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no entry. A replacement waits for its pending target and for earlier replacements in the same store, so the worker stores replacements in queue order. A write that fails or goes stale no longer blocks the entries behind it.
 2. **Open the store.** Resolve its backend and embedding fingerprint. Before each write, check that the fingerprint still matches the cached client, because a swap that finishes mid-drain would leave that client writing vectors of the wrong size.
 3. **Check for a completed attempt.** If any memory already carries the entry's `queue_uuid`, mark the entry done without inserting again. Retired memories count too. The UUID identifies the write across retries, since a backup restore can reset the queue's row id counter.
 4. **Resolve a replacement.** Follow an existing replacement chain to its current successor when necessary, recording `redirected_from`.
@@ -58,11 +58,11 @@ A replacement always creates a new memory with its own content, author, timestam
 
 ### Failure and retry
 
-| Failure                                                                                                                | Outcome                                                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Store cannot open; required configuration or embedding credentials are missing; fingerprint changes; transaction fails | Retry the queued write.                                                                                                      |
-| LLM request or a handled embedding HTTP/runtime error persists after client retries                                    | Save the memory with incomplete generated fields.                                                                            |
-| Neither enrichment response contains a JSON object                                                                     | Save an empty summary. With a saved vector, this counts as completed enrichment, so later drains do not bill the call again. |
+| Failure                                                                                                                | Outcome                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Store cannot open; required configuration or embedding credentials are missing; fingerprint changes; transaction fails | Retry the queued write.                                                                                                       |
+| LLM request or a handled embedding HTTP/runtime error persists after client retries                                    | Save the memory with incomplete generated fields.                                                                             |
+| Neither enrichment response contains a JSON object                                                                     | Save an empty summary. With a saved vector, this counts as completed enrichment, so later drains do not repeat the paid call. |
 
 Queue retries wait 60, 120, 240, and 480 seconds. After five failed attempts, the entry stays `failed` until an explicit retry ([queue commands](../USAGE.md#queue)).
 
@@ -109,7 +109,7 @@ On OpenRouter, the client adds attribution headers and provider routing:
 
 No eligible provider means the request fails. An empty provider list removes the `only` restriction. Other endpoints receive neither OpenRouter headers nor routing fields.
 
-The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints require an explicit model ID, because the shipped id is an OpenRouter id that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
+The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints require an explicit model ID, because the installed default is an OpenRouter model ID that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
 
 ### Daily model check
 
@@ -120,7 +120,7 @@ For OpenRouter, installation and the worker check public catalogs without an API
 
 The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). A model change therefore triggers a check on the next drain. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.
 
-The check never selects a replacement model. If enrichment requests fail, memories are still stored, without summaries, and re-enrichment fills them in once a working model is set.
+The check never selects a replacement model. If enrichment requests fail, the worker still stores the memories without summaries, and re-enrichment supplies the summaries once a working model is set.
 
 ### Token accounting
 
@@ -138,7 +138,7 @@ Recall considers current memories only. The [command reference](../USAGE.md#reca
 
 `--basic` bypasses scoring. Every whitespace-separated query word must appear as a substring of the content. Matching is case-insensitive, limited to ASCII case folding on SQLite. Results are newest first.
 
-This path skips query embedding and reranking, but normal store-opening checks still run, so it can still need a key and a network call.
+This path skips query embedding and reranking, but normal store-opening checks still run, so the command can still require an API key and a network call.
 
 ### Candidate selection
 
@@ -154,7 +154,7 @@ The union of these lists forms the candidate set, with no further cap. The vecto
 
 Keyword tokenization lowercases text, splits outside `[a-zA-Z0-9]`, and removes stopwords. SQLite uses an FTS5 probe per term; Postgres counts intersections with `kw_tokens`. Non-ASCII text can yield different counts because FTS5 tokenizes it differently.
 
-SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails if an absolute floor returns.
+SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine threshold means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails if an absolute floor is reintroduced.
 
 ### Combined scoring
 
@@ -189,7 +189,7 @@ Reranking changes what the blend weights decide:
 - With 100 or fewer candidates, the reranker rescores all of them, and the weights have no effect on the final order.
 - With more than 100, the weights decide which candidates reach the reranker.
 
-A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place, and relevance order stays because a date sort would make the results read as a timeline. Each line prints `created_at` for a reader who needs dates. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
+A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
 
 ### Recall trace events
 
@@ -199,7 +199,7 @@ Only the drain and serve loop attach the trace file handler. A standalone recall
 
 ## 3.5 Handling model changes
 
-Prompts, models, and providers change. memman does not aim for identical output across versions. It records the inputs behind each summary and vector, so an operator can rebuild only the affected fields. It applies no fixed similarity cutoff, which would tie the code to one model's behavior.
+Prompts, models, and providers change over time. memman does not aim for identical output across versions. It records the inputs behind each summary and vector, so an operator can rebuild only the affected fields. It applies no fixed similarity cutoff, because a cutoff would tie the code to one model's behavior.
 
 | Record                                      | Detects                                 | Check or recovery                                           |
 | ------------------------------------------- | --------------------------------------- | ----------------------------------------------------------- |

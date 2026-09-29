@@ -16,7 +16,7 @@ This guide explains the implementation and the reasons behind it. The [usage gui
 
 The chapters build on each other in order, and each links to the command reference.
 
-## Terms used here
+## Terminology
 
 | Term                  | Meaning                                                                         |
 | --------------------- | ------------------------------------------------------------------------------- |

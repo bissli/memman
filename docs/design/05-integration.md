@@ -16,10 +16,10 @@ memman supplies hooks, a short session guide, and a skill manual. Together they 
 
 The guide stays short for two reasons:
 
-- **Silent truncation.** Claude Code cuts hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error, so the agent acts on an instruction cut mid-sentence.
-- **Cost.** Every injected byte bills on every later request in the session.
+- **Silent truncation.** Claude Code truncates hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error, so the agent acts on an instruction cut mid-sentence.
+- **Cost.** Every injected byte adds to the cost of every later request in the session.
 
-`tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output on a fresh data directory reaches 10,000 bytes or loses the recall, remember, or replace command. The model notice and the compaction line add to that payload in a live session. The skill carries the depth and loads on demand.
+`tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output on a fresh data directory reaches 10,000 bytes or loses the recall, remember, or replace command. The model notice and the compaction line add to that payload in a live session. The skill holds the detailed guidance and loads on demand.
 
 ## 5.2 Hook details
 
@@ -52,13 +52,13 @@ The delegation reminder concerns the **next** delegation because the current too
 
 ### Compaction
 
-Claude Code drops `PreCompact` stdout, so the reminder rides on the session-start event that follows. `compact.sh` records the trigger and UTC timestamp in `~/.memman/compact/<session_id>.json`. When the next session-start event has `source: compact`, prime prints a recall reminder with that trigger, defaulting to `auto`:
+Claude Code discards `PreCompact` stdout, so the session-start event that follows carries the reminder. `compact.sh` records the trigger and UTC timestamp in `~/.memman/compact/<session_id>.json`. When the next session-start event has `source: compact`, prime prints a recall reminder with that trigger, defaulting to `auto`:
 
 ```text
 [memman] Context was just compacted (auto). Recall critical context now: memman recall "<topic>"
 ```
 
-The event source determines whether the reminder appears; it still appears if the flag file is missing. The flag directory remains under `~/.memman`, regardless of `MEMMAN_DATA_DIR`.
+The event source determines whether the reminder appears. The reminder still appears if the flag file is missing. The flag directory remains under `~/.memman`, regardless of `MEMMAN_DATA_DIR`.
 
 ## 5.3 Automated setup
 
@@ -79,12 +79,12 @@ Installation replaces existing hook entries mentioning memman and preserves othe
 
 Package upgrades refresh the scripts, skill, and guide. Registration changes, scheduler-unit changes, and new installed defaults require another `memman install`. `doctor` checks hook registrations and missing scripts.
 
-`memman uninstall` removes integration and scheduler setup while retaining stores, queue, and logs. The [usage guide](../USAGE.md#install-and-uninstall) owns the full installation flags, wizard steps, and settings-removal details.
+`memman uninstall` removes integration and scheduler setup while retaining stores, queue, and logs. The [usage guide](../USAGE.md#install-and-uninstall) documents the full installation flags, wizard steps, and settings-removal details.
 
 ## 5.4 Direct memory commands
 
 The packaged skill instructs the agent to run `remember` directly through Bash during its own turn. Submission validates and queues the memory, then reads related memories without calling a model. The agent already has the context needed to write a self-contained claim and decide whether a related memory needs correction.
 
-The worker handles summary generation and embedding later. Delegating submission would add another handoff without moving that background work out of the turn.
+The worker handles summary generation and embedding later. Delegating submission to a subagent would add a handoff without removing any work from the turn, because the model work already runs in the worker.
 
-The guide and skill are package assets, so a customization edits the package source. An editable installation uses those edits at once. A change to a hook registration still requires `memman install`.
+The guide and skill are package assets, so customizing them means editing the package source. An editable installation picks up those edits immediately. A change to a hook registration still requires `memman install`.

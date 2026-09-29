@@ -1,10 +1,10 @@
-## What
+## Summary
 
-Summary of the change.
+A description of the change.
 
-## Why
+## Motivation
 
-The motivation, with a link to any related issue.
+The reason for the change, with a link to any related issue.
 
 ## Checklist
 

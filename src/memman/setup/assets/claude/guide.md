@@ -39,14 +39,14 @@ restates every claim of the old row still true.
     memman replace <id> "<corrected text>"
 
 The id is on a recall page or is the `id` an earlier write printed,
-even one still queued. With neither in hand, recall the topic first.
+even one still queued. Without either, recall the topic first.
 
 `remember` replies with `related`, rows sharing the most words with
-the new text. The agent acts only on one with a sentence now false:
+the new text. The agent acts only on a row with a sentence now false:
 the new row is already queued, so `memman forget <id>` retires that
 row when the new row holds all its still-true claims, else `replace`
 it with only those claims. When every listed row is stale, the agent
-recalls the topic: the list stops at three.
+recalls the topic: at most three are listed.
 
 memman refuses text over 1,000 bytes and says why. A behavioral rule
 ("always", "never") goes to the project CLAUDE.md `## Directives`

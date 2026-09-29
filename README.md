@@ -20,11 +20,11 @@ memman install
 
 In a terminal, `memman install` runs a wizard that configures the providers, saves every setting in `~/.memman/env`, and installs a background worker. When it detects Claude Code, it also installs the hooks and the agent's instructions. A new Claude Code session loads them.
 
-The worker runs as a systemd timer on Linux or a launchd agent on macOS. A host with neither sets `MEMMAN_SCHEDULER_KIND=serve` and runs `memman scheduler serve`. [Installation](docs/USAGE.md#install-and-uninstall) covers headless installs and the optional Postgres backend, and [Provider setup](docs/USAGE.md#provider-setup) covers other providers.
+The worker runs as a systemd timer on Linux or a launchd agent on macOS. On a host with neither, the operator sets `MEMMAN_SCHEDULER_KIND=serve` and runs `memman scheduler serve`. [Installation](docs/USAGE.md#install-and-uninstall) covers headless installs and the optional Postgres backend, and [Provider setup](docs/USAGE.md#provider-setup) covers other providers.
 
-## Use it
+## Usage
 
-The agent runs these commands through Bash, and they work the same from a shell:
+The agent runs these commands through its Bash tool. They behave the same in an interactive shell:
 
 ```bash
 memman remember "The billing service retries failed requests at most three times." --cat decision
@@ -32,7 +32,7 @@ memman remember "The billing service retries failed requests at most three times
 memman recall "billing service retry limit"
 ```
 
-`remember` prints the memory's id at once, and recall finds the memory once the worker stores it. An id from `remember` or `recall` inspects or corrects a memory:
+`remember` prints the memory id immediately. `recall` returns the memory after the worker has stored it. The inspection and correction commands take the id that `remember` or `recall` prints:
 
 ```bash
 memman insights show <id>
@@ -55,24 +55,24 @@ Each memory holds one self-contained claim, on one line, within 1,000 UTF-8 byte
 ## How it works
 
 1. **The agent decides.** Five lifecycle hooks remind the agent to recall context and to save its conclusions. The agent runs every memory command itself. No hook writes a memory.
-2. **Writes enter a queue.** `remember` and `replace` queue the text, and neither waits on a model. A background worker adds a short summary, creates an embedding, and stores the memory. The text is stored as written.
-3. **Recall searches stored memories.** It fuses keyword matches, vector similarity, and recency, then reranks the best candidates. `recall --basic` matches words in the text instead.
+2. **Writes enter a queue.** `remember` and `replace` queue the text and return without waiting for a model response. A background worker adds a short summary, creates an embedding, and stores the memory. The text is stored as written.
+3. **Recall searches stored memories.** It combines keyword matches, vector similarity, and recency, then reranks the best candidates. `recall --basic` matches words in the text instead.
 
 A memory stays until the agent replaces or forgets it, and nothing expires on its own. A replaced memory leaves recall, and `insights show --history` still lists it. A forgotten memory leaves recall too.
 
 The [design guide](docs/DESIGN.md) explains the architecture and the reasons behind it.
 
-## Keep projects separate
+## Separate stores
 
 Named stores hold separate sets of memories:
 
 ```bash
 memman store create work
-memman --store work recall "deployment decisions"  # one command
-memman store use work                             # the shared default
+memman --store work recall "deployment decisions"  # for one command
+memman store use work                             # the default for every process
 ```
 
-`MEMMAN_STORE=work` in a process's environment selects the store for that process, so two agent sessions on one host can use different stores. The `--store` flag wins over `MEMMAN_STORE`, which wins over the shared default. [Store management](docs/USAGE.md#store-management) covers per-directory selection and moving a store between SQLite and Postgres.
+`MEMMAN_STORE=work` in a process's environment selects the store for that process, so two agent sessions on one host can use different stores. `--store` takes precedence over `MEMMAN_STORE`, and `MEMMAN_STORE` takes precedence over the default set by `memman store use`. [Store management](docs/USAGE.md#store-management) covers per-directory selection and moving a store between SQLite and Postgres.
 
 ## Cost
 
@@ -91,9 +91,9 @@ The figures rest on these assumptions:
 - **Embeddings.** Memories of 150 - 250 tokens and short queries, at $0.02 per million tokens ([Voyage pricing](https://docs.voyageai.com/docs/pricing)).
 - **Reranking.** Up to 100 candidates per recall, 150 - 250 tokens per query and memory pair, at $0.02 per million tokens. A query of two words or fewer skips reranking.
 
-Longer memories, retries, and other providers change the total. memman bills its own API keys, and a Claude Pro or Max subscription does not cover them. [Provider setup](docs/USAGE.md#provider-setup) lists the key each step uses and turns reranking off.
+Longer memories, retries, and other providers change the total. memman calls the providers with its own API keys, and a Claude Pro or Max subscription does not cover those charges. [Provider setup](docs/USAGE.md#provider-setup) lists the key each step uses and explains how to turn reranking off.
 
-## Operate and update
+## Operations and upgrades
 
 ```bash
 memman status                  # memory counts for the selected store
@@ -101,9 +101,9 @@ memman scheduler status        # worker state and last run
 memman doctor --text           # health checks, including live provider probes
 ```
 
-[The usage guide](docs/USAGE.md) covers backups, failed writes, model changes, and configuration. A stopped scheduler refuses `remember`, `replace`, and `forget`, and recall keeps working.
+[The usage guide](docs/USAGE.md) covers backups, failed writes, model changes, and configuration. While the scheduler is stopped, memman refuses `remember`, `replace`, and `forget`. `recall` continues to work.
 
-An upgrade refreshes the installed hooks, scheduler unit, and settings when `memman install` runs after it:
+After a package upgrade, `memman install` refreshes the installed hooks, scheduler unit, and settings:
 
 ```bash
 pipx upgrade memman
@@ -117,7 +117,7 @@ memman uninstall
 pipx uninstall memman
 ```
 
-Uninstall keeps the stored memories, the queue, and the logs. [Uninstall](docs/USAGE.md#uninstall) lists the settings it removes.
+`memman uninstall` keeps the stored memories, the queue, and the logs. [Uninstall](docs/USAGE.md#uninstall) lists the settings it removes.
 
 ## Documentation
 

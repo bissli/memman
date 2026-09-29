@@ -16,7 +16,7 @@ A memory is one saved claim. The CLI and database call it an **insight**. The ca
 | `summary`    | Optional display text from enrichment. Search uses the original content.                                                                       |
 | `created_at` | Time the worker stored the memory.                                                                                                             |
 
-Every command that takes an id accepts an unambiguous prefix, such as the eight characters recall prints. The numeric `queue_id` names the queue entry, which maintenance deletes soon after the drain stores the memory. The `id` outlives it.
+Every command that takes an id accepts an unambiguous prefix, such as the eight-character prefix that recall prints. The numeric `queue_id` identifies the queue entry, which maintenance deletes shortly after the drain stores the memory. The `id` remains valid after the queue entry is gone.
 
 | Category     | Example                                                   |
 | ------------ | --------------------------------------------------------- |
@@ -26,7 +26,7 @@ Every command that takes an id accepts an unambiguous prefix, such as the eight 
 | `insight`    | "The flaky test fails only when the cache is cold."       |
 | `context`    | "The billing service deploys to AWS ECS."                 |
 
-[Input rules](../USAGE.md#what-remember-and-replace-refuse) lists what the text must pass.
+[Input rules](../USAGE.md#rejected-input) lists the checks the text must pass.
 
 ## 2.2 Database schema
 
@@ -99,11 +99,11 @@ SQLite's FTS5 index covers all memory content and is maintained by triggers. Sea
 
 Both backends index category, creation time, deletion time, queue UUID, and oplog time. Composite indexes support pending enrichment and current-memory listings. Postgres creates a missing HNSW index when opening a store for reading and writing.
 
-`replaced_by` has no foreign key. The worker sets the pointer before it inserts the successor, and the migrators copy rows in id order, so a pointer can name a row not yet inserted. `memman doctor` checks the chain through `replacement_integrity`.
+`replaced_by` has no foreign key. The worker sets the pointer before it inserts the successor, and the migrators copy rows in id order, so a pointer may refer to a row that has not yet been inserted. `memman doctor` checks the chain through its `replacement_integrity` check.
 
 ### Schema sources
 
-The executable schemas live in the source:
+The executable schemas are in the source tree:
 
 - [SQLite baseline and FTS](../../src/memman/store/db.py)
 - [Postgres baseline](../../src/memman/store/postgres.py)
@@ -134,16 +134,16 @@ Generated fields carry markers for later maintenance:
 
 ![CLI, worker, search, providers, and storage](../diagrams/02-system-architecture.drawio.png)
 
-| Area        | Main modules                                                                                                                      | Responsibility                                                                               |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Integration | `setup/`, `setup/assets/claude/`                                                                                                  | Installation, hooks, guide, and skill.                                                       |
-| Commands    | `cli.py`, `session.py`, `config.py`                                                                                               | CLI entry points, store sessions, and settings.                                              |
-| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
-| Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                           |
-| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                        |
-| Storage     | `store/`, `migrate/`, `backup/`                                                                                                   | Backend interface, SQLite and Postgres, migration, and snapshots.                            |
-| Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                              |
-| Scripts     | `scripts/enrich_stale.py`                                                                                                         | `enrich --stale-only` over many stores.                                                      |
+| Area        | Main modules                                                                                                                      | Responsibility                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Integration | `setup/`, `setup/assets/claude/`                                                                                                  | Installation, hooks, guide, and skill.                                                              |
+| Commands    | `cli.py`, `session.py`, `config.py`                                                                                               | CLI entry points, store sessions, and settings.                                                     |
+| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
+| Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                                  |
+| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                               |
+| Storage     | `store/`, `migrate/`, `backup/`                                                                                                   | Backend interface, SQLite and Postgres, migration, and snapshots.                                   |
+| Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                                     |
+| Scripts     | `scripts/enrich_stale.py`                                                                                                         | `enrich --stale-only` over many stores.                                                             |
 
 The `Backend` protocol in [store/backend.py](../../src/memman/store/backend.py) separates pipelines from database details. The shared queue and scheduler coordinate writes across stores.
 
@@ -179,13 +179,13 @@ The default data directory is `~/.memman`:
         +-- memman.db
 ```
 
-`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. These paths move with it: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, `logs/memman.log`, and `logs/calls.log`.
+`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. The following paths follow the data directory: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, `logs/memman.log`, and `logs/calls.log`.
 
 These paths stay under `~/.memman` regardless of the data directory:
 
 - The four state files: `scheduler.state`, `scheduler.serve_interval`, `debug.state`, and `backup.state`.
 - `compact/`, `bin/`, and `logs/debug.log`.
-- The four files that receive scheduler output, `logs/enrich.{log,err}` and `logs/backup.{log,err}`. The systemd units write to `%h/.memman/logs`, and the launchd wrappers hold the absolute home path from install time, so neither uses the data directory setting.
+- The four files that receive scheduler output, `logs/enrich.{log,err}` and `logs/backup.{log,err}`. The systemd units write to `%h/.memman/logs`, and the launchd wrappers record the absolute home path at install time, so neither reads the data directory setting.
 
 `memman scheduler status` prints the log paths. `memman log worker --stack` reads the rotated worker log together with its backups.
 
@@ -193,7 +193,7 @@ A Postgres-backed store keeps its rows in its `store_<name>` schema. The write q
 
 ## 2.5 Store isolation
 
-A named store isolates memories and its operation log. Stores in one data directory share settings and a write queue; each drain can serve all of them. Each store can use its own backend and embedding model.
+A named store isolates its memories and its operation log. Stores in one data directory share settings and a write queue, and one drain can serve all of them. Each store can use its own backend and embedding model.
 
 Store selection follows this order:
 

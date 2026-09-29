@@ -7,11 +7,11 @@ assignees: ''
 ---
 
 **Bug description**
-What goes wrong.
+A description of the problem.
 
-**To reproduce**
+**Steps to reproduce**
 1. Run `memman ...`
-2. See the error
+2. Observe the error
 
 **Expected behavior**
 The behavior expected instead.
