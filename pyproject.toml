@@ -9,44 +9,44 @@ homepage = "https://github.com/bissli/memman"
 repository = "https://github.com/bissli/memman"
 documentation = "https://github.com/bissli/memman/blob/master/docs/DESIGN.md"
 keywords = [
-    "ai",
-    "ai-agents",
-    "agent-memory",
-    "agents",
-    "llm",
-    "memory",
-    "long-term-memory",
-    "rag",
-    "embeddings",
-    "vector-search",
-    "semantic-search",
-    "claude",
-    "claude-code",
-    "anthropic",
-    "openai",
-    "pgvector",
-    ]
+  "ai",
+  "ai-agents",
+  "agent-memory",
+  "agents",
+  "llm",
+  "memory",
+  "long-term-memory",
+  "rag",
+  "embeddings",
+  "vector-search",
+  "semantic-search",
+  "claude",
+  "claude-code",
+  "anthropic",
+  "openai",
+  "pgvector",
+]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
-    "Environment :: Console",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Database",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Scientific/Engineering :: Information Analysis",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Text Processing :: Indexing",
-    "Typing :: Typed",
-    ]
-packages = [{include = "memman", from = "src"}, {include = "scripts"}]
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Text Processing :: Indexing",
+  "Typing :: Typed",
+]
+packages = [{ include = "memman", from = "src" }, { include = "scripts" }]
 include = ["src/memman/setup/assets/**/*"]
 
 [tool.poetry.scripts]
@@ -58,9 +58,9 @@ click = "^8.1"
 httpx = "^0.27"
 numpy = ">=1.26,<3"
 tqdm = "^4.66"
-psycopg = {version = ">=3.2,<4", extras = ["binary"], optional = true}
-psycopg-pool = {version = ">=3.2,<4", optional = true}
-pgvector = {version = ">=0.3,<0.6", optional = true}
+psycopg = { version = ">=3.2,<4", extras = ["binary"], optional = true }
+psycopg-pool = { version = ">=3.2,<4", optional = true }
+pgvector = { version = ">=0.3,<0.6", optional = true }
 
 [tool.poetry.extras]
 postgres = ["psycopg", "psycopg-pool", "pgvector"]
@@ -80,16 +80,29 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = [
+  "*.egg",
+  ".*",
+  "_darcs",
+  "build",
+  "CVS",
+  "dist",
+  "node_modules",
+  "venv",
+  "{arch}",
+  "e2e",
+  "experiments",
+]
 markers = [
-    "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
-    "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
-    "no_mock_catalog: skip the autouse OpenRouter catalog stub; the test drives the real model-check fetch",
-    "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as enrich that require a stopped drain",
-    "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
-    "no_auto_drain: skip the autouse post-write drain wrapper; tests inspect pre-drain queue state",
-    "no_default_env: skip the autouse env-file seed; config.get returns None for unset keys",
-    "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
-    "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
-    "requires_live_keys: tests requiring real MEMMAN_OPENROUTER_API_KEY + MEMMAN_VOYAGE_API_KEY; fail loud under MEMMAN_E2E_REQUIRE_LIVE=1",
-    "postgres: tests requiring the pgvector testcontainer (install via memman[postgres])",
+  "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
+  "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
+  "no_mock_catalog: skip the autouse OpenRouter catalog stub; the test drives the real model-check fetch",
+  "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as enrich that require a stopped drain",
+  "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
+  "no_auto_drain: skip the autouse post-write drain wrapper; tests inspect pre-drain queue state",
+  "no_default_env: skip the autouse env-file seed; config.get returns None for unset keys",
+  "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
+  "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
+  "requires_live_keys: tests requiring real MEMMAN_OPENROUTER_API_KEY + MEMMAN_VOYAGE_API_KEY; fail loud under MEMMAN_E2E_REQUIRE_LIVE=1",
+  "postgres: tests requiring the pgvector testcontainer (install via memman[postgres])",
 ]
