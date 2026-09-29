@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from memman import config
+from memman.setup.scheduler import get_debug
 
 TRACE_FILENAME = 'debug.log'
 LOG_DIR_NAME = 'logs'
@@ -41,7 +42,7 @@ REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
 REDACT_VALUE = '***REDACTED***'
 
 _DSN_PASSWORD_RE = re.compile(
-    r'(?P<scheme>[a-z][a-z0-9+.-]*://[^:@/\s]+):[^@/\s]+@')
+    r'(?P<scheme>[a-z][a-z0-9+.-]*://[^:@/\s]+):[^/\s]+@')
 
 
 def redact_dsn(value: str) -> str:
@@ -66,7 +67,6 @@ def is_enabled() -> bool:
     raw = os.environ.get(config.DEBUG)
     if raw is not None and raw != '':
         return raw.strip().lower() in config.TRUTHY
-    from memman.setup.scheduler import get_debug
     return get_debug()
 
 

@@ -17,7 +17,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from memman import trace
+from memman import _http, trace
+from memman.llm import client as llm_client_mod
+from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient
 
 
@@ -50,7 +52,11 @@ def _reset_trace_state():
 
 
 def test_is_enabled_reads_env_var(fake_home, monkeypatch):
-    """is_enabled() is True when MEMMAN_DEBUG is truthy, False otherwise.
+    """Verify is_enabled() follows MEMMAN_DEBUG when it is set.
+
+    Mutation: treating any non-empty value as on, so '0' enables tracing, or
+        ignoring the variable.
+    Oracle: hand-picked values: unset, '1', 'true' and '0'.
     """
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     assert trace.is_enabled() is False
@@ -63,7 +69,10 @@ def test_is_enabled_reads_env_var(fake_home, monkeypatch):
 
 
 def test_is_enabled_reads_state_file_when_env_unset(fake_home, monkeypatch):
-    """With MEMMAN_DEBUG unset, is_enabled() falls back to ~/.memman/debug.state.
+    """Verify is_enabled() falls back to debug.state when the env var is unset.
+
+    Mutation: ignoring debug.state, or reading 'off' as on.
+    Oracle: a state file written by hand with 'on', then 'off'.
     """
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     state_path = fake_home / '.memman' / 'debug.state'
@@ -77,7 +86,11 @@ def test_is_enabled_reads_state_file_when_env_unset(fake_home, monkeypatch):
 
 
 def test_env_var_overrides_state_file(fake_home, monkeypatch):
-    """Truthy MEMMAN_DEBUG wins over an 'off' state file.
+    """Verify a truthy MEMMAN_DEBUG wins over an 'off' state file.
+
+    Mutation: reading debug.state before the env var, so an 'off' file disables
+        MEMMAN_DEBUG=1.
+    Oracle: state file 'off' with MEMMAN_DEBUG=1 exported.
     """
     state_path = fake_home / '.memman' / 'debug.state'
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +100,12 @@ def test_env_var_overrides_state_file(fake_home, monkeypatch):
 
 
 def test_setup_is_noop_when_disabled(fake_home, monkeypatch):
-    """setup() creates no log file when MEMMAN_DEBUG is unset.
+    """Verify setup() creates no log file when MEMMAN_DEBUG is unset.
+
+    Mutation: attaching the file handler without the is_enabled() check. The
+        handler opens debug.log at once (delay=False), so the file appears with
+        tracing off.
+    Oracle: the logs directory stays absent or empty.
     """
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     trace.setup()
@@ -96,17 +114,28 @@ def test_setup_is_noop_when_disabled(fake_home, monkeypatch):
 
 
 def test_event_is_noop_when_disabled(fake_home, monkeypatch):
-    """event() writes nothing when MEMMAN_DEBUG is unset.
+    """Verify event() writes nothing once tracing is switched off.
+
+    Mutation: dropping the is_enabled() guard in event(), so a handler
+        attached earlier keeps receiving lines with tracing off.
+    Oracle: debug.log stays empty after event() runs with a handler
+        attached and MEMMAN_DEBUG set to 0.
     """
-    monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
+    monkeypatch.setenv('MEMMAN_DEBUG', '1')
     trace.setup()
+    log_path = fake_home / '.memman' / 'logs' / 'debug.log'
+    assert log_path.exists()
+    monkeypatch.setenv('MEMMAN_DEBUG', '0')
     trace.event('some_event', foo='bar')
-    logs_dir = fake_home / '.memman' / 'logs'
-    assert not logs_dir.exists() or not any(logs_dir.iterdir())
+    assert log_path.read_text() == ''
 
 
 def test_setup_creates_mode_600_file_when_enabled(fake_home, debug_on):
-    """setup() creates ~/.memman/logs/debug.log at mode 600.
+    """Verify setup() creates ~/.memman/logs/debug.log at mode 600.
+
+    Mutation: dropping the chmod, which leaves the umask default (0644) on a
+        file that holds raw memory content.
+    Oracle: os.stat mode compared with the literal 0o600.
     """
     trace.setup()
     trace.event('probe')
@@ -117,7 +146,12 @@ def test_setup_creates_mode_600_file_when_enabled(fake_home, debug_on):
 
 
 def test_event_writes_one_jsonl_line(fake_home, debug_on):
-    """event() emits exactly one JSON line per call with the expected keys.
+    """Verify event() emits exactly one JSON line per call with its fields.
+
+    Mutation: indenting the JSON over several lines, or dropping the event
+        name, ts or the passed fields.
+    Oracle: the single log line parsed with json.loads against the values
+        passed in.
     """
     trace.setup()
     trace.event('probe', foo='bar', count=3)
@@ -132,7 +166,11 @@ def test_event_writes_one_jsonl_line(fake_home, debug_on):
 
 
 def test_event_writes_multiple_lines_in_order(fake_home, debug_on):
-    """Multiple event() calls produce one line each, in order.
+    """Verify successive event() calls append one line each, in call order.
+
+    Mutation: reopening the log in write mode per event so only the last
+        survives, or reordering events.
+    Oracle: the hand-listed order first, second, third.
     """
     trace.setup()
     trace.event('first')
@@ -145,7 +183,11 @@ def test_event_writes_multiple_lines_in_order(fake_home, debug_on):
 
 
 def test_setup_is_idempotent(fake_home, debug_on):
-    """Repeated setup() calls do not attach duplicate handlers.
+    """Verify repeated setup() calls attach one handler.
+
+    Mutation: dropping the _memman_trace check in setup(), so each call adds a
+        handler and duplicates every line.
+    Oracle: the count of tagged handlers on the memman logger equals 1.
     """
     trace.setup()
     trace.setup()
@@ -173,7 +215,12 @@ class TestRedaction:
     """redact_headers and redact_dsn strip secrets from trace output."""
 
     def test_redact_headers_strips_authorization(self):
-        """redact_headers() replaces Authorization values with ***REDACTED***.
+        """Verify redact_headers() masks Authorization and keeps other headers.
+
+        Mutation: leaving authorization out of REDACT_HEADER_NAMES, or masking
+            every header.
+        Oracle: the literal '***REDACTED***' for Authorization and the original
+            Content-Type value.
         """
         out = trace.redact_headers({
             'Authorization': 'Bearer sk-very-secret',
@@ -183,7 +230,13 @@ class TestRedaction:
         assert out['Content-Type'] == 'application/json'
 
     def test_redact_headers_strips_x_api_key(self):
-        """redact_headers() replaces x-api-key values."""
+        """Verify redact_headers() masks x-api-key and keeps other headers.
+
+        Mutation: leaving x-api-key out of REDACT_HEADER_NAMES, or masking
+            every header.
+        Oracle: the literal '***REDACTED***' for x-api-key and the original
+            User-Agent value.
+        """
         out = trace.redact_headers({
             'x-api-key': 'sk-ant-secret',
             'User-Agent': 'memman',
@@ -192,7 +245,13 @@ class TestRedaction:
         assert out['User-Agent'] == 'memman'
 
     def test_redact_headers_is_case_insensitive(self):
-        """redact_headers() matches header names case-insensitively."""
+        """Verify redact_headers() matches header names regardless of case.
+
+        Mutation: comparing names without lower(), so an upper-case
+            AUTHORIZATION leaks.
+        Oracle: three upper- or mixed-case names, each read back as
+            '***REDACTED***'.
+        """
         out = trace.redact_headers({
             'AUTHORIZATION': 'Bearer x',
             'X-API-KEY': 'y',
@@ -203,57 +262,105 @@ class TestRedaction:
         assert out['Api-Key'] == '***REDACTED***'
 
     def test_redact_headers_does_not_mutate_input(self):
-        """redact_headers() returns a new dict; input dict is unchanged."""
+        """Verify redact_headers() returns a new dict and leaves the input alone.
+
+        Mutation: masking values in place on the caller's dict, which corrupts
+            the live request headers.
+        Oracle: the input dict keeps its secret, and the result is a different
+            object.
+        """
         original = {'Authorization': 'Bearer secret'}
         out = trace.redact_headers(original)
         assert original['Authorization'] == 'Bearer secret'
         assert out is not original
 
     def test_masks_inline_password(self):
-        """user:password@host gets the password replaced with ***."""
+        """Verify redact_dsn() masks the password of user:password@host.
+
+        Mutation: a pattern that drops the password group or masks the user
+            name instead.
+        Oracle: the hand-written expected DSN with '***' in the password slot.
+        """
         assert trace.redact_dsn(
             'postgresql://alice:s3cret@db.example.com:5432/memman'
             ) == 'postgresql://alice:***@db.example.com:5432/memman'
 
     def test_passthrough_when_no_password(self):
-        """A passwordless DSN is returned unchanged."""
+        """Verify redact_dsn() returns a passwordless DSN unchanged.
+
+        Mutation: masking the user name of a DSN that carries no password.
+        Oracle: output equals input.
+        """
         assert trace.redact_dsn(
             'postgresql://alice@db.example.com:5432/memman'
             ) == 'postgresql://alice@db.example.com:5432/memman'
 
     def test_passthrough_for_non_dsn_string(self):
-        """Strings that don't match the DSN shape are returned unchanged."""
-        assert trace.redact_dsn('not a connection string') == 'not a connection string'
-        assert trace.redact_dsn('') == ''
+        """Verify redact_dsn() returns text without a DSN shape unchanged.
+
+        Mutation: making the scheme:// prefix optional, so 14:18@noon reads
+            as user:password@host, or a rewrite that raises on the empty
+            string.
+        Oracle: output equals input for each string, including ones that
+            carry ':' and '@' but no scheme://.
+        """
+        for text in (
+                'not a connection string', '', 'host:5432',
+                'user@example.com', '14:18@noon'):
+            assert trace.redact_dsn(text) == text
 
     def test_handles_alternate_schemes(self):
-        """Any `scheme://user:pass@host` shape is masked, not just postgresql."""
+        """Verify redact_dsn() masks the password under any scheme.
+
+        Mutation: hardcoding postgresql:// in the pattern, so a postgres:// DSN
+            leaks its password.
+        Oracle: the hand-written expected 'postgres://u:***@h/db'.
+        """
         assert trace.redact_dsn(
             'postgres://u:p@h/db') == 'postgres://u:***@h/db'
 
-    def test_does_not_mask_when_password_contains_at_sign(self):
-        """Defensive case: ambiguous strings should not over-redact.
+    def test_masks_whole_password_containing_literal_at_sign(self):
+        """Verify redact_dsn() masks a password that holds a literal '@'.
 
-        The regex requires a colon between user and password; URLs with
-        embedded `@` in unexpected positions leave the original intact.
+        Mutation: a password class that stops at the first '@', so the
+            tail of 'p@ss' stays in the output.
+        Oracle: hand-written expected DSNs; userinfo runs to the last '@'
+            before the host, and a later '@' after the path is untouched.
         """
         assert trace.redact_dsn(
-            'http://example.com/path?q=foo'
-            ) == 'http://example.com/path?q=foo'
+            'postgres://u:p@ss@h/db') == 'postgres://u:***@h/db'
+        assert trace.redact_dsn(
+            'postgres://u:a@b@c@h:5432/db?x=y@z'
+            ) == 'postgres://u:***@h:5432/db?x=y@z'
+
+    def test_masks_password_with_percent_encoded_at_sign(self):
+        """Verify redact_dsn() masks a password whose '@' is percent-encoded.
+
+        Mutation: a password class that stops at '%', so 'p%40ss' is cut
+            short and the tail 'ss' leaks.
+        Oracle: the hand-written expected DSN with '***' in the password
+            slot.
+        """
+        assert trace.redact_dsn(
+            'postgres://u:p%40ss@h/db') == 'postgres://u:***@h/db'
 
 
 @pytest.mark.no_mock_llm
 def test_llm_complete_emits_request_and_response(
         fake_home, debug_on, monkeypatch):
-    """MemmanLLMClient.complete emits llm_request and llm_response in order."""
+    """Verify complete() traces a redacted request, then the response.
+
+    Mutation: dropping either trace event, emitting the response first, or
+        logging the Authorization header unmasked.
+    Oracle: the log lines parsed and compared with the endpoint, model, status
+        and reply body the fake server and client were given.
+    """
     def _fake_post(url, headers=None, json=None, timeout=None):
         return httpx.Response(
             200,
             request=httpx.Request('POST', url),
             json={'choices': [{'message': {'content': 'hi'}}]})
 
-    from memman import _http
-    from memman.llm import client as llm_client_mod
     monkeypatch.setitem(
         _http._SESSIONS, llm_client_mod.__name__,
         type('FakeClient', (), {'post': staticmethod(_fake_post)})())
@@ -262,7 +369,6 @@ def test_llm_complete_emits_request_and_response(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-secret-key',
         model='anthropic/claude-haiku-4.5')
-    from memman.llm import usage as llm_usage
     out = client.complete(
         'sys', 'user', stage=llm_usage.STAGE_PROBE)
     assert out == 'hi'
