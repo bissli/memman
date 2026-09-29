@@ -2,6 +2,8 @@
 
 **LLM-supervised persistent memory for coding agents.**
 
+Storing and recalling 1,000 memories costs under $1 on the default models ([Cost](#cost)).
+
 [![CI](https://github.com/bissli/memman/actions/workflows/ci.yml/badge.svg)](https://github.com/bissli/memman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -76,10 +78,24 @@ This split determines when model calls run and when memories become available:
 - **Storage options** - SQLite by default. The `memman[postgres]` extra adds Postgres with pgvector, and `memman migrate` moves a store between the two in one command ([Usage](docs/USAGE.md#migrating-between-sqlite-and-postgres)).
 - **External scheduled backups** - `memman backup schedule '<cron>' <dir>` writes every store to an outside directory on a cron schedule and keeps the last N bundles. Bundles leave out secrets. `memman backup restore` rebuilds a working store after the loss of `~/.memman/` ([Backup](docs/USAGE.md#backup)).
 
+## Cost
+
+memman is cheap to run. On the default models, 1,000 stored memories and 1,000 recalls together cost under $1.
+
+| Step       | Default model                                                   | Runs                                                            | Cost per 1,000 runs |
+| ---------- | --------------------------------------------------------------- | --------------------------------------------------------------- | ------------------- |
+| Enrichment | `qwen/qwen3-235b-a22b-2507` ($0.25 in, $1.00 out per 1M tokens) | once per stored memory, in the worker                           | about $0.40         |
+| Embedding  | `voyage-3-lite` ($0.02 per 1M tokens)                           | once per stored memory, and once per recall query               | under $0.01         |
+| Rerank     | `rerank-3-lite` ($0.02 per 1M tokens)                           | once per recall of more than two words, over up to 100 memories | $0.30 to $0.50      |
+
+- **`remember` calls no model.** The worker enriches and embeds the memory later.
+- **Rerank cost grows with the length of the memories it scores.** `recall --basic` and `MEMMAN_RERANK_ENABLED=false` skip it.
+- **memman bills its own API keys.** Claude Code keeps its own Claude login, which memman never reads or bills against. A Claude Pro or Max subscription does not cover memman's calls, because a chat subscription and a developer API bill separately. [Where keys are needed](#where-keys-are-needed) lists the key each step uses.
+
 ## Install
 
 > [!IMPORTANT]
-> **memman's API calls are billed separately from the agent's.** Claude Code keeps its own Claude login, which memman never reads or bills against. memman's keys pay for the worker's enrichment and embedding calls and for the calls recall makes to rank results. A Claude Pro or Max subscription does not cover them, because a chat subscription and a developer API bill separately. [Where keys are needed](#where-keys-are-needed) lists the key each step uses.
+> **memman's model calls bill to its own API keys.** A Claude Pro or Max subscription does not cover them ([Cost](#cost)).
 
 ```bash
 pipx install memman
