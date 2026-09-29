@@ -6,11 +6,10 @@ import time
 
 import pytest
 from memman import queue as queue_mod
-from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS
-from memman.queue import STALE_RESUME_AGE_SECONDS, STATUS_DONE, STATUS_FAILED
-from memman.queue import claim, enqueue, get_row, list_rows, mark_done
-from memman.queue import mark_failed, mark_stale_on_resume, open_queue_db
-from memman.queue import purge_done, queue_db, retry_row, stats
+from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS, STATUS_DONE
+from memman.queue import STATUS_FAILED, claim, enqueue, get_row, list_rows
+from memman.queue import mark_done, mark_failed, open_queue_db, purge_done
+from memman.queue import queue_db, retry_row, stats
 from memman.store.errors import BackendError
 
 
@@ -403,25 +402,6 @@ def test_stats_reports_counts_and_oldest_age(queue_conn):
     assert s['done'] == 1
     assert s['failed'] == 0
     assert s['oldest_pending_age_seconds'] is not None
-
-
-def test_stats_counts_a_row_the_resume_path_marked_stale(queue_conn):
-    """Verify stats() counts a stale row apart from a pending one.
-
-    Mutation: `stale` dropped from the result dict, so a stale row
-        counts as nothing.
-    Oracle: one row aged past `STALE_RESUME_AGE_SECONDS` and marked
-        stale by `mark_stale_on_resume`, beside one fresh pending row.
-    """
-    old_id, _ = enqueue(queue_conn, 'main', 'old')
-    enqueue(queue_conn, 'main', 'new')
-    queue_conn.execute(
-        'update queue set queued_at = queued_at - ? where id = ?',
-        (STALE_RESUME_AGE_SECONDS + 60, old_id))
-    assert mark_stale_on_resume(queue_conn) == 1
-    s = stats(queue_conn)
-    assert s['stale'] == 1
-    assert s['pending'] == 1
 
 
 def test_purge_done_deletes_completed_rows(queue_conn, monkeypatch):

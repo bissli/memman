@@ -7,13 +7,11 @@ regressions in argument wiring and JSON output shape are caught.
 
 import json
 import os
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-from memman.maintenance import run_maintenance
 from memman.queue import open_queue_db
 from memman.setup import scheduler as sch
 from tests.conftest import fake_subprocess, invoke
@@ -90,28 +88,15 @@ def test_queue_cat_missing_errors(runner):
 
 
 def test_queue_purge_requires_flag(runner):
-    """Verify `scheduler queue purge` needs --done or --stale.
+    """Verify `scheduler queue purge` needs --done.
 
-    Mutation: defaulting to a purge of every row when no flag is given.
-    Oracle: non-zero exit with both flag names in the message.
+    Mutation: defaulting to a purge of every done row when no flag is
+        given.
+    Oracle: non-zero exit with the flag name in the message.
     """
     result = invoke(runner, ['scheduler', 'queue', 'purge'])
     assert result.exit_code != 0
     assert '--done' in result.output
-    assert '--stale' in result.output
-
-
-def test_queue_purge_rejects_conflicting_flags(runner):
-    """`queue purge` takes exactly one of its two target flags.
-
-    Mutation: dropping the mutual-exclusion guard, so a pair of flags
-        silently purges only whichever branch happens to run first.
-    Oracle: a conflicting pair exits non-zero naming both flags.
-    """
-    result = invoke(
-        runner, ['scheduler', 'queue', 'purge', '--done', '--stale'])
-    assert result.exit_code != 0
-    assert 'exactly one of --done, --stale' in result.output
 
 
 def test_queue_retry_noop_on_unknown(runner):
@@ -124,32 +109,7 @@ def test_queue_retry_noop_on_unknown(runner):
     assert result.exit_code != 0
 
 
-def test_queue_retry_requires_arg_or_flag(runner):
-    """Verify `scheduler queue retry` needs a row id or --all-stale.
-
-    Mutation: dropping the missing-argument guard, so a bare `retry`
-        requeues nothing and exits 0.
-    Oracle: non-zero exit naming --all-stale.
-    """
-    result = invoke(runner, ['scheduler', 'queue', 'retry'])
-    assert result.exit_code != 0
-    assert '--all-stale' in result.output
-
-
-def test_queue_retry_rejects_id_with_all_stale(runner):
-    """Verify `scheduler queue retry 5 --all-stale` is rejected.
-
-    Mutation: dropping the exclusion guard, so the row id silently wins
-        over --all-stale or the reverse.
-    Oracle: non-zero exit with the "not both" message.
-    """
-    result = invoke(
-        runner, ['scheduler', 'queue', 'retry', '5', '--all-stale'])
-    assert result.exit_code != 0
-    assert 'not both' in result.output
-
-
-def _seed_row(data_dir: str, status: str = 'stale') -> int:
+def _seed_row(data_dir: str, status: str) -> int:
     """Insert one queue row with the given status.
 
     Parameters
@@ -173,90 +133,6 @@ def _seed_row(data_dir: str, status: str = 'stale') -> int:
             ('default', f'{status}-row', 'fact', status, str(uuid.uuid4())))
         conn.commit()
         return cur.lastrowid
-    finally:
-        conn.close()
-
-
-def _seed_stale_row(data_dir: str) -> int:
-    """Insert one stale queue row and return its id.
-    """
-    return _seed_row(data_dir, 'stale')
-
-
-def test_queue_retry_all_stale_requeues(runner):
-    """Verify `queue retry --all-stale` flips a stale row to pending.
-
-    Mutation: reporting the requeue in JSON without updating the row's
-        status, or updating a different status.
-    Oracle: the status column read back from the queue database.
-    """
-    _, data_dir = runner
-    row_id = _seed_stale_row(data_dir)
-    result = invoke(
-        runner, ['scheduler', 'queue', 'retry', '--all-stale'])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data['action'] == 'requeued'
-    assert data['count'] >= 1
-
-    conn = open_queue_db(data_dir)
-    try:
-        status = conn.execute(
-            'select status from queue where id = ?', (row_id,)).fetchone()[0]
-        assert status == 'pending'
-    finally:
-        conn.close()
-
-
-def test_queue_purge_stale_deletes_only_stale(runner):
-    """Verify `queue purge --stale` deletes stale rows and keeps failed ones.
-
-    Mutation: a purge that matches every non-pending status, or one that
-        deletes nothing.
-    Oracle: rows read back by id from the queue database.
-    """
-    _, data_dir = runner
-    stale_id = _seed_row(data_dir, 'stale')
-    failed_id = _seed_row(data_dir, 'failed')
-
-    result = invoke(runner, ['scheduler', 'queue', 'purge', '--stale'])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data['deleted'] >= 1
-
-    conn = open_queue_db(data_dir)
-    try:
-        gone = conn.execute(
-            'select id from queue where id = ?', (stale_id,)).fetchone()
-        assert gone is None
-        survived = conn.execute(
-            'select status from queue where id = ?',
-            (failed_id,)).fetchone()
-        assert survived is not None
-        assert survived[0] == 'failed'
-    finally:
-        conn.close()
-
-
-def test_maintenance_retries_stale_rows(runner):
-    """Verify `run_maintenance` requeues a stale row.
-
-    Mutation: dropping the stale-retry step from the maintenance phase.
-    Oracle: the row's status read back from the queue database.
-    """
-    _, data_dir = runner
-    row_id = _seed_stale_row(data_dir)
-
-    conn = open_queue_db(data_dir)
-    try:
-        run_maintenance(
-            queue_conn=conn,
-            touched_stores=set(),
-            store_contexts={},
-            deadline_monotonic=time.monotonic() + 60)
-        status = conn.execute(
-            'select status from queue where id = ?', (row_id,)).fetchone()[0]
-        assert status == 'pending'
     finally:
         conn.close()
 
@@ -452,3 +328,36 @@ def test_scheduler_trigger_cli_fails_when_not_installed(
     result = invoke(runner, ['scheduler', 'trigger'])
     assert result.exit_code != 0
     assert 'not installed' in result.output.lower()
+
+
+def test_scheduler_start_leaves_an_old_untried_write_pending(
+        runner, monkeypatch):
+    """Verify `scheduler start` keeps a week-old untried write pending.
+
+    Mutation: the start path moving long-pending rows to a status the
+        drain never claims, so the write is never stored.
+    Oracle: the row's status read back from the queue database, for a
+        row queued 8 days ago with no attempt.
+    """
+    _, data_dir = runner
+    monkeypatch.setattr(sch, 'start', lambda: {'status': 'started'})
+    row_id = _seed_row(data_dir, 'pending')
+    conn = open_queue_db(data_dir)
+    try:
+        conn.execute(
+            'update queue set queued_at = queued_at - ? where id = ?',
+            (8 * 24 * 3600, row_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = invoke(runner, ['scheduler', 'start'])
+    assert result.exit_code == 0, result.output
+
+    conn = open_queue_db(data_dir)
+    try:
+        status = conn.execute(
+            'select status from queue where id = ?', (row_id,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert status == 'pending'

@@ -528,19 +528,16 @@ memman scheduler queue list [--limit N]    # status counts and recent writes (de
 memman scheduler queue failed [--limit N]  # failed writes (default 50)
 memman scheduler queue show <row_id>       # one write in full
 memman scheduler queue retry <row_id>      # return one failed write to pending
-memman scheduler queue retry --all-stale   # return every stale write to pending
 memman scheduler queue purge --done        # delete done writes
-memman scheduler queue purge --stale       # delete stale writes
 ```
 
 `memman scheduler queue` with no subcommand runs `queue list`. Each queued write has one status:
 
-| Status    | Meaning                                                                                                                                                                                           |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pending` | Waiting for a drain, or claimed by one. A claim older than 600 seconds is taken over by the next drain.                                                                                           |
-| `done`    | Stored. Later maintenance deletes completed entries older than 60 seconds.                                                                                                                        |
-| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it.            |
-| `stale`   | A pending write never attempted and more than 7 days old when `scheduler start` runs or a `serve` process starts. Drain maintenance returns stale entries to pending when its time budget allows. |
+| Status    | Meaning                                                                                                                                                                                |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending` | Waiting for a drain, or claimed by one. A claim older than 600 seconds is taken over by the next drain. A write keeps this status however long the scheduler stays stopped.            |
+| `done`    | Stored. Later maintenance deletes completed entries older than 60 seconds.                                                                                                             |
+| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it. |
 
 ---
 

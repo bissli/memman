@@ -24,11 +24,9 @@ logger = logging.getLogger('memman')
 QUEUE_FILENAME = 'queue.db'
 STALE_CLAIM_SECONDS = 600
 MAX_ATTEMPTS = 5
-STALE_RESUME_AGE_SECONDS = 7 * 24 * 3600
 
 STATUS_DONE = 'done'
 STATUS_FAILED = 'failed'
-STATUS_STALE = 'stale'
 
 
 @dataclass(slots=True)
@@ -130,7 +128,7 @@ create table if not exists queue (
     worker_pid    integer,
     attempts      integer not null default 0,
     status        text not null default 'pending'
-                  check(status in ('pending','done','failed','stale')),
+                  check(status in ('pending','done','failed')),
     last_error    text,
     processed_at  integer,
     author        text
@@ -339,7 +337,7 @@ def claim(
     - A replace waits while an earlier pending write in its store is
       its target or is itself a replace, so replaces land in the order
       they were queued, whatever retries they take. A write that
-      fails or goes stale stops holding the rows behind it.
+      fails stops holding the rows behind it.
     - A claim older than `STALE_CLAIM_SECONDS` is reclaimable, so a
       worker that dies mid-row strands nothing.
     """
@@ -472,15 +470,13 @@ def stats(conn: sqlite3.Connection) -> dict:
     Returns
     -------
     dict
-        One count per queue status (`pending`, `done`, `failed`,
-        `stale`), and `oldest_pending_age_seconds` (None when nothing
-        is pending).
+        One count per queue status (`pending`, `done`, `failed`), and
+        `oldest_pending_age_seconds` (None when nothing is pending).
     """
     result = {
         'pending': 0,
         'done': 0,
         'failed': 0,
-        'stale': 0,
         'oldest_pending_age_seconds': None,
         }
     rows = conn.execute(
@@ -629,49 +625,6 @@ def purge_worker_runs(conn: sqlite3.Connection) -> int:
     cutoff = int(time.time()) - 7 * 86400
     cur = conn.execute(
         'delete from worker_runs where started_at < ?', (cutoff,))
-    return cur.rowcount
-
-
-def mark_stale_on_resume(conn: sqlite3.Connection) -> int:
-    """Move never-attempted rows past STALE_RESUME_AGE_SECONDS to stale.
-
-    Called when a paused scheduler is resumed -- content queued many days
-    ago may no longer hold against the current store state, so surface
-    it explicitly rather than silently storing it.
-    """
-    cutoff = int(time.time()) - STALE_RESUME_AGE_SECONDS
-    sql = """
-update queue
-set status = 'stale'
-where status = 'pending'
-  and attempts = 0
-  and queued_at < ?
-"""
-    cur = conn.execute(sql, (cutoff,))
-    return cur.rowcount
-
-
-def retry_stale(conn: sqlite3.Connection) -> int:
-    """Re-queue all stale rows. Returns number of rows updated.
-    """
-    sql = """
-update queue
-set status = 'pending',
-    attempts = 0,
-    last_error = null,
-    claimed_at = null,
-    worker_pid = null,
-    processed_at = null
-where status = ?
-"""
-    cur = conn.execute(sql, (STATUS_STALE,))
-    return cur.rowcount
-
-
-def purge_stale(conn: sqlite3.Connection) -> int:
-    """Delete all stale rows. Returns deleted count.
-    """
-    cur = conn.execute("delete from queue where status = 'stale'")
     return cur.rowcount
 
 

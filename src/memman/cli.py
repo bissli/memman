@@ -47,8 +47,8 @@ from memman.migrate import _verify_destination_counts, held_drain_lock
 from memman.queue import STATUS_FAILED, claim, enqueue, find_pending
 from memman.queue import find_pending_replace, finish_worker_run, get_row
 from memman.queue import last_worker_run, list_rows, mark_done, mark_failed
-from memman.queue import mark_stale_on_resume, purge_done, purge_stale
-from memman.queue import queue_db, queue_db_path, retry_row, retry_stale
+from memman.queue import purge_done
+from memman.queue import queue_db, queue_db_path, retry_row
 from memman.queue import start_worker_run
 from memman.queue import stats as queue_stats
 from memman.setup.archive import archive_postgres_schema
@@ -1138,11 +1138,6 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
         write_serve_interval(interval)
 
         data_dir_val = ctx.obj['data_dir']
-        with queue_db(data_dir_val) as conn:
-            reclaimed = mark_stale_on_resume(conn)
-            if reclaimed:
-                logger.info(
-                    f'scheduler serve: reclaimed {reclaimed} stale rows')
 
         trace.setup()
         trace.event(
@@ -1875,7 +1870,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       the refusal quotes that replace, the one to replace instead.
     - The drain holds a replace while its queued target, or an
       earlier replace in the same store, is pending. A target that
-      fails or goes stale releases it, and it lands as a plain add.
+      fails releases it, and it lands as a plain add.
     - Enrichment still runs and rebuilds the summary.
 
     \b
@@ -1991,27 +1986,22 @@ def queue_show(ctx: click.Context, row_id: int) -> None:
 
 
 @queue.command('retry')
-@click.argument('row_id', type=int, required=False)
-@click.option('--all-stale', 'all_stale', is_flag=True, default=False,
-              help='Re-queue every row currently in status=stale')
+@click.argument('row_id', type=int)
 @click.pass_context
-def queue_retry(
-        ctx: click.Context,
-        row_id: int | None,
-        all_stale: bool) -> None:
-    """Re-queue a failed row by id, or every stale row with --all-stale.
+def queue_retry(ctx: click.Context, row_id: int) -> None:
+    """Re-queue a failed row, with its attempt count reset.
+
+    Parameters
+    ----------
+    row_id : int
+        Queue row id, as `scheduler queue failed` lists it. A row not
+        in status `failed` is refused.
+
+    Examples
+    --------
+    memman scheduler queue retry 42
     """
-    if all_stale and row_id is not None:
-        raise click.ClickException(
-            'pass either ROW_ID or --all-stale, not both')
-    if not all_stale and row_id is None:
-        raise click.ClickException(
-            'pass a ROW_ID or --all-stale')
     with queue_db(ctx.obj['data_dir']) as conn:
-        if all_stale:
-            count = retry_stale(conn)
-            _json_out({'action': 'requeued', 'count': count})
-            return
         if not retry_row(conn, row_id):
             raise click.ClickException(
                 f'queue row {row_id} not found or not in failed state')
@@ -2021,36 +2011,23 @@ def queue_retry(
 @queue.command('purge')
 @click.option('--done', is_flag=True, default=False,
               help='Delete all rows with status=done')
-@click.option('--stale', 'stale', is_flag=True, default=False,
-              help='Delete all rows with status=stale')
 @click.pass_context
-def queue_purge(ctx: click.Context, done: bool, stale: bool) -> None:
-    """Remove completed or stale queue rows.
+def queue_purge(ctx: click.Context, done: bool) -> None:
+    """Remove completed queue rows.
 
     Parameters
     ----------
     done : bool
-        Delete every row in status `done`.
-    stale : bool
-        Delete every row in status `stale`.
+        Delete every row in status `done`. Required as confirmation.
 
     Examples
     --------
     memman scheduler queue purge --done
     """
-    chosen = [f for f in (done, stale) if f]
-    if len(chosen) > 1:
-        raise click.ClickException(
-            'pass exactly one of --done, --stale')
-    if not chosen:
-        raise click.ClickException(
-            'pass --done or --stale to confirm deletion')
+    if not done:
+        raise click.ClickException('pass --done to confirm deletion')
     with queue_db(ctx.obj['data_dir']) as conn:
-        if done:
-            deleted = purge_done(conn)
-        else:
-            deleted = purge_stale(conn)
-        _json_out({'deleted': deleted})
+        _json_out({'deleted': purge_done(conn)})
 
 
 @scheduler.command('status')
@@ -2094,27 +2071,16 @@ def scheduler_status(ctx: click.Context, text_output: bool) -> None:
 @scheduler.command('start')
 @click.option('--text', 'text_output', is_flag=True, default=False,
               help='Human-readable output (default: JSON)')
-@click.pass_context
-def scheduler_start(ctx: click.Context, text_output: bool) -> None:
+def scheduler_start(text_output: bool) -> None:
     """Start the scheduler. Worker drains; writes are accepted.
 
-    Idempotent. Sweeps long-stalled queue rows to `stale` so they can
-    be retried with `scheduler queue retry --all-stale`.
+    Idempotent.
     """
     from memman.setup.scheduler import start
     try:
         result = start()
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
-
-    data_dir_val = ctx.obj['data_dir']
-    with queue_db(data_dir_val) as conn:
-        n_stale = mark_stale_on_resume(conn)
-    if n_stale:
-        result['marked_stale'] = n_stale
-        result.setdefault('actions', []).append(
-            f"moved {n_stale} long-pending rows to status='stale'"
-            ' (retry with `memman scheduler queue retry --all-stale`)')
     _scheduler_emit(result, text_output)
 
 

@@ -3,8 +3,7 @@
 Steps:
 1. `queue.purge_done` -- drop completed queue rows.
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
-3. `queue.retry_stale` -- return stale claimed rows to pending.
-4. Per store where the drain completed a row:
+3. Per store where the drain completed a row:
    - Trim the oplog by age.
    - Re-queue stranded (attempted but unenriched) rows.
    - `enrich_pending` with a small batch cap so a backlog of pending
@@ -24,7 +23,7 @@ import logging
 import time
 from typing import Any
 
-from memman.queue import purge_done, purge_worker_runs, retry_stale
+from memman.queue import purge_done, purge_worker_runs
 
 logger = logging.getLogger('memman')
 
@@ -73,14 +72,6 @@ def run_maintenance(
                 f'maintenance: pruned {dropped} stale worker_runs rows')
     except Exception:
         logger.exception('maintenance: purge_worker_runs failed')
-
-    try:
-        requeued = retry_stale(queue_conn)
-        if requeued:
-            logger.debug(
-                f'maintenance: re-queued {requeued} stale rows back to pending')
-    except Exception:
-        logger.exception('maintenance: retry_stale failed')
 
     for store_name in touched_stores:
         if time.monotonic() >= deadline_monotonic:
