@@ -4183,10 +4183,11 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     help='Continue an in-flight swap from the recorded cursor.')
 @click.option(
     '--abort', 'abort', is_flag=True, default=False,
-    help='Discard the in-flight swap. Drops embedding_pending and'
-         ' clears all swap meta. After cutover, this is one-way: the'
-         ' old embeddings are gone, so reverting requires running swap'
-         ' again with the old model (full re-embed cost).')
+    help='Discard the in-flight swap before cutover. Drops'
+         ' embedding_pending and clears all swap meta. A swap at'
+         ' cutover refuses the abort; --resume finishes it. Cutover is'
+         ' one-way, so reverting requires running swap again with the'
+         ' old model (full re-embed cost).')
 @click.pass_context
 def embed_swap(
         ctx: click.Context, to_model: str, to_provider: str,
@@ -4220,7 +4221,10 @@ def embed_swap(
     name = _resolve_store_name(data_dir, ctx.obj['store'])
     with factory.open_backend(name, data_dir) as backend:
         if abort:
-            abort_swap(backend)
+            try:
+                abort_swap(backend)
+            except RuntimeError as exc:
+                raise click.ClickException(f'store {name!r}: {exc}') from exc
             _json_out({'store': name, 'state': 'aborted'})
             return
 

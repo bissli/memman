@@ -14,6 +14,14 @@ class BackendError(Exception):
     """
 
 
+class SwapCutoverRefused(BackendError):
+    """Raised when a swap cutover finds its backfill incomplete.
+
+    The cutover changes nothing before raising, so the swap can safely
+    return to backfill.
+    """
+
+
 class ConfigError(BackendError, _RuntimeConfigError):
     """Raised when the backend selection or DSN is misconfigured.
 

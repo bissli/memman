@@ -14,6 +14,7 @@ psycopg = pytest.importorskip('psycopg')
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, run_swap
+from memman.store.errors import BackendError
 from memman.store.model import Insight
 from memman.store.postgres import EMBEDDING_DIM, _assert_vector_dim_matches
 from memman.store.postgres import _store_schema, open_postgres_backend
@@ -211,3 +212,149 @@ def test_swap_lock_blocks_concurrent_swap(swap_backend):
                 assert held_b is False
     finally:
         other.close()
+
+
+def test_swap_resume_finishes_after_a_crash_past_cutover(
+        swap_backend, monkeypatch):
+    """--resume finishes a swap whose cutover committed before a crash.
+
+    Mutation: the bug itself - the resumed cutover re-runs a check on
+        `embedding_pending`, a column the committed cutover already
+        renamed, so the swap can never finish or clear its keys.
+    Oracle: the plan's hand-set target fingerprint and an empty swap
+        state after the resume.
+    """
+    backend, _pg_dsn, _store_name = swap_backend
+    _seed(backend, 3)
+    ec = _StubEmbedder(dim=384)
+    plan = SwapPlan(
+        target_provider='stub-target',
+        target_model='stub-target-d384',
+        target_dim=384)
+
+    def _crash(*args, **kwargs):
+        raise RuntimeError('crash after cutover')
+
+    monkeypatch.setattr('memman.embed.swap.write_fingerprint', _crash)
+    with pytest.raises(RuntimeError, match='crash after cutover'):
+        run_swap(backend, ec, plan)
+    monkeypatch.setattr(
+        'memman.embed.swap.write_fingerprint', write_fingerprint)
+
+    progress = run_swap(backend, ec, plan)
+
+    assert progress.state == STATE_DONE
+    assert stored_fingerprint(backend) == Fingerprint(
+        provider='stub-target', model='stub-target-d384', dim=384)
+    assert backend.meta.get('embed_swap_state') is None
+
+
+def test_swap_resume_recovers_after_the_cutover_check_refuses(
+        swap_backend, monkeypatch):
+    """A refused cutover returns the swap to backfill so --resume ends it.
+
+    Mutation: the refusal leaving the state at `cutover`, so every
+        resume reruns the same failing check, abort refuses, and the
+        store is stuck until someone edits its meta table.
+    Oracle: a row inserted below the backfill cursor after a crash -
+        the case the check exists to catch - and the plan's target
+        fingerprint once the second resume finishes.
+    """
+    backend, _pg_dsn, _store_name = swap_backend
+    _seed(backend, 4)
+    ec = _StubEmbedder(dim=384)
+    plan = SwapPlan(
+        target_provider='stub-target',
+        target_model='stub-target-d384',
+        target_dim=384)
+    real_embed_batch = ec.embed_batch
+    calls = {'n': 0}
+
+    def _crash_on_second_batch(texts):
+        calls['n'] += 1
+        if calls['n'] == 2:
+            raise RuntimeError('embed outage')
+        return real_embed_batch(texts)
+
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '2')
+    monkeypatch.setattr(ec, 'embed_batch', _crash_on_second_batch)
+    with pytest.raises(RuntimeError, match='embed outage'):
+        run_swap(backend, ec, plan)
+    with backend.transaction():
+        backend.nodes.insert(Insight(id='0000-new', content='late row'))
+        backend.nodes.update_embedding(
+            '0000-new', _pg_vec(99), 'voyage-3-lite')
+
+    with pytest.raises(BackendError, match='backfill is incomplete'):
+        run_swap(backend, ec, plan)
+    progress = run_swap(backend, ec, plan)
+
+    assert progress.state == STATE_DONE
+    assert stored_fingerprint(backend) == Fingerprint(
+        provider='stub-target', model='stub-target-d384', dim=384)
+
+
+def test_swap_abort_refuses_while_another_session_holds_the_lock(swap_backend):
+    """abort_swap refuses while another session holds the swap lock.
+
+    Mutation: abort taking no lock, so it drops `embedding_pending`
+        under a running swap whose cutover then finds no column, skips
+        the switch, and writes the target fingerprint over old vectors.
+    Oracle: the pending column the first session prepared, still
+        present after the refused abort.
+    """
+    backend, pg_dsn, store_name = swap_backend
+    _seed(backend, 2)
+    backend.swap_prepare(384)
+    other = open_postgres_backend(store_name, pg_dsn)
+    try:
+        with backend.swap_lock() as held:
+            assert held is True
+            with pytest.raises(RuntimeError, match='another swap'):
+                abort_swap(other)
+    finally:
+        other.close()
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                'select 1 from information_schema.columns'
+                ' where table_schema = %s and table_name = %s'
+                " and column_name = 'embedding_pending'",
+                (_store_schema(store_name), 'insights'))
+            assert cur.fetchone() is not None
+
+
+def test_swap_keeps_cutover_state_when_a_committed_cutover_errors(
+        swap_backend, monkeypatch):
+    """An error after the cutover commits leaves the state at cutover.
+
+    Mutation: returning the swap to backfill on any `BackendError`
+        from the cutover, so a commit that landed but failed to confirm
+        lets abort clear the keys over the new vectors, and resume
+        reads a column the cutover already renamed.
+    Oracle: a real cutover followed by a raised error, then the plan's
+        target fingerprint once resume finishes the swap.
+    """
+    backend, _pg_dsn, _store_name = swap_backend
+    _seed(backend, 3)
+    ec = _StubEmbedder(dim=384)
+    plan = SwapPlan(
+        target_provider='stub-target',
+        target_model='stub-target-d384',
+        target_dim=384)
+    real_cutover = backend.swap_cutover
+
+    def _cutover_then_lose_the_ack(target):
+        real_cutover(target)
+        raise BackendError('postgres query failed: connection lost')
+
+    monkeypatch.setattr(backend, 'swap_cutover', _cutover_then_lose_the_ack)
+    with pytest.raises(BackendError, match='connection lost'):
+        run_swap(backend, ec, plan)
+    monkeypatch.setattr(backend, 'swap_cutover', real_cutover)
+
+    assert backend.meta.get('embed_swap_state') == 'cutover'
+    assert run_swap(backend, ec, plan).state == STATE_DONE
+    assert stored_fingerprint(backend) == Fingerprint(
+        provider='stub-target', model='stub-target-d384', dim=384)

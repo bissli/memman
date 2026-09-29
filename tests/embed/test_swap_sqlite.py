@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
+from memman.embed.fingerprint import write_fingerprint
 from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, read_progress
 from memman.embed.swap import run_swap
 from memman.embed.vector import deserialize_vector, serialize_vector
@@ -245,3 +246,36 @@ def test_swap_target_mismatch_in_flight_raises(swap_backend):
     with pytest.raises(RuntimeError) as exc:
         run_swap(swap_backend, ec_first, plan_diff)
     assert 'in-flight' in str(exc.value).lower()
+
+
+def test_swap_abort_refuses_once_the_cutover_state_is_recorded(
+        swap_backend, monkeypatch):
+    """abort_swap refuses a swap whose cutover may already have landed.
+
+    Mutation: the bug itself - an abort after a crash past the
+        committed cutover clears the swap keys and leaves the old
+        fingerprint over the new vectors, so recall embeds queries with
+        a model the stored vectors no longer match.
+    Oracle: the swap state and the old fingerprint both still in place
+        after the refused abort, so --resume can finish the swap.
+    """
+    _seed_insights(swap_backend, 3)
+    old_fp = Fingerprint(provider='voyage', model='voyage-3-lite', dim=512)
+    write_fingerprint(swap_backend, old_fp)
+    plan = SwapPlan(
+        target_provider='stub-target',
+        target_model='stub-target-d768',
+        target_dim=768)
+
+    def _crash(*args, **kwargs):
+        raise RuntimeError('crash after cutover')
+
+    monkeypatch.setattr('memman.embed.swap.write_fingerprint', _crash)
+    with pytest.raises(RuntimeError, match='crash after cutover'):
+        run_swap(swap_backend, _StubEmbedder(dim=768), plan)
+
+    with pytest.raises(RuntimeError, match='--resume'):
+        abort_swap(swap_backend)
+
+    assert read_progress(swap_backend).state == 'cutover'
+    assert stored_fingerprint(swap_backend) == old_fp

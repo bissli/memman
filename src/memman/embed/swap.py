@@ -33,6 +33,7 @@ from memman.embed import EmbeddingProvider
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.store.backend import Backend
+from memman.store.errors import SwapCutoverRefused
 
 logger = logging.getLogger('memman')
 
@@ -104,11 +105,27 @@ def read_progress(backend: Backend) -> SwapProgress:
 
 def abort_swap(backend: Backend) -> None:
     """Drop `embedding_pending`/null shadow values and clear all swap meta.
+
+    Raises
+    ------
+    RuntimeError
+        When another session holds the swap lock, or the swap has
+        reached the cutover state. The one-way cutover may already have
+        committed, and clearing the swap keys then would leave the old
+        fingerprint over the new vectors.
     """
-    backend.swap_abort()
-    with backend.transaction():
-        for key in _META_KEYS:
-            backend.meta.delete(key)
+    with backend.swap_lock() as held:
+        if not held:
+            raise RuntimeError(
+                'another swap is in progress; wait for it to finish')
+        if backend.meta.get(META_STATE) == STATE_CUTOVER:
+            raise RuntimeError(
+                'swap has reached cutover and cannot be aborted;'
+                ' run `memman embed swap --resume` to finish it')
+        backend.swap_abort()
+        with backend.transaction():
+            for key in _META_KEYS:
+                backend.meta.delete(key)
 
 
 def run_swap(
@@ -200,7 +217,15 @@ def run_swap(
 
     with backend.transaction():
         backend.meta.set(META_STATE, STATE_CUTOVER)
-    backend.swap_cutover(target)
+    # A refused cutover changed nothing. Backfill again from the start
+    # so the next resume fills the rows the check found missing.
+    try:
+        backend.swap_cutover(target)
+    except SwapCutoverRefused:
+        with backend.transaction():
+            backend.meta.set(META_STATE, STATE_BACKFILLING)
+            backend.meta.set(META_CURSOR, '')
+        raise
     with backend.transaction():
         write_fingerprint(backend, target)
         for key in _META_KEYS:

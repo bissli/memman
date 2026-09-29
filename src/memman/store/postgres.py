@@ -41,7 +41,7 @@ from memman.search.keyword import insight_tokens
 from memman.setup.archive import archive_postgres_schema
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession, _check_identifier
-from memman.store.errors import BackendError, ConfigError
+from memman.store.errors import BackendError, ConfigError, SwapCutoverRefused
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
@@ -1597,15 +1597,28 @@ def _swap_cutover_pg(
     orchestrator records cutover state and writes the fingerprint
     around this call.
 
+    A schema with no `embedding_pending` column already committed its
+    cutover, so a resume after a crash past that commit changes
+    nothing here and the orchestrator finishes the swap.
+
     Raises
     ------
-    BackendError
+    SwapCutoverRefused
         When fewer current rows carry `embedding_pending` than carry
         `embedding` (the backfill is incomplete); nothing changes.
     """
     _check_identifier(schema)
     canonical_idx = f'idx_insights_hnsw_{schema}'
     pending_idx = _swap_pending_index_name(schema)
+    pending_sql = (
+        'select 1 from information_schema.columns'
+        ' where table_schema = %s and table_name = %s'
+        " and column_name = 'embedding_pending'")
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(pending_sql, (schema, 'insights'))
+        if cur.fetchone() is None:
+            logger.debug(f'swap cutover on {schema}: already committed')
+            return
     verify_sql = (
         f'select count(*) filter (where embedding is not null),'
         f' count(*) filter (where embedding_pending is not null)'
@@ -1619,7 +1632,7 @@ def _swap_cutover_pg(
                 old_count = int(row[0]) if row else 0
                 new_count = int(row[1]) if row else 0
                 if new_count < old_count:
-                    raise BackendError(
+                    raise SwapCutoverRefused(
                         f'cutover refused: embedding_pending has'
                         f' {new_count} rows but embedding has'
                         f' {old_count}; backfill is incomplete')
