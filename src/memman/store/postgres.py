@@ -407,8 +407,10 @@ where id = %s
         args: list[Any] = []
         if keyword:
             for word in keyword.split():
+                escaped = word.replace(
+                    '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
                 conditions.append('content ilike %s')
-                args.append(f'%{word}%')
+                args.append(f'%{escaped}%')
         args.append(limit)
         where_clause = ' and '.join(conditions)
         sql = self._q(f"""

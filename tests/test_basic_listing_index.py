@@ -117,3 +117,26 @@ def test_the_basic_listing_matches_content_alone(tmp_path):
     assert [r.id for r in rows] == ['hit']
     assert 'entities' not in sql
     assert 'keywords' not in sql
+
+
+def test_the_basic_listing_matches_wildcard_characters_literally(backend):
+    r"""Verify `--basic` reads `%`, `_`, and `\\` in a query word as text.
+
+    Mutation: a backend's `nodes.query` passing the word into its LIKE
+        pattern unescaped, so `_` matches any one character, `%` any
+        run, and a backslash escapes the character after it.
+    Oracle: hand-built decoy rows that match only when a character is
+        read as a wildcard or an escape.
+    """
+    backend.nodes.insert(make_insight(id='under', content='snake_case name'))
+    backend.nodes.insert(make_insight(id='under-decoy', content='snakeXcase name'))
+    backend.nodes.insert(make_insight(id='pct', content='at 100% load'))
+    backend.nodes.insert(make_insight(id='pct-decoy', content='at 1000 load'))
+    backend.nodes.insert(make_insight(id='slash', content='path a\\b here'))
+    backend.nodes.insert(make_insight(id='slash-decoy', content='path ab here'))
+
+    matched = {word: [r.id for r in backend.nodes.query(keyword=word, limit=10)]
+               for word in ('snake_case', '100%', 'a\\b')}
+
+    assert matched == {
+        'snake_case': ['under'], '100%': ['pct'], 'a\\b': ['slash']}
