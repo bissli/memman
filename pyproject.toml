@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "memman"
-version = "0.44.2"
+version = "0.44.3"
 description = "LLM-supervised persistent memory for Claude Code - fused keyword, vector and recency recall, with rerank and pluggable embeddings."
 authors = ["bissli"]
 license = "MIT"
