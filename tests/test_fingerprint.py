@@ -11,24 +11,30 @@ import json
 
 import pytest
 from click.testing import CliRunner
-from memman.cli import cli
-from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
+from memman import embed as embed_mod
+from memman.cli import _StoreContext, cli
+from memman.doctor import check_embed_fingerprint
+from memman.embed import get_client
+from memman.embed.fingerprint import Fingerprint, bound_embedder
+from memman.embed.fingerprint import seed_default_fingerprint, seed_if_fresh
 from memman.embed.fingerprint import stored_fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.exceptions import ConfigError, EmbedFingerprintError
-from memman.store.db import get_meta, open_db
+from memman.setup import scheduler as sched_mod
+from memman.setup.claude import _init_default_store
+from memman.store.db import DB, get_meta, open_db, set_meta, store_dir
 from memman.store.node import insert_insight, update_embedding
 from memman.store.sqlite import SqliteBackend
 from tests.conftest import make_insight
 
 
-def _seed_voyage(db) -> None:
+def _seed_voyage(db: DB) -> None:
     """Helper: write the canonical voyage fingerprint to meta."""
     write_fingerprint(SqliteBackend(db), Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512))
 
 
-def _seed_row_with_embedding(db, *, id: str, content: str = 'x',
+def _seed_row_with_embedding(db: DB, *, id: str, content: str = 'x',
                              model: str = 'voyage-3-lite',
                              dim: int = 512) -> None:
     """Seed a row with a synthetic embedding of given model+dim."""
@@ -48,16 +54,26 @@ class TestFingerprintRegistry:
     """Provider registry resolution and Fingerprint serialization."""
 
     def test_unknown_provider_raises_config_error(self, env_file):
-        """Unknown MEMMAN_EMBED_PROVIDER raises ConfigError."""
+        """Verify an unknown MEMMAN_EMBED_PROVIDER raises ConfigError.
+
+        Mutation: get_client indexing PROVIDERS directly (KeyError), or
+            dropping the registered names from the message.
+        Oracle: The literal name `bogus` and the registered name `voyage` in
+            the error text.
+        """
         env_file('MEMMAN_EMBED_PROVIDER', 'bogus')
-        from memman.embed import get_client
         with pytest.raises(ConfigError) as excinfo:
             get_client()
         assert 'bogus' in str(excinfo.value)
         assert 'voyage' in str(excinfo.value)
 
     def test_default_provider_is_voyage(self, monkeypatch):
-        """Unset MEMMAN_EMBED_PROVIDER picks voyage and matches its triple."""
+        """Verify an unset MEMMAN_EMBED_PROVIDER yields the voyage triple.
+
+        Mutation: The shipped default provider, model, or dim drifting from
+            voyage / voyage-3-lite / 512.
+        Oracle: Hand-written literal triple.
+        """
         monkeypatch.delenv('MEMMAN_EMBED_PROVIDER', raising=False)
         fp = seed_default_fingerprint()
         assert fp.provider == 'voyage'
@@ -65,7 +81,12 @@ class TestFingerprintRegistry:
         assert fp.dim == 512
 
     def test_fingerprint_round_trip_json(self):
-        """Fingerprint to_json/from_json is stable and lossless."""
+        """Verify Fingerprint to_json/from_json is stable and lossless.
+
+        Mutation: to_json dropping a field or renaming a key, or from_json
+            coercing dim to a string.
+        Oracle: Hand-written JSON dict and equality with the original.
+        """
         fp = Fingerprint(provider='openai', model='text-3-small', dim=1536)
         blob = fp.to_json()
         parsed = json.loads(blob)
@@ -74,12 +95,22 @@ class TestFingerprintRegistry:
         assert Fingerprint.from_json(blob) == fp
 
     def test_fingerprint_from_json_malformed(self):
-        """Corrupt JSON raises EmbedFingerprintError, not stdlib errors."""
+        """Verify corrupt JSON raises EmbedFingerprintError.
+
+        Mutation: from_json narrowing its except clause so JSONDecodeError
+            escapes.
+        Oracle: pytest.raises on a non-JSON string.
+        """
         with pytest.raises(EmbedFingerprintError):
             Fingerprint.from_json('not-json-at-all')
 
     def test_fingerprint_from_json_missing_keys(self):
-        """Missing required key raises EmbedFingerprintError."""
+        """Verify a missing required key raises EmbedFingerprintError.
+
+        Mutation: from_json dropping KeyError from its except clause, or
+            defaulting the missing model and dim.
+        Oracle: pytest.raises on JSON that holds only `provider`.
+        """
         with pytest.raises(EmbedFingerprintError):
             Fingerprint.from_json('{"provider": "voyage"}')
 
@@ -89,17 +120,23 @@ class TestFingerprintConsistency:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_bound_embedder_raises_on_unseeded(self, tmp_db):
-        """No meta.embed_fingerprint -> EmbedFingerprintError with hint."""
-        from memman.embed.fingerprint import bound_embedder
+        """Verify bound_embedder on an unseeded store raises with a fix hint.
+
+        Mutation: bound_embedder falling back to the env-active client for an
+            unseeded store, or losing the `embed reembed` hint.
+        Oracle: The hint text the operator is told to run.
+        """
         with pytest.raises(EmbedFingerprintError) as excinfo:
             bound_embedder(SqliteBackend(tmp_db))
         assert 'embed reembed' in str(excinfo.value)
 
     def test_init_default_store_seeds_fingerprint(self, tmp_path):
-        """_init_default_store writes meta.embed_fingerprint at create time."""
-        from memman.setup.claude import _init_default_store
-        from memman.store.db import store_dir
+        """Verify _init_default_store writes the fingerprint at creation.
 
+        Mutation: _init_default_store creating the store without calling
+            seed_if_fresh.
+        Oracle: The fingerprint read back from a reopened store on disk.
+        """
         _init_default_store(str(tmp_path))
         db = open_db(store_dir(str(tmp_path), 'default'))
         try:
@@ -112,9 +149,8 @@ class TestFingerprintConsistency:
 
 
 @pytest.fixture
-def _scheduler_stopped(monkeypatch):
+def _scheduler_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force read_state to STATE_STOPPED for embed reembed tests."""
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(
         sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
 
@@ -123,10 +159,14 @@ class TestReembed:
     """embed reembed CLI: initialize, swap, resumability, worker blocking."""
 
     def test_initializes_unseeded_db(self, tmp_path, _scheduler_stopped):
-        """Running embed reembed on an unseeded DB writes the fingerprint
-        without re-embedding rows that already match the active client.
+        """Verify reembed seeds an unseeded store, skipping matching rows.
+
+        Mutation: The row match test in _reembed_one_store comparing the wrong
+            field, so matching rows are re-embedded; or the final write leaving
+            state in_progress or a stale cursor.
+        Oracle: Two seeded rows: total_scanned 2, total_reembedded 0, meta
+            state idle, cursor empty.
         """
-        from memman.store.db import store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -158,8 +198,12 @@ class TestReembed:
             db.close()
 
     def test_dry_run_writes_nothing(self, tmp_path):
-        """--dry-run reports counts without DB writes."""
-        from memman.store.db import store_dir
+        """Verify --dry-run reports counts and writes nothing.
+
+        Mutation: The dry-run branch still writing the fingerprint or the
+            in_progress state.
+        Oracle: stored_fingerprint is still None after the run.
+        """
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -182,14 +226,23 @@ class TestReembed:
             db.close()
 
     def test_rejects_when_scheduler_started(self, tmp_path):
-        """Refuses to run when scheduler is started (autouse fixture)."""
+        """Verify reembed refuses to run while the scheduler is started.
+
+        Mutation: Removing the _require_stopped call from embed_reembed.
+        Oracle: Non-zero exit and the `scheduler stop` instruction in the
+            output.
+        """
         result = _invoke([
             '--data-dir', str(tmp_path), 'embed', 'reembed'])
         assert result.exit_code != 0
         assert 'scheduler stop' in result.output.lower()
 
     def test_passes_dry_run_when_started(self, tmp_path):
-        """--dry-run is allowed even when scheduler is started."""
+        """Verify --dry-run runs while the scheduler is started.
+
+        Mutation: Calling _require_stopped before the dry_run check.
+        Oracle: Exit code 0 under the autouse started-scheduler fixture.
+        """
         result = _invoke([
             '--data-dir', str(tmp_path / 'memman'), 'embed', 'reembed',
             '--dry-run'])
@@ -197,13 +250,12 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_recall_on_fresh_store_returns_empty(self, tmp_path):
-        """Recall on a brand-new store auto-seeds the fingerprint and
-        prints nothing, not EmbedFingerprintError.
+        """Verify recall on a brand-new store auto-seeds and prints nothing.
 
-        Mutation: an unhandled `EmbedFingerprintError` reaching the
-            CLI, or a page line printed for a store holding no row.
-        Oracle: an empty page (Section: the recall page's empty-page
-            contract) alongside the auto-seeded fingerprint on disk.
+        Mutation: An unhandled EmbedFingerprintError reaching the CLI, or a
+            page line printed for a store holding no row.
+        Oracle: Exit 0 with empty stdout (the zero-anchor warning goes to
+            stderr), and a fingerprint on disk.
         """
         data_dir = str(tmp_path / 'memman')
         result = _invoke([
@@ -212,9 +264,8 @@ class TestReembed:
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
             f'output={result.output}')
-        assert result.output == ''
+        assert result.stdout == ''
 
-        from memman.store.db import store_dir
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
@@ -224,12 +275,11 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_custom_store_recall_on_fresh_returns_empty(self, tmp_path):
-        """Recall on a never-used --store custom name auto-seeds and
-        prints nothing.
+        """Verify recall on a never-used --store auto-seeds and is empty.
 
-        Mutation: an unhandled `EmbedFingerprintError` reaching the
-            CLI on a never-used store name.
-        Oracle: an empty page from a store that has never held a row.
+        Mutation: An unhandled EmbedFingerprintError reaching the CLI on a
+            never-used store name.
+        Oracle: Exit 0 with empty output.
         """
         result = _invoke([
             '--data-dir', str(tmp_path / 'memman'), '--store', 'custom',
@@ -237,12 +287,15 @@ class TestReembed:
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
             f'output={result.output}')
-        assert result.output == ''
+        assert result.stdout == ''
 
     @pytest.mark.no_autoseed_fingerprint
     def test_remember_on_fresh_store_seeds_and_drains(self, tmp_path):
-        """Remember on a fresh store seeds the fingerprint AND the
-        worker drain succeeds.
+        """Verify remember on a fresh store seeds it and the drain works.
+
+        Mutation: The write path skipping seed_if_fresh, so the drain fails on
+            a missing fingerprint.
+        Oracle: Exit 0 for remember and for drain, and a stored fingerprint.
         """
         data_dir = str(tmp_path / 'memman')
         result = _invoke([
@@ -254,7 +307,6 @@ class TestReembed:
             'scheduler', 'drain'])
         assert drain_result.exit_code == 0, drain_result.output
 
-        from memman.store.db import store_dir
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
@@ -264,12 +316,14 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_seed_if_fresh_short_circuits_on_present_insights(self, tmp_path):
-        """seed_if_fresh declines to seed when insights are non-empty and
-        fingerprint is missing -- corruption, not fresh state.
+        """Verify seed_if_fresh declines to seed a store that holds rows.
+
+        A missing fingerprint beside existing insights is corruption, not a
+        fresh store.
+
+        Mutation: Dropping the count_total guard, so seeding hides corruption.
+        Oracle: Return value False and the fingerprint still None.
         """
-        from memman.embed import get_client
-        from memman.embed.fingerprint import seed_if_fresh
-        from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
@@ -284,14 +338,12 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     def test_seed_if_fresh_raises_on_unavailable_client(
             self, tmp_path, monkeypatch):
-        """When the embed client reports unavailable on a fresh store,
-        recall surfaces the unavailable-client message, not the
-        misleading 'embed reembed' hint.
+        """Verify an unavailable client surfaces its own message on recall.
 
-        Mutation: seed_if_fresh swallowing the unavailable-client
-        error and falling through to the corrupted-store message.
-        Oracle: the Voyage-specific 'not available' text the stubbed
-        client's unavailable branch raises.
+        Mutation: seed_if_fresh swallowing the unavailable-client error and
+            falling through to the corrupted-store message.
+        Oracle: The Voyage-specific `not available` text, and no `embed
+            reembed` hint.
         """
         monkeypatch.setattr(
             'memman.embed.voyage.Client.available', lambda self: False)
@@ -304,10 +356,12 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_recall_blocks_on_corrupted_store(self, tmp_path):
-        """Recall raises EmbedFingerprintError when fingerprint is None
-        AND insights already exist (real corruption, not a fresh DB).
+        """Verify recall fails on a populated store with no fingerprint.
+
+        Mutation: _StoreContext seeding or ignoring a missing fingerprint when
+            insights exist.
+        Oracle: Non-zero exit and the `embed reembed` hint in the output.
         """
-        from memman.store.db import store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -323,10 +377,13 @@ class TestReembed:
 
     def test_converges_after_provider_swap(
             self, tmp_path, _scheduler_stopped, monkeypatch, env_file):
-        """Swap to a stub provider with a different dim, run reembed,
-        assert all rows are re-embedded and the fingerprint advances.
+        """Verify reembed after a provider swap converges every row.
+
+        Mutation: The match test treating rows with a different model or dim as
+            current, or the fingerprint not advancing.
+        Oracle: Two rows re-embedded, stored provider stub, and each blob 1024
+            * 8 bytes.
         """
-        from memman.store.db import store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -351,7 +408,6 @@ class TestReembed:
             def unavailable_message(self):
                 return 'stub down'
 
-        from memman import embed as embed_mod
         monkeypatch.setitem(
             embed_mod.PROVIDERS, 'stub', _StubClient)
         env_file('MEMMAN_EMBED_PROVIDER', 'stub')
@@ -371,8 +427,8 @@ class TestReembed:
             assert stored.provider == 'stub'
             assert stored.dim == 1024
             rows = db._query(
-                'SELECT id, LENGTH(embedding) FROM insights'
-                ' WHERE deleted_at IS NULL ORDER BY id').fetchall()
+                'select id, length(embedding) from insights'
+                ' where deleted_at is null order by id').fetchall()
             for _id, blob_len in rows:
                 assert blob_len == 1024 * 8
         finally:
@@ -381,13 +437,14 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     @pytest.mark.no_auto_drain
     def test_drain_binds_per_store_fingerprint(self, tmp_path, monkeypatch):
-        """Worker drain binds the store-fingerprinted embedder, regardless
-        of `MEMMAN_EMBED_PROVIDER`. Per-store data sovereignty: the
-        store's stored fingerprint is the runtime authority for which
-        embedder client gets used.
+        """Verify _StoreContext binds the stored fingerprint.
+
+        The store fingerprint is the runtime authority for which client embeds.
+
+        Mutation: _StoreContext binding get_client() instead of bound_embedder.
+        Oracle: A stored openai/other fingerprint against the voyage env
+            default.
         """
-        from memman.cli import _StoreContext
-        from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
@@ -404,9 +461,12 @@ class TestReembed:
             ctx.close()
 
     def test_embed_status_reports_stored_fingerprint(self, tmp_path):
-        """Embed status reports the stored fingerprint and credential availability.
+        """Verify embed status reports the stored fingerprint.
+
+        Mutation: embed_status reading the env-active fingerprint, or omitting
+            credentials_available.
+        Oracle: Seeded voyage/512 values and credentials_available True.
         """
-        from memman.store.db import store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -425,8 +485,11 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_embed_status_unseeded_reports_no_fingerprint(self, tmp_path):
-        """Embed status reports stored=None when DB has no fingerprint."""
-        from memman.store.db import store_dir
+        """Verify embed status on an unseeded store reports stored=None.
+
+        Mutation: embed_status inventing a stored value or dropping the hint.
+        Oracle: stored is None and the hint names `embed reembed`.
+        """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         db.close()
@@ -439,10 +502,11 @@ class TestReembed:
         assert 'embed reembed' in out['hint']
 
     def test_doctor_reports_fingerprint_pass(self, tmp_path):
-        """check_embed_fingerprint passes when stored exists and creds available.
+        """Verify the doctor check passes with a fingerprint and creds.
+
+        Mutation: The check reporting fail or dropping the stored detail.
+        Oracle: Status pass, the seeded voyage provider, and credentials True.
         """
-        from memman.doctor import check_embed_fingerprint
-        from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
@@ -457,14 +521,15 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     def test_doctor_reports_fingerprint_pass_when_empty_and_unseeded(
             self, tmp_path):
-        """Empty store with no stored fingerprint passes.
+        """Verify an empty store with no fingerprint passes the check.
 
-        A fresh `memman install` has zero insights and no fingerprint;
-        the first write seeds the fingerprint. Reporting `fail` here
-        would surface a doctor regression on every fresh install.
+        A fresh `memman install` has no insights and no fingerprint. The first
+        write seeds it.
+
+        Mutation: The empty-store branch reporting fail, which flags a
+            regression on every fresh install.
+        Oracle: Status pass on a store that holds no row.
         """
-        from memman.doctor import check_embed_fingerprint
-        from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
@@ -476,10 +541,12 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     def test_doctor_reports_fingerprint_fail_when_populated_and_unseeded(
             self, tmp_path):
-        """Populated store missing the fingerprint fails - schema regression.
+        """Verify a populated store with no fingerprint fails the check.
+
+        Mutation: The check passing when count_active is above zero and the
+            fingerprint is missing.
+        Oracle: Status fail and the `embed reembed` fix in detail.error.
         """
-        from memman.doctor import check_embed_fingerprint
-        from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
@@ -491,10 +558,12 @@ class TestReembed:
         assert 'embed reembed' in result['detail']['error']
 
     def test_idempotent_on_repeat(self, tmp_path, _scheduler_stopped):
-        """Running reembed twice with the same active provider:
-        second run must report total_reembedded=0.
+        """Verify a second reembed with the same provider re-embeds nothing.
+
+        Mutation: The first run not persisting the new model on each row, so
+            the second run re-embeds again.
+        Oracle: total_reembedded 1 on the first run, 0 on the second.
         """
-        from memman.store.db import store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -518,8 +587,10 @@ class TestReembed:
 
     def test_blocks_when_provider_unavailable(
             self, tmp_path, _scheduler_stopped, monkeypatch, env_file):
-        """If the active client's available() returns False, reembed
-        refuses to run with the unavailable_message().
+        """Verify reembed refuses to run when the client is unavailable.
+
+        Mutation: Removing the ec.available() check in embed_reembed.
+        Oracle: Non-zero exit and the client unavailable_message text.
         """
         class _UnavailableClient:
             name = 'fake'
@@ -535,7 +606,6 @@ class TestReembed:
             def unavailable_message(self):
                 return 'fake provider down: set FAKE_API_KEY'
 
-        from memman import embed as embed_mod
         monkeypatch.setitem(
             embed_mod.PROVIDERS, 'fake', _UnavailableClient)
         env_file('MEMMAN_EMBED_PROVIDER', 'fake')
@@ -547,10 +617,14 @@ class TestReembed:
 
     def test_resumable_from_cursor(
             self, tmp_path, _scheduler_stopped, monkeypatch):
-        """Pre-seed state=in_progress with a cursor past the first row;
-        re-running reembed must skip the first row.
+        """Verify reembed resumes past the stored cursor.
+
+        State is pre-seeded to in_progress with the cursor at the first row.
+
+        Mutation: Ignoring the stored cursor, or resetting it, so the first row
+            is re-embedded.
+        Oracle: The stub client saw only the text `beta`.
         """
-        from memman.store.db import set_meta, store_dir
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
@@ -581,7 +655,6 @@ class TestReembed:
             def unavailable_message(self):
                 return 'down'
 
-        from memman import embed as embed_mod
         monkeypatch.setitem(
             embed_mod.PROVIDERS, 'voyage', _StubClient)
 
@@ -591,14 +664,11 @@ class TestReembed:
         assert embed_calls == ['beta']
 
     def test_worker_binds_store_fingerprint(self, tmp_path, monkeypatch):
-        """The worker binds the store-fingerprinted embedder rather than
-        the env-resolved active client. Per-store data sovereignty:
-        env-active != stored is no longer an error; it is the
-        ordinary multi-store case.
-        """
-        from memman.cli import _StoreContext
-        from memman.store.db import store_dir
+        """Verify _StoreContext binds the stored fingerprint.
 
+        Mutation: _StoreContext binding get_client() instead of bound_embedder.
+        Oracle: A stored openai/m fingerprint against the voyage env default.
+        """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:

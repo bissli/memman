@@ -12,13 +12,35 @@ canned responses. This exercises the real code paths.
 
 import hashlib
 import json
+import logging
+import os
 import struct
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+import click.testing
 import pytest
-from memman.queue import queue_db
-from memman.store.model import Insight
+from click.testing import CliRunner
+from memman import config
+from memman.cli import _reset_heartbeat_state as _reset_cli_heartbeat
+from memman.cli import cli
+from memman.embed import fingerprint as fp_mod
+from memman.embed import get_client
+from memman.embed import registry as _embed_registry
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+from memman.embed.fingerprint import write_fingerprint
+from memman.llm import client as llm_client_mod
+from memman.queue import open_queue_db, queue_db
+from memman.setup import scheduler as sched_mod
+from memman.store.db import open_db, open_read_only, read_active, store_dir
+from memman.store.factory import drop_store, resolve_store_backend
+from memman.store.factory import resolve_store_pg_dsn
+from memman.store.model import Insight, format_timestamp
+from memman.store.node import insert_insight
+from memman.store.sqlite import SqliteBackend, drop_sqlite_store
+from memman.store.sqlite import open_sqlite_backend
 
 try:
     import psycopg  # noqa: F401
@@ -32,7 +54,8 @@ except ImportError:
 EMBEDDING_DIM = 512
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+        config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-skip @pytest.mark.postgres tests when psycopg is not installed."""
     if _POSTGRES_AVAILABLE:
         return
@@ -50,7 +73,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_env(tmp_path, monkeypatch, request):
+def logger_state() -> Iterator[logging.Logger]:
+    """Restore the process-wide `memman` logger after every test.
+
+    `_configure_logging` mutates a module-level logger and is written
+    to run once per process, so any CLI invocation leaks handlers and
+    a level into every later test in the session.
+    """
+    log = logging.getLogger('memman')
+    saved_handlers = [(h, h.level) for h in log.handlers]
+    saved_level = log.level
+    yield log
+    for handler in log.handlers:
+        if handler not in [h for h, _ in saved_handlers]:
+            handler.close()
+    log.handlers[:] = [h for h, _ in saved_handlers]
+    for handler, level in saved_handlers:
+        handler.setLevel(level)
+    log.setLevel(saved_level)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                 request: pytest.FixtureRequest):
     """Pin MEMMAN_DATA_DIR and the home directory to tmp and seed the env file.
 
     Prevents the user's real `~/.memman/env` from leaking into the
@@ -68,9 +113,6 @@ def _isolate_env(tmp_path, monkeypatch, request):
     if 'tests/e2e/' in str(request.node.fspath):
         yield
         return
-    import os
-
-    from memman import config
     live_mode = request.config.getoption('--live')
     real_secrets = {}
     if live_mode:
@@ -120,7 +162,6 @@ def _isolate_env(tmp_path, monkeypatch, request):
     if 'no_default_env' not in request.keywords:
         _write_default_env_file(data_dir, real_secrets=real_secrets or None)
     config.reset_file_cache()
-    from memman.embed import registry as _embed_registry
     _embed_registry.reset_for_tests()
     yield
     config.reset_file_cache()
@@ -137,13 +178,9 @@ _TEST_MOCK_SECRETS = {
 def _set_env_file_value(key: str, value: str | None) -> None:
     """Write or remove a key in the active test env file.
 
-    Replacement for `monkeypatch.setenv` for installable keys -- the
-    runtime resolver no longer reads `os.environ`, so tests must mutate
-    the env file directly. Pass `value=None` to remove the key.
+    Installable keys live in the env file because the runtime resolver
+    does not read `os.environ`. Pass `value=None` to remove the key.
     """
-    import os
-
-    from memman import config
     data_dir = os.environ.get(config.DATA_DIR)
     if not data_dir:
         raise RuntimeError(
@@ -172,18 +209,17 @@ def env_file():
     return _set_env_file_value
 
 
-def _write_default_env_file(data_dir, real_secrets=None):
+def _write_default_env_file(
+        data_dir: Path, real_secrets: dict[str, str] | None = None) -> None:
     """Seed `<data_dir>/env` with `INSTALL_DEFAULTS` for tests.
 
     Mirrors a post-install state so runtime call sites (which use
     `config.require`) resolve cleanly. By default seeds mock API key
-    values since the runtime resolver no longer consults `os.environ`
-    -- the keys must live in the env file. Pass `real_secrets={...}`
-    (from `--live` mode) to seed real credentials captured from the
-    shell instead. Tests that need the broken state opt out via
-    `@pytest.mark.no_default_env`.
+    values, because the runtime resolver does not consult `os.environ`.
+    Pass `real_secrets={...}` (from `--live` mode) to seed real
+    credentials captured from the shell instead. Tests that need the
+    broken state opt out via `@pytest.mark.no_default_env`.
     """
-    from memman import config
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / config.ENV_FILENAME
     secrets = dict(_TEST_MOCK_SECRETS)
@@ -210,14 +246,14 @@ def _reset_heartbeat_state():
     tests share it. Reset before AND after each test to prevent
     cross-test contamination if a future fixture reuses a data_dir.
     """
-    from memman.cli import _reset_heartbeat_state as _reset
-    _reset()
+    _reset_cli_heartbeat()
     yield
-    _reset()
+    _reset_cli_heartbeat()
 
 
 @pytest.fixture(autouse=True)
-def _scheduler_started(request, monkeypatch):
+def _scheduler_started(request: pytest.FixtureRequest,
+                       monkeypatch: pytest.MonkeyPatch):
     """Force scheduler state to STARTED so writes are accepted in tests.
 
     cli.py's `_require_started` rejects writes when `read_state()`
@@ -241,7 +277,6 @@ def _scheduler_started(request, monkeypatch):
         return
     if request.node.fspath.basename == 'test_scheduler_setup.py':
         return
-    from memman.setup import scheduler as sched_mod
     if 'scheduler_stopped' in request.keywords:
         monkeypatch.setattr(sched_mod, 'read_state',
                             lambda: sched_mod.STATE_STOPPED)
@@ -249,10 +284,11 @@ def _scheduler_started(request, monkeypatch):
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
-    import click.testing
     original_invoke = click.testing.CliRunner.invoke
 
-    def _wrapped_invoke(self, cli_obj, args=None, **kwargs):
+    def _wrapped_invoke(
+            self: CliRunner, cli_obj: Any, args: list[str] | None = None,
+            **kwargs: Any) -> click.testing.Result:
         result = original_invoke(self, cli_obj, args, **kwargs)
         if (result.exit_code == 0
                 and 'no_auto_drain' not in request.keywords
@@ -269,7 +305,7 @@ def _scheduler_started(request, monkeypatch):
 _AUTO_DRAIN_TRIGGERS = ('remember', 'replace')
 
 
-def _args_target_write(args) -> bool:
+def _args_target_write(args: list[str] | None) -> bool:
     if not args:
         return False
     for arg in args:
@@ -278,7 +314,7 @@ def _args_target_write(args) -> bool:
     return False
 
 
-def _args_data_dir(args) -> str | None:
+def _args_data_dir(args: list[str] | None) -> str | None:
     if not args:
         return None
     seq = list(args)
@@ -288,13 +324,13 @@ def _args_data_dir(args) -> str | None:
     return None
 
 
-def _force_drain_with(runner_cls, data_dir, original_invoke) -> None:
+def _force_drain_with(runner_cls: type[CliRunner], data_dir: str,
+                      original_invoke: Any) -> None:
     """Run `scheduler drain` via the underlying click invoke.
 
     Bypasses the autouse-wrapped `invoke` to avoid re-triggering the
     auto-drain path on the drain command itself.
     """
-    from memman.cli import cli
     instance = runner_cls()
     result = original_invoke(
         instance, cli,
@@ -311,9 +347,7 @@ def force_drain(data_dir: str) -> None:
     this to flush pending work through the worker before reading. Uses
     the same `scheduler drain` code path the OS timer fires.
     """
-    import click.testing
-    from memman.cli import cli
-    instance = click.testing.CliRunner()
+    instance = CliRunner()
     result = instance.invoke(
         cli, ['--data-dir', data_dir,
               'scheduler', 'drain'])
@@ -323,7 +357,8 @@ def force_drain(data_dir: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _autoseed_fingerprint(request, monkeypatch):
+def _autoseed_fingerprint(request: pytest.FixtureRequest,
+                          monkeypatch: pytest.MonkeyPatch):
     """Auto-seed `meta.embed_fingerprint` on `bound_embedder`.
 
     `tmp_db` already writes a fingerprint via `write_fingerprint`; this
@@ -341,12 +376,10 @@ def _autoseed_fingerprint(request, monkeypatch):
     if 'no_autoseed_fingerprint' in request.keywords:
         return
 
-    from memman.embed import fingerprint as fp_mod
     real_bound = fp_mod.bound_embedder
 
-    def seed_then_bound(backend):
+    def seed_then_bound(backend: Any) -> Any:
         if fp_mod.stored_fingerprint(backend) is None:
-            from memman.embed import get_client
             fp_mod.write_fingerprint(
                 backend, fp_mod.Fingerprint.from_client(get_client()))
         return real_bound(backend)
@@ -355,7 +388,8 @@ def _autoseed_fingerprint(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _mock_apis(request, monkeypatch):
+def _mock_apis(request: pytest.FixtureRequest,
+               monkeypatch: pytest.MonkeyPatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 
     Patches at the method layer: MemmanLLMClient.complete returns
@@ -395,13 +429,11 @@ def _mock_apis(request, monkeypatch):
         monkeypatch.setattr(
             'memman.llm.openrouter_models.fetch_model_notice',
             lambda endpoint, *, model, vendors: '')
-    from memman import config
     config.reset_file_cache()
-    from memman.llm import client as llm_client_mod
     llm_client_mod.reset_client_cache()
 
 
-def _mock_llm_complete(self: object, system: str, user: str, *,
+def _mock_llm_complete(self: Any, system: str, user: str, *,
                        stage: str) -> str:
     """Route a `complete` call to the mock for its system text.
 
@@ -435,7 +467,7 @@ def _mock_enrichment(content: str) -> str:
     return json.dumps({'summary': content[:100]})
 
 
-def _mock_rerank(self: object, query: str, documents: list[str],
+def _mock_rerank(self: Any, query: str, documents: list[str],
                  top_k: int | None = None) -> list[tuple[int, float]]:
     """Passthrough reranker: input order preserved, scores descending.
 
@@ -449,12 +481,12 @@ def _mock_rerank(self: object, query: str, documents: list[str],
 
 
 def _mock_embed_batch(
-        self: object, texts: list[str]) -> list[list[float]]:
+        self: Any, texts: list[str]) -> list[list[float]]:
     """Batch variant of `_mock_embed`. One vector per input."""
     return [_mock_embed(self, t) for t in texts]
 
 
-def _mock_embed(self: object, text: str) -> list[float]:
+def _mock_embed(self: Any, text: str) -> list[float]:
     """Deterministic embedding from content hash.
 
     Reads target dimension from `self.dim` when available, falling
@@ -492,7 +524,7 @@ def _vec(*prefix: float, dim: int = EMBEDDING_DIM) -> list[float]:
 
 
 @pytest.fixture
-def tmp_db(request, tmp_path):
+def tmp_db(request: pytest.FixtureRequest, tmp_path: Path):
     """Fresh SQLite database in temp directory.
 
     Seeds `meta.embed_fingerprint` to match the active client by
@@ -500,12 +532,8 @@ def tmp_db(request, tmp_path):
     exercising unseeded behavior should use the
     `no_autoseed_fingerprint` mark.
     """
-    from memman.store.db import open_db
-    from memman.store.sqlite import SqliteBackend
     db = open_db(str(tmp_path))
     if 'no_autoseed_fingerprint' not in request.keywords:
-        from memman.embed.fingerprint import seed_default_fingerprint
-        from memman.embed.fingerprint import write_fingerprint
         write_fingerprint(
             SqliteBackend(db), seed_default_fingerprint())
     yield db
@@ -513,7 +541,7 @@ def tmp_db(request, tmp_path):
 
 
 @pytest.fixture
-def tmp_backend(tmp_db):
+def tmp_backend(tmp_db: Any) -> SqliteBackend:
     """Wrap `tmp_db` in a SqliteBackend.
 
     Pipeline / search / graph entry points take `Backend`. Tests that
@@ -521,7 +549,6 @@ def tmp_backend(tmp_db):
     the underlying DB and SqliteBackend share the same connection so
     free-function and verb-surface calls see one transaction.
     """
-    from memman.store.sqlite import SqliteBackend
     return SqliteBackend(tmp_db)
 
 
@@ -562,7 +589,9 @@ def runner_kind(request) -> str:
 
 
 @pytest.fixture
-def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
+def cross_backend_runner(
+        request: pytest.FixtureRequest, runner_kind: str, tmp_path: Path,
+        env_file: Any, monkeypatch: pytest.MonkeyPatch):
     """CliRunner whose env writes per-store keys for `<runner_kind>`.
 
     For postgres mode writes `MEMMAN_BACKEND_<store>` and
@@ -573,9 +602,6 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
     in `test_memory_system.py` so a test can swap one for the other
     transparently.
     """
-    import os
-
-    from click.testing import CliRunner
     r = CliRunner()
     env_data_dir = os.environ.get('MEMMAN_DATA_DIR')
     data_dir = env_data_dir or str(tmp_path / 'memman_data')
@@ -591,17 +617,14 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
         monkeypatch.setenv('MEMMAN_STORE', store_name)
 
         def _drop_postgres_schema() -> None:
-            try:
-                from memman.store.factory import drop_store as _drop
-                _drop(store_name, data_dir)
-            except Exception:
-                pass
+            drop_store(store_name, data_dir)
         request.addfinalizer(_drop_postgres_schema)
     return r, data_dir
 
 
 @pytest.fixture
-def backend(request, backend_kind, tmp_path):
+def backend(request: pytest.FixtureRequest, backend_kind: str,
+            tmp_path: Path):
     """Cross-backend Backend fixture for pipeline tests.
 
     Parametrizes over `{sqlite, postgres}` (postgres slot active only
@@ -614,10 +637,8 @@ def backend(request, backend_kind, tmp_path):
     Pipeline / search / graph tests should use this fixture instead
     of `tmp_backend` to gain Postgres parity.
     """
-    from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
     pg_dsn = None
     if backend_kind == 'sqlite':
-        from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
         data_dir = str(tmp_path / 'memman')
         store_name = 'test'
         b = open_sqlite_backend(store_name, data_dir)
@@ -626,29 +647,17 @@ def backend(request, backend_kind, tmp_path):
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
         store_name = _safe_store_name(request.node.name)
-        try:
-            drop_postgres_store(store_name, pg_dsn)
-        except Exception:
-            pass
+        drop_postgres_store(store_name, pg_dsn)
         b = open_postgres_backend(store_name, pg_dsn)
     b.meta.set(META_KEY, seed_default_fingerprint().to_json())
     try:
         yield b
     finally:
-        try:
-            b.close()
-        except Exception:
-            pass
+        b.close()
         if backend_kind == 'postgres':
-            try:
-                drop_postgres_store(store_name, pg_dsn)
-            except Exception:
-                pass
+            drop_postgres_store(store_name, pg_dsn)
         else:
-            try:
-                drop_sqlite_store(store_name, str(tmp_path / 'memman'))
-            except Exception:
-                pass
+            drop_sqlite_store(store_name, str(tmp_path / 'memman'))
 
 
 def _safe_store_name(test_id: str) -> str:
@@ -664,8 +673,8 @@ def _safe_store_name(test_id: str) -> str:
     return safe[:40] or 'p_test'
 
 
-def set_created_at(backend, insight_id: str, when: datetime) -> None:
-    """Test-only: directly UPDATE `created_at` on a stored insight.
+def set_created_at(backend: Any, insight_id: str, when: datetime) -> None:
+    """Test-only: directly update `created_at` on a stored insight.
 
     The Backend Protocol's `nodes.insert` ignores caller-passed
     `Insight.created_at` (server-side timestamps). Tests that
@@ -675,23 +684,21 @@ def set_created_at(backend, insight_id: str, when: datetime) -> None:
     Bypasses the Protocol intentionally; do NOT use outside test
     code.
     """
-    from memman.store.model import format_timestamp
-    from memman.store.sqlite import SqliteBackend
     when_str = format_timestamp(when)
     if isinstance(backend, SqliteBackend):
         backend._db._exec(
-            'UPDATE insights SET created_at = ? WHERE id = ?',
+            'update insights set created_at = ? where id = ?',
             (when_str, insight_id))
     else:
         with backend._conn.cursor() as cur:
             cur.execute(
-                f'UPDATE {backend._schema}.insights'
-                ' SET created_at = %s WHERE id = %s',
+                f'update {backend._schema}.insights'
+                ' set created_at = %s where id = %s',
                 (when, insight_id))
         backend._conn.commit()
 
 
-def make_insight(**overrides) -> Insight:
+def make_insight(**overrides: Any) -> Insight:
     """Factory for test Insight instances."""
     now = datetime.now(timezone.utc)
     defaults = {
@@ -706,31 +713,29 @@ def make_insight(**overrides) -> Insight:
     return Insight(**defaults)
 
 
-def insert_pending(db, insight_id: str, content: str = 'test content',
-                   **kw) -> None:
+def insert_pending(db: Any, insight_id: str, content: str = 'test content',
+                   **kw: Any) -> None:
     """Insert an insight with enrich_attempted_at = NULL.
 
     Helper for enrichment tests that need pending insights as fixtures.
     Forwards extra kwargs to `make_insight` for content/category control.
     """
-    from memman.store.node import insert_insight
     insert_insight(db, make_insight(id=insight_id, content=content, **kw))
     db._conn.execute(
-        'UPDATE insights SET enrich_attempted_at = NULL WHERE id = ?',
+        'update insights set enrich_attempted_at = null where id = ?',
         (insight_id,))
 
 
 @pytest.fixture
-def queue_conn(tmp_path):
+def queue_conn(tmp_path: Path):
     """Fresh queue.db connection for direct queue helper tests."""
-    from memman.queue import open_queue_db
     conn = open_queue_db(str(tmp_path))
     yield conn
     conn.close()
 
 
 @pytest.fixture
-def fake_home(tmp_path, monkeypatch):
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect HOME and `Path.home` to a tmp_path.
 
     Used by setup-adjacent tests that touch `~/.memman` directly.
@@ -744,22 +749,18 @@ def fake_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def install_env_factory(data_dir, **keys: str | None) -> None:
+def install_env_factory(data_dir: str | Path, **keys: str | None) -> None:
     """Seed an env file at `data_dir` with selected keys.
 
-    Replacement for the per-file `_write_keys` and `_install_env`
-    helpers. Pass key=value to write a row; pass key=None to omit it.
+    Pass key=value to write a row; pass key=None to omit it.
     Recognized convenience aliases: ``openrouter`` -> OPENROUTER_API_KEY,
     ``voyage`` -> VOYAGE_API_KEY. Other kwargs are written as-is.
     """
-    from pathlib import Path as _Path
-
-    from memman import config
     aliases = {
         'openrouter': config.OPENROUTER_API_KEY,
         'voyage': config.VOYAGE_API_KEY,
         }
-    p = _Path(data_dir)
+    p = Path(data_dir)
     p.mkdir(parents=True, exist_ok=True)
     rows = []
     for k, v in keys.items():
@@ -774,7 +775,8 @@ def install_env_factory(data_dir, **keys: str | None) -> None:
     config.reset_file_cache()
 
 
-def fake_subprocess(monkeypatch, target_module, active: bool = True) -> None:
+def fake_subprocess(monkeypatch: pytest.MonkeyPatch, target_module: Any,
+                    active: bool = True) -> None:
     """Stub `subprocess` on `target_module` so tests don't shell out.
 
     `target_module` is the module under test that imports
@@ -797,23 +799,14 @@ def fake_subprocess(monkeypatch, target_module, active: bool = True) -> None:
     monkeypatch.setattr(target_module, 'subprocess', fake)
 
 
-def make_cli_runner(tmp_path, *, subdir: str = 'mm') -> tuple:
+def make_cli_runner(tmp_path: Path, *, subdir: str = 'mm') -> tuple:
     """Build a `(CliRunner, data_dir)` tuple.
-
-    Canonical replacement for the local `runner` fixtures duplicated
-    across test_cli.py, test_cli_new_groups.py, test_worker_runs.py,
-    test_provenance.py, test_doctor.py. Each call site can keep its
-    `runner` fixture as a 2-line wrapper, or take the tuple inline via
-    the `mm_runner` fixture below.
 
     The data_dir matches `MEMMAN_DATA_DIR` set by the autouse
     `_isolate_env` fixture so that env-file reads keyed off the CLI
     `--data-dir` arg find the seeded keys (per-store routing reads
     `<data_dir>/env` directly).
     """
-    import os
-
-    from click.testing import CliRunner
     r = CliRunner()
     env_data_dir = os.environ.get('MEMMAN_DATA_DIR')
     data_dir = env_data_dir or str(tmp_path / subdir)
@@ -822,46 +815,43 @@ def make_cli_runner(tmp_path, *, subdir: str = 'mm') -> tuple:
 
 
 @pytest.fixture
-def mm_runner(tmp_path):
+def mm_runner(tmp_path: Path) -> tuple:
     """Default `(CliRunner, data_dir)` tuple for sqlite-only CLI tests.
 
     Tests that need cross-backend parity use `cross_backend_runner`
-    instead. Local file-level `runner` fixtures should delegate here:
-    `def runner(mm_runner): return mm_runner`. Once a callsite no
-    longer needs a custom data_dir name, it can take `mm_runner`
-    directly and drop the local fixture.
+    instead. A file-level `runner` fixture can delegate here:
+    `def runner(mm_runner): return mm_runner`.
     """
     return make_cli_runner(tmp_path)
 
 
-def invoke(runner_tuple, args):
+def invoke(runner_tuple: tuple, args: list[str]) -> click.testing.Result:
     """Invoke memman CLI with `--data-dir` prepended.
 
     Shared replacement for the per-file `invoke` helpers.
     """
-    from memman.cli import cli
     r, data_dir = runner_tuple
     return r.invoke(cli, ['--data-dir', data_dir] + args)
 
 
-def queued_contents(data_dir):
+def queued_contents(data_dir: str) -> list[str]:
     """Return the content of every queue row, in insert order."""
     with queue_db(data_dir) as conn:
         return [r[0] for r in conn.execute(
             'select content from queue order by id').fetchall()]
 
 
-def parse_remember(result, runner_tuple=None):
+def parse_remember(result: click.testing.Result,
+                   runner_tuple: tuple | None = None) -> dict:
     """Parse remember/replace output, returning a fact-shaped dict.
 
-    Modern `remember`/`replace` returns just `{action: queued,
-    queue_id, store}`. The autouse-drain runs the worker after the
-    invocation, so the new insight lives in the store DB carrying the
-    queue row's `queue_uuid`. This helper reads the uuid off the
-    queue row - `purge_done` retains
-    done rows for 60 s, ample inside a test - and looks the insight
-    up by it. Postgres-aware: switches the lookup query when the
-    per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
+    `remember`/`replace` output is `{action: queued, queue_id, store}`.
+    The autouse drain runs the worker after the invocation, so the new
+    insight sits in the store DB carrying the queue row's `queue_uuid`.
+    This helper reads the uuid off the queue row (`purge_done` retains
+    done rows long enough for a test) and looks the insight up by it.
+    The lookup query switches when the per-store
+    `MEMMAN_BACKEND_<store>=postgres` resolves.
     """
     raw = json.loads(result.output)
     if runner_tuple is None:
@@ -870,10 +860,6 @@ def parse_remember(result, runner_tuple=None):
     if queue_id is None:
         return raw
     _, data_dir = runner_tuple
-    from memman.queue import queue_db
-    from memman.store.db import read_active
-    from memman.store.factory import resolve_store_backend
-    from memman.store.factory import resolve_store_pg_dsn
     with queue_db(data_dir) as qconn:
         qrow = qconn.execute(
             'select queue_uuid from queue where id = ?',
@@ -899,7 +885,6 @@ order by created_at
             cur.execute(sql, (queue_uuid,))
             rows = cur.fetchall()
     else:
-        from memman.store.db import open_read_only, store_dir
         sdir = store_dir(data_dir, name)
         db = open_read_only(sdir)
         sql = """
