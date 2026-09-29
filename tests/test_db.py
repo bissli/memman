@@ -270,3 +270,14 @@ def test_open_read_only_keeps_a_path_holding_a_uri_delimiter(tmp_path):
         attached = db._query('pragma database_list').fetchone()[2]
     assert attached == str(sdir / 'memman.db')
     assert not (tmp_path / 'da').exists()
+
+
+@pytest.mark.parametrize('name', ['work\n', 'work\r', 'a|b', ''])
+def test_valid_store_name_rejects_any_trailing_character(name):
+    r"""Verify a name is valid only when the whole string matches.
+
+    Mutation: `re.match` with a `$` anchor, which also matches before
+        a final newline, so `work\\n` passes as valid.
+    Oracle: names built by hand, each off the pattern by one character.
+    """
+    assert not db_mod.valid_store_name(name)

@@ -239,6 +239,7 @@ The default data directory is `~/.memman`:
 |   +-- enrich.log, enrich.err  # scheduler output of each drain
 |   +-- backup.log, backup.err  # scheduler output of each backup
 |   +-- memman.log              # worker log, rotated, three backups
+|   +-- calls.log               # one line per agent-verb call
 |   +-- debug.log               # debug trace
 +-- data/
     +-- default/
@@ -247,7 +248,7 @@ The default data directory is `~/.memman`:
         +-- memman.db
 ```
 
-`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. These paths move with it: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, and `logs/memman.log`.
+`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. These paths move with it: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, `logs/memman.log`, and `logs/calls.log`.
 
 These paths stay under `~/.memman` regardless of the data directory:
 

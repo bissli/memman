@@ -315,6 +315,7 @@ memman log list --limit 50               # more entries
 memman log list --since 7d               # entries from the last 7 days
 memman log list --since 7d --stats       # counts by operation
 memman log list --text                   # text table
+memman log calls [--since 7d]            # agent-verb calls per date and verb
 memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
@@ -335,6 +336,8 @@ A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_co
 `enrichment_coverage` warns on any stranded memory, reports the count as `stranded`, and names `memman enrich --stale-only` as the fix.
 
 **`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
+
+**`log calls`** counts the calls of the agent verbs (`recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `status`, `doctor`) per UTC date and verb, as JSON. Each such call appends one line to `<data dir>/logs/calls.log`: `<UTC start>|<verb>|<store>|<exit code>|<ms>`. The line never holds the call's arguments, and a store name that is not a valid store name is written as `?`. A call that Click rejects while parsing writes no line, and hooks and the worker write none. `--since` takes the same window as `log list`. `meta.malformed` counts lines off that format, such as a write that a full disk cut short, and they count toward no verb. Nothing rotates or trims `calls.log`.
 
 **`log worker`** prints the last 50 lines (`--lines N`) of a worker log:
 

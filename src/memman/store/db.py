@@ -22,7 +22,7 @@ _VALID_STORE_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')
 def valid_store_name(name: str) -> bool:
     """True if name matches `[a-zA-Z0-9][a-zA-Z0-9_-]*`.
     """
-    return bool(_VALID_STORE_NAME_RE.match(name))
+    return bool(_VALID_STORE_NAME_RE.fullmatch(name))
 
 
 def portable_store_name(name: str) -> str:

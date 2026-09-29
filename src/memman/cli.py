@@ -6,6 +6,7 @@ re-enrichment in `memman.pipeline.enrich`. Storage, search, embed, and
 LLM primitives live under their own packages.
 """
 
+import functools
 import json
 import logging
 import logging.handlers
@@ -22,6 +23,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack
 from datetime import datetime, timedelta, timezone
@@ -114,6 +116,9 @@ _FILE_LINE_RE = re.compile(
 #   slice `[:80]`, `DISPLAY=:99` and `14:18` pass.
 # - `L` takes two digits or more, so an `L1` or `L2` cache passes.
 _BARE_LINE_RE = re.compile(r'(?<![^\s(,;])(?::\d{1,5}|~?L\d{2,5})\b')
+_CALL_LINE_RE = re.compile(
+    r'(?P<started_at>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)'
+    r'\|(?P<verb>[a-z][a-z -]*)\|(?:[a-zA-Z0-9][\w-]*|\?)\|\d+\|\d+')
 
 
 def _line_locator_refusal_message(content: str) -> str | None:
@@ -532,15 +537,84 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['debug'] = debug
 
 
+def _call_log_path(data_dir: str) -> pathlib.Path:
+    """Path of the agent-verb call log under `data_dir`.
+    """
+    return pathlib.Path(data_dir) / 'logs' / 'calls.log'
+
+
 def claude_callable(cmd: click.Command) -> click.Command:
-    """Mark a Click command as safe for Claude Code auto-allow.
+    """Mark a Click command as agent-callable and log each of its calls.
 
     `memman install` walks the CLI tree and emits a `permissions.allow`
     entry in `~/.claude/settings.json` for every command marked with
-    this decorator. Adding or removing the marker on a subcommand
-    automatically flows to the install-time allow list.
+    this decorator.
+
+    Parameters
+    ----------
+    cmd : click.Command
+        The command to mark. Its callback is wrapped in place.
+
+    Returns
+    -------
+    click.Command
+        `cmd`, whose every call appends one line to the call log
+        (`memman log calls`) when its body finishes, whether it
+        succeeds or fails.
+
+    Notes
+    -----
+    - Line format: `<utc start>|<verb path>|<store>|<exit code>|<ms>`.
+      Arguments never enter the line, since they carry memory text. A
+      store name `valid_store_name` rejects is written as `?`.
+    - The line covers the command body only. A call Click rejects
+      while parsing (bad arguments, `--help`) writes no line, and
+      `<ms>` leaves out process startup.
+    - A body that raises anything other than a Click exit records 1.
+      A failed append logs a warning and leaves the call's outcome
+      unchanged.
     """
     cmd.claude_callable = True
+    callback = cmd.callback
+
+    @functools.wraps(callback)
+    def logged_callback(*args: Any, **kwargs: Any) -> Any:
+        ctx = click.get_current_context()
+        started_at = format_timestamp(datetime.now(timezone.utc))
+        started = time.monotonic()
+        exit_code = 1
+        try:
+            result = callback(*args, **kwargs)
+            exit_code = 0
+            return result
+        except (click.exceptions.Exit, click.ClickException) as exc:
+            exit_code = exc.exit_code
+            raise
+        finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            data_dir = ctx.obj['data_dir']
+            store = _resolve_store_name(data_dir, ctx.obj['store'])
+            if not valid_store_name(store):
+                store = '?'
+            verb = ctx.command_path.split(' ', 1)[1]
+            line = f'{started_at}|{verb}|{store}|{exit_code}|{elapsed_ms}\n'
+            log_path = _call_log_path(data_dir)
+            try:
+                log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                # One unbuffered O_APPEND write per call, so concurrent
+                # sessions never interleave a line.
+                fd = os.open(
+                    log_path,
+                    os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                    0o600)
+                try:
+                    os.write(fd, line.encode())
+                finally:
+                    os.close(fd)
+            except OSError as exc:
+                logger.warning(f'call log append failed: {exc}')
+
+    cmd.callback = logged_callback
     return cmd
 
 
@@ -2718,6 +2792,70 @@ def log_list(ctx: click.Context, limit: int, since: str,
             line = '  '.join(
                 col.ljust(widths[i]) for i, col in enumerate(row))
             click.echo(line.rstrip())
+
+
+@log.command('calls')
+@click.option('--since', default='', help='Time window (e.g. 7d, 24h)')
+@click.pass_context
+def log_calls(ctx: click.Context, since: str) -> None:
+    """Count agent-verb calls per UTC date and verb, as JSON.
+
+    Reads `<data dir>/logs/calls.log`, which gains one line each time
+    an agent-callable verb (`recall`, `remember`, `status`, ...) runs.
+
+    \b
+    Parameters
+    ----------
+    since : str
+        Keep calls that started within this window: a count and a
+        unit, `7d`, `24h` or `30m`. Empty keeps every call.
+
+    \b
+    Notes
+    -----
+    - `counts` runs newest date first, then most calls first, then
+      verb name. `meta.total` sums the calls counted.
+    - `meta.malformed` counts lines off the call-log format, such as a
+      write a full disk cut short. They count toward no verb, and the
+      window does not apply to them.
+    - A data dir where no agent verb has run reports no calls.
+
+    \b
+    Examples
+    --------
+    memman log calls
+    memman log calls --since 7d
+    """  # noqa: D301, D410, D411
+    since_ts = _parse_since(since) if since else ''
+    log_path = _call_log_path(ctx.obj['data_dir'])
+    try:
+        lines = log_path.read_text(errors='replace').splitlines()
+    except FileNotFoundError:
+        lines = []
+
+    calls_by_date_verb: Counter[tuple[str, str]] = Counter()
+    malformed_cnt = 0
+    for line in lines:
+        match = _CALL_LINE_RE.fullmatch(line)
+        if match is None:
+            malformed_cnt += 1
+        elif match['started_at'] >= since_ts:
+            date = match['started_at'][:10]
+            calls_by_date_verb[(date, match['verb'])] += 1
+
+    ranked = sorted(
+        calls_by_date_verb.items(), key=lambda item: (-item[1], item[0][1]))
+    ranked.sort(key=lambda item: item[0][0], reverse=True)
+    _json_out({
+        'counts': [
+            {'date': date, 'verb': verb, 'calls': calls}
+            for (date, verb), calls in ranked
+            ],
+        'meta': {
+            'total': sum(calls_by_date_verb.values()),
+            'malformed': malformed_cnt,
+            },
+        })
 
 
 @log.command('worker')
