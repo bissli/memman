@@ -140,6 +140,7 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     home_dir = tmp_path / 'isolated-home'
     home_dir.mkdir()
     monkeypatch.setenv('HOME', str(home_dir))
+    monkeypatch.delenv('CODEX_HOME', raising=False)
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "memman"
 version = "0.44.9"
-description = "LLM-supervised persistent memory for Claude Code - fused keyword, vector and recency recall, with rerank and pluggable embeddings."
+description = "LLM-supervised persistent memory for Claude Code and Codex - fused keyword, vector and recency recall, with rerank and pluggable embeddings."
 authors = ["bissli"]
 license = "MIT"
 readme = "README.md"
@@ -22,6 +22,7 @@ keywords = [
   "semantic-search",
   "claude",
   "claude-code",
+  "codex",
   "anthropic",
   "openai",
   "pgvector",

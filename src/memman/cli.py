@@ -47,8 +47,7 @@ from memman.migrate import _verify_destination_counts, held_drain_lock
 from memman.queue import STATUS_FAILED, claim, enqueue, find_pending
 from memman.queue import find_pending_replace, finish_worker_run, get_row
 from memman.queue import last_worker_run, list_rows, mark_done, mark_failed
-from memman.queue import purge_done
-from memman.queue import queue_db, queue_db_path, retry_row
+from memman.queue import purge_done, queue_db, queue_db_path, retry_row
 from memman.queue import start_worker_run
 from memman.queue import stats as queue_stats
 from memman.setup.archive import archive_postgres_schema
@@ -336,14 +335,16 @@ def _require_stopped(action: str) -> None:
 
 
 def _resolve_store_name(data_dir: str, store_flag: str) -> str:
-    """Store name from the flag, else `MEMMAN_STORE`, else the active one.
+    """Validate the name from the flag, environment, or active-store file.
     """
-    if store_flag:
-        return store_flag
-    env = os.environ.get(config.STORE, '')
-    if env:
-        return env
-    return read_active(data_dir)
+    name = (store_flag or os.environ.get(config.STORE, '')
+            or read_active(data_dir))
+    if not valid_store_name(name):
+        raise click.ClickException(
+            f'invalid store name {name!r}'
+            ' (start with an alphanumeric character; use only letters,'
+            ' digits, dashes, and underscores)')
+    return name
 
 
 def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
@@ -619,8 +620,9 @@ def claude_callable(cmd: click.Command) -> click.Command:
         finally:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             data_dir = ctx.obj['data_dir']
-            store = _resolve_store_name(data_dir, ctx.obj['store'])
-            if not valid_store_name(store):
+            try:
+                store = _resolve_store_name(data_dir, ctx.obj['store'])
+            except click.ClickException:
                 store = '?'
             verb = ctx.command_path.split(' ', 1)[1]
             line = f'{started_at}|{verb}|{store}|{exit_code}|{elapsed_ms}\n'
@@ -644,21 +646,29 @@ def claude_callable(cmd: click.Command) -> click.Command:
     return cmd
 
 
-def list_claude_permissions() -> list[str]:
-    """Return `permissions.allow` entries for every @claude_callable command.
-
-    Order is stable: alphabetical by full dotted path.
+def list_agent_commands() -> list[tuple[str, ...]]:
+    """Subcommand paths of every @claude_callable command, sorted.
     """
-    def walk(group: click.Group, prefix: tuple[str, ...]) -> list[str]:
-        out: list[str] = []
+    def walk(group: click.Group,
+             prefix: tuple[str, ...]) -> list[tuple[str, ...]]:
+        out: list[tuple[str, ...]] = []
         for name, cmd in group.commands.items():
             path = (*prefix, name)
             if isinstance(cmd, click.Group):
                 out.extend(walk(cmd, path))
             elif getattr(cmd, 'claude_callable', False):
-                out.append(f'Bash(memman {" ".join(path)}:*)')
+                out.append(path)
         return out
     return sorted(walk(cli, ()))
+
+
+def list_claude_permissions() -> list[str]:
+    """Return `permissions.allow` entries for every @claude_callable command.
+
+    Order is stable: alphabetical by full dotted path.
+    """
+    return [f'Bash(memman {" ".join(path)}:*)'
+            for path in list_agent_commands()]
 
 
 @cli.group(name='embed')
@@ -2337,6 +2347,8 @@ def store_use(ctx: click.Context, name: str) -> None:
     """Switch the active store.
     """
     data_dir = ctx.obj['data_dir']
+    if not valid_store_name(name):
+        raise click.ClickException(f'invalid store name {name!r}')
     if name not in factory.list_stores(data_dir):
         raise click.ClickException(
             f"store \"{name}\" does not exist"
@@ -3081,6 +3093,9 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
 @click.option('--claude-code', is_flag=True,
               help='Install into ~/.claude even when Claude Code is not'
                    ' detected.')
+@click.option('--codex', is_flag=True,
+              help='Install the Codex skill into ~/.agents/skills even'
+                   ' when Codex is not detected.')
 @click.option('--backend', type=click.Choice(_BACKEND_CHOICES),
               default=None,
               help='Storage backend; bypasses the wizard prompt when set.')
@@ -3096,7 +3111,8 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
 @click.option('--no-wizard', is_flag=True,
               help='Disable interactive prompts; flags + defaults only.')
 @click.pass_context
-def install(ctx: click.Context, claude_code: bool, backend: str | None,
+def install(ctx: click.Context, claude_code: bool, codex: bool,
+            backend: str | None,
             pg_dsn: str | None, llm_endpoint: str | None,
             embed_provider: str | None, no_wizard: bool) -> None:
     """Install memman integration: skill, hooks, scheduler.
@@ -3107,6 +3123,8 @@ def install(ctx: click.Context, claude_code: bool, backend: str | None,
     claude_code : bool
         Install into ~/.claude even when the `claude` binary is not on
         PATH.
+    codex : bool
+        Install the Codex memory skill even when Codex is not detected.
     backend : str or None
         `sqlite` or `postgres`; unset leaves it to the wizard or the
         env file.
@@ -3125,18 +3143,22 @@ def install(ctx: click.Context, claude_code: bool, backend: str | None,
     -----
     - A flag never overrides a value already in ~/.memman/env; it
       refuses and names `memman config set` as the fix.
+    - Without agent flags, install all detected integrations. Explicit
+      --claude-code and --codex flags select only those integrations.
 
     \b
     Examples
     --------
     memman install
     memman install --claude-code --no-wizard
+    memman install --codex
     memman install --backend postgres --pg-dsn postgresql://host/db
     """  # noqa: D301, D410, D411
     from memman.setup.claude import run_install
     run_install(
         ctx.obj['data_dir'],
         claude_code=claude_code,
+        codex=codex,
         backend=backend,
         pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint,
@@ -3148,8 +3170,10 @@ def install(ctx: click.Context, claude_code: bool, backend: str | None,
 @click.option('--claude-code', is_flag=True,
               help='Remove from ~/.claude even when Claude Code is not'
                    ' detected.')
+@click.option('--codex', is_flag=True,
+              help='Remove the Codex skill from ~/.agents/skills.')
 @click.pass_context
-def uninstall(ctx: click.Context, claude_code: bool) -> None:
+def uninstall(ctx: click.Context, claude_code: bool, codex: bool) -> None:
     """Remove memman integration (reverse of `memman install`).
 
     \b
@@ -3158,21 +3182,27 @@ def uninstall(ctx: click.Context, claude_code: bool) -> None:
     claude_code : bool
         Remove from ~/.claude even when the `claude` binary is not on
         PATH.
+    codex : bool
+        Remove the Codex memory skill.
 
     \b
     Notes
     -----
-    - The stores stay on disk. The env file loses its secret keys and
-      keeps the rest, so a later install reuses the settings.
+    - The stores stay on disk. When shared services are removed, the
+      env file loses secret keys and keeps the other settings.
+    - Agent flags select integrations. Keep the shared scheduler and
+      settings while another memman integration remains installed.
+      Without agent flags, remove all detected integrations and services.
 
     \b
     Examples
     --------
     memman uninstall
     memman uninstall --claude-code
+    memman uninstall --codex
     """  # noqa: D301, D410, D411
     from memman.setup.claude import run_uninstall
-    run_uninstall(ctx.obj['data_dir'], claude_code=claude_code)
+    run_uninstall(ctx.obj['data_dir'], claude_code=claude_code, codex=codex)
 
 
 @cli.command()
@@ -3632,8 +3662,7 @@ def prime() -> None:
     status_line = '[memman] Memory active.'
     try:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
-        env_store = os.environ.get(config.STORE, '').strip()
-        name = env_store or read_active(data_dir)
+        name = _resolve_store_name(data_dir, '')
         backend_name = resolve_store_backend(name, data_dir)
         if backend_name == 'sqlite':
             if store_exists(data_dir, name):

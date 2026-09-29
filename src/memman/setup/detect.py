@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from memman.setup.deploy import is_asset_link
+
 logger = logging.getLogger('memman')
 
 
@@ -34,16 +36,36 @@ def detect_claude_code() -> dict:
         Environment dict with keys display, detected, bin_path,
         version, config_dir.
     """
-    config_dir = os.path.join(home_dir(), '.claude')
+    return _detect_cli('claude', 'Claude Code',
+                       os.path.join(home_dir(), '.claude'))
+
+
+def detect_codex() -> dict:
+    """Detect Codex via its CLI, config directory, or installed skill.
+
+    CODEX_HOME changes the config location; user skills live under
+    ~/.agents/skills independently of that setting.
+    """
+    config_dir = str(Path(os.environ.get('CODEX_HOME') or
+                          os.path.join(home_dir(), '.codex')).expanduser())
+    env = _detect_cli('codex', 'Codex', config_dir)
+    env['skills_dir'] = os.path.join(home_dir(), '.agents', 'skills')
+    if is_asset_link('codex', Path(env['skills_dir']) / 'memman'):
+        env['detected'] = True
+    return env
+
+
+def _detect_cli(binary: str, display: str, config_dir: str) -> dict:
+    """Probe a CLI without requiring its version command to succeed."""
     env = {
-        'display': 'Claude Code',
+        'display': display,
         'detected': False,
         'bin_path': '',
         'version': '',
         'config_dir': config_dir,
         }
 
-    bin_path = shutil.which('claude')
+    bin_path = shutil.which(binary)
     if bin_path:
         env['detected'] = True
         env['bin_path'] = bin_path

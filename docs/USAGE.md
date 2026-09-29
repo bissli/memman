@@ -43,6 +43,7 @@ The default setup uses OpenRouter for summaries and Voyage for embeddings and re
 ```bash
 memman install                        # interactive wizard in a terminal
 memman install --claude-code          # install into ~/.claude even when Claude Code is not detected
+memman install --codex                # install the Codex memory skill explicitly
 memman install --no-wizard --backend postgres --pg-dsn postgresql://memman@localhost/memman
 memman uninstall
 memman uninstall --claude-code
@@ -53,6 +54,7 @@ memman uninstall --claude-code
 | Flag                    | Effect                                                                                                                                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--claude-code`         | Install into `~/.claude`, whether or not Claude Code is detected.                                                                                                         |
+| `--codex`               | Install the Codex skill and command rules, whether or not Codex is detected.                                                                                              |
 | `--backend NAME`        | Default storage backend, `sqlite` or `postgres`. Skips the backend prompt.                                                                                                |
 | `--pg-dsn URL`          | Postgres DSN. Install connects, checks for `pgvector`, and stops when either fails. Required with `--backend postgres` when no prompt runs and the env file holds no DSN. |
 | `--llm-endpoint URL`    | LLM endpoint URL. Skips the endpoint prompt. Must start with `http://` or `https://`.                                                                                     |
@@ -61,7 +63,7 @@ memman uninstall --claude-code
 
 ### Installed files and services
 
-Installation writes settings, configures a worker, and adds the Claude Code integration when detected or requested.
+Installation writes settings, configures a worker, and adds detected agent integrations. Passing `--claude-code` or `--codex` selects only the named integration. Passing both installs both.
 
 | Path                                                   | Purpose                                         |
 | ------------------------------------------------------ | ----------------------------------------------- |
@@ -69,17 +71,37 @@ Installation writes settings, configures a worker, and adds the Claude Code inte
 | `~/.claude/skills/memman/SKILL.md`                     | Symlink to the packaged agent manual.           |
 | `~/.claude/hooks/memman/*.sh`                          | Symlinks to five lifecycle hooks.               |
 | `~/.claude/settings.json`                              | Hook registrations and allowed memory commands. |
+| `~/.agents/skills/memman`                              | Symlink to the packaged Codex memory skill.     |
+| `~/.codex/rules/memman.rules`                          | Codex rules that allow the memory commands.     |
 | `~/.config/systemd/user/memman-enrich.{timer,service}` | Linux worker schedule.                          |
 | `~/Library/LaunchAgents/com.memman.enrich.plist`       | macOS worker schedule.                          |
 | `~/.memman/logs/`                                      | Worker output.                                  |
 
-Claude Code is detected by a `claude` binary on `PATH` or an existing `~/.claude` directory. Without either, installation configures only the scheduler unless `--claude-code` is passed. The next new Claude Code session loads the hooks.
+Claude Code is detected by a `claude` binary on `PATH` or an existing `~/.claude` directory. The next new Claude Code session loads the hooks. If no supported agent is detected or explicitly selected, installation configures only the scheduler.
 
 On a host without systemd or launchd, the operator sets `MEMMAN_SCHEDULER_KIND=serve` in the process environment and runs `memman scheduler serve` to process writes.
 
 Existing env-file values take precedence. Installation refuses conflicting flags and prints the `config set` command needed to change the value. It also checks prerequisites and, for OpenRouter, model availability. A catalog outage is reported but does not stop installation.
 
 After a package upgrade, `memman install` refreshes hook registrations, scheduler units, and new default settings. The [integration chapter](design/05-integration.md) describes the installed hooks and permission entries.
+
+### Codex
+
+Codex is detected by a `codex` binary on `PATH`, an existing `CODEX_HOME` directory (default `~/.codex`), or the installed memory skill. The skill goes in `~/.agents/skills/memman`, the Codex user skill directory, whatever `CODEX_HOME` holds.
+
+```bash
+memman install --codex
+```
+
+In Codex, `$memman` invokes the skill, as in `Use $memman to recall our deployment decisions`. A new session loads a skill the running one does not show. Codex gets no lifecycle hooks: the skill alone tells the agent when to recall and save, and the agent runs the same CLI.
+
+The Codex sandbox blocks writes to the memman data directory and the provider network calls, so a sandboxed `memman` call fails or stops for approval. Installation therefore writes `$CODEX_HOME/rules/memman.rules`, one `prefix_rule(..., decision="allow")` line for each of the eight verbs Claude Code also allows: `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, and `status`. Codex runs an allowed verb outside the sandbox with no prompt. An interactive installation lists the rules and asks first. With `--no-wizard` or no terminal, it writes them without a prompt. A call that puts a global option first, such as `memman --store NAME recall`, matches no rule and still prompts. Installation leaves `config.toml`, `AGENTS.md`, and every other rules file unchanged.
+
+Codex needs `memman` on its shell's `PATH`. For a custom data directory, the Codex environment sets `MEMMAN_DATA_DIR`, or the call passes `memman --data-dir PATH ...`.
+
+Store selection is the same for both agents: `--store NAME` takes precedence over `MEMMAN_STORE`, then the saved active store. Codex's shell must inherit `MEMMAN_STORE` to use it. A store name starts with a letter or digit and holds only letters, digits, dashes, and underscores, so it can never name a filesystem path.
+
+Both agents share the same stores and background worker. Reinstallation refreshes the skill link and the rules file. A different skill already named `memman` stays in place, and installation reports the conflict. `memman doctor` reports a broken Codex skill link and how to repair it.
 
 ### Install wizard
 
@@ -97,15 +119,22 @@ Without the wizard, installation stops when a required value is missing: the emb
 
 ### Uninstall
 
-`memman uninstall` (with an optional `--claude-code`) removes:
+`memman uninstall` removes every detected integration, or only those that `--claude-code` and `--codex` name. For Claude Code it removes:
+
+- `~/.claude/hooks/memman/` and `~/.claude/skills/memman/`,
+- the memman hooks and permission entries in `~/.claude/settings.json`.
+
+For Codex it removes the skill link `~/.agents/skills/memman` and `$CODEX_HOME/rules/memman.rules`.
+
+When no memman integration remains, uninstall also removes the shared services:
 
 - the scheduled backup timer or agent,
-- `~/.claude/hooks/memman/` and `~/.claude/skills/memman/`,
-- the memman hooks and permission entries in `~/.claude/settings.json`,
 - the scheduler unit, `~/.memman/scheduler.state`, and `~/.memman/debug.state`,
 - the secret keys in the env file: `MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, and `MEMMAN_DEFAULT_POSTGRES_DSN`.
 
-It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, and it keeps the stores, the queue, and the logs. When the Claude Code cleanup reports an error, uninstall stops and leaves the scheduler in place.
+A selective uninstall that leaves another integration installed keeps the shared services.
+
+It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, and it keeps the stores, the queue, and the logs. When an integration cleanup reports an error, uninstall stops and leaves the scheduler and backup schedule in place. Uninstall checks for a Codex skill conflict before it changes any integration or setting.
 
 ---
 
@@ -455,7 +484,7 @@ memman log worker --stack [--lines N]
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
 | Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                        |
-| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                             |
+| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `codex_skill`, `optional_extras`              |
 | Providers          | `llm_probe`, `embed_probe`                                                                                                                          |
 
 A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_consistency`, and `provenance_drift`.

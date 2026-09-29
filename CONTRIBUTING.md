@@ -1,6 +1,6 @@
 # Contributing to memman
 
-memman is a single-user command-line memory store for Claude Code. A scheduled worker enriches each memory and creates its embedding. SQLite is the default backend. The `memman[postgres]` extra adds Postgres.
+memman is a single-user command-line memory store for Claude Code and Codex. A scheduled worker enriches each memory and creates its embedding. SQLite is the default backend. The `memman[postgres]` extra adds Postgres.
 
 ## Development setup
 

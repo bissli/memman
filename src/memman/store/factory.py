@@ -221,6 +221,8 @@ def open_backend(
         On an unknown backend name, a bad `MEMMAN_POSTGRES_*` key, or
         a postgres store with no DSN.
     """
+    if not _db.valid_store_name(store):
+        raise ConfigError(f'invalid store name {store!r}')
     name = resolve_store_backend(store, data_dir)
     desc = descriptor(name)
     merged = dict(os.environ)
@@ -266,6 +268,8 @@ def drop_store(store: str, data_dir: str) -> None:
     - A purge failure after a clean drop logs a warning. Raising
       would report failure for finished work.
     """
+    if not _db.valid_store_name(store):
+        raise ConfigError(f'invalid store name {store!r}')
     name = resolve_store_backend(store, data_dir)
     desc = descriptor(name)
     # Purge only after a clean drop: an unconditional purge would

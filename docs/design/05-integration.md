@@ -1,8 +1,8 @@
-# 5. Claude Code integration
+# 5. Agent integration
 
 [Previous: lifecycle and embedding](04-lifecycle.md) | [Design overview](../DESIGN.md)
 
-memman supplies hooks, a short session guide, and a skill manual. Together they tell the agent when and how to use memory. The agent runs every memory command itself; hooks provide instructions and reminders.
+For Claude Code, memman supplies hooks, a short session guide, and a skill manual. Together they tell the agent when and how to use memory. Codex has a separate memory skill ([5.5](#55-codex)). The agent runs every memory command itself; hooks provide instructions and reminders.
 
 ## 5.1 Integration architecture
 
@@ -62,7 +62,7 @@ The event source determines whether the reminder appears. The reminder still app
 
 ## 5.3 Automated setup
 
-`memman install` detects Claude Code through a `claude` binary on `PATH` or an existing `~/.claude` directory. `--claude-code` forces integration installation. Without detection or the flag, installation sets up only the scheduler.
+`memman install` detects Claude Code through a `claude` binary on `PATH` or an existing `~/.claude` directory. `--claude-code` explicitly selects this integration. Without agent flags, installation sets up all detected integrations, or just the scheduler when none are detected.
 
 | Target                                             | Installed content                      |
 | -------------------------------------------------- | -------------------------------------- |
@@ -88,3 +88,13 @@ The packaged skill instructs the agent to run `remember` directly through Bash d
 The worker handles summary generation and embedding later. Delegating submission to a subagent would add a handoff without removing any work from the turn, because the model work already runs in the worker.
 
 The guide and skill are package assets, so customizing them means editing the package source. An editable installation picks up those edits immediately. A change to a hook registration still requires `memman install`.
+
+## 5.5 Codex
+
+`setup/codex.py` installs the packaged Codex skill as a directory symlink at `~/.agents/skills/memman`. The skill teaches recall, memory selection, queued writes, and corrections through the same CLI and stores as Claude Code. Codex gets no lifecycle hooks, so nothing reminds the agent to recall or save outside the skill.
+
+The Codex sandbox blocks writes to the data directory and the provider network calls, so every memman verb needs to run outside it. Installation writes `$CODEX_HOME/rules/memman.rules` with one `prefix_rule(pattern=["memman", <verb>...], decision="allow")` line per verb in `list_agent_commands`, the same eight verbs as the Claude Code `permissions.allow` entries. Codex loads every `*.rules` file in that directory, so memman owns a file of its own and never edits `default.rules`, where Codex appends the user's approvals. The consent prompt follows the Claude Code rule: an interactive installation asks, and `--no-wizard` or no terminal writes without asking.
+
+Detection checks the `codex` binary, `CODEX_HOME` (default `~/.codex`), and the installed skill link. The last check lets uninstall find the integration after Codex itself is gone. `--codex` selects the integration explicitly. Reinstall refreshes the skill link, including a stale link left by an environment upgrade, and rewrites the rules file. A user-created skill named `memman` stays in place and stops the install as a conflict.
+
+Uninstall removes the skill link and the rules file, then the `rules` directory and `CODEX_HOME` when either is left empty, so a leftover directory does not make the next run detect Codex. If cleanup fails, the shared scheduler and backups stay installed. A selective uninstall also keeps shared services and provider settings while another memman integration remains installed. The [Codex usage guide](../USAGE.md#codex) covers activation and runtime permissions.

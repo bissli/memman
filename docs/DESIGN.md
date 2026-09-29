@@ -12,7 +12,7 @@ This guide explains the implementation and the reasons behind it. The [usage gui
 | [2. Core concepts and architecture](design/02-concepts.md) | Memory records, stores, schemas, modules, and data paths.             |
 | [3. Read and write pipelines](design/03-pipelines.md)      | Queued writes, retries, enrichment, search ranking, and model checks. |
 | [4. Lifecycle and embedding](design/04-lifecycle.md)       | Retention, embedding model bindings, recovery, and model changes.     |
-| [5. Claude Code integration](design/05-integration.md)     | Hooks, agent instructions, installation, and upgrades.                |
+| [5. Agent integration](design/05-integration.md)           | Claude Code hooks, the Codex skill, installation, and upgrades.       |
 
 The chapters build on each other in order, and each links to the command reference.
 

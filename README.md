@@ -1,6 +1,6 @@
 # memman
 
-**Persistent memory for Claude Code.**
+**Persistent memory for Claude Code and Codex.**
 
 memman saves decisions, preferences, and project knowledge so the agent can find them in later sessions. The agent chooses what to remember and when to recall it. memman handles storage, search, and background processing.
 
@@ -20,11 +20,13 @@ memman install
 
 In a terminal, `memman install` runs a wizard that configures the providers, saves every setting in `~/.memman/env`, and installs a background worker. When it detects Claude Code, it also installs the hooks and the agent's instructions. A new Claude Code session loads them.
 
+For Codex, installation adds a memory skill at `~/.agents/skills/memman` and a rules file that lets Codex run the memory commands without a prompt. `memman install --codex` selects Codex explicitly. In Codex, `$memman` invokes the skill. Codex gets no lifecycle hooks, so the skill alone tells the agent when to recall and save. [Codex setup](docs/USAGE.md#codex) covers detection and permissions.
+
 The worker runs as a systemd timer on Linux or a launchd agent on macOS. On a host with neither, the operator sets `MEMMAN_SCHEDULER_KIND=serve` and runs `memman scheduler serve`. [Installation](docs/USAGE.md#install-and-uninstall) covers headless installs and the optional Postgres backend, and [Provider setup](docs/USAGE.md#provider-setup) covers other providers.
 
 ## Usage
 
-The agent runs these commands through its Bash tool. They behave the same in an interactive shell:
+The agent runs these commands through its shell tool. They behave the same in an interactive shell:
 
 ```bash
 memman remember "The billing service retries failed requests at most three times." --cat decision
@@ -54,7 +56,7 @@ Each memory holds one self-contained claim, on one line, within 1,000 UTF-8 byte
 
 ## How it works
 
-1. **The agent decides.** Five lifecycle hooks remind the agent to recall context and to save its conclusions. The agent runs every memory command itself. No hook writes a memory.
+1. **The agent decides.** Claude Code's five lifecycle hooks remind the agent to recall context and save its conclusions. Codex uses the memory skill's guidance. The agent runs every memory command itself. No hook writes a memory.
 2. **Writes enter a queue.** `remember` and `replace` queue the text and return without waiting for a model response. A background worker adds a short summary, creates an embedding, and stores the memory. The text is stored as written.
 3. **Recall searches stored memories.** It combines keyword matches, vector similarity, and recency, then reranks the best candidates. `recall --basic` matches words in the text instead.
 

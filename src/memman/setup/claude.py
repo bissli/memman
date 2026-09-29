@@ -1,9 +1,11 @@
-"""Claude Code integration: install and uninstall orchestration.
+"""Agent integration orchestration and Claude Code setup.
 """
 
+import json
 import os
 import shutil
 import sys
+from itertools import starmap
 from pathlib import Path
 
 import click
@@ -15,8 +17,10 @@ from memman.embed.fingerprint import seed_if_fresh
 from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.llm import openrouter_models
 from memman.setup import wizard
-from memman.setup.deploy import symlink_asset
-from memman.setup.detect import detect_claude_code
+from memman.setup.codex import check_codex_skill, install_codex
+from memman.setup.codex import uninstall_codex
+from memman.setup.deploy import is_asset_link, symlink_asset
+from memman.setup.detect import detect_claude_code, detect_codex
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
 from memman.setup.scheduler import _write_env_keys, detect_scheduler
@@ -24,11 +28,11 @@ from memman.setup.scheduler import install as install_scheduler
 from memman.setup.scheduler import memman_binary_path
 from memman.setup.scheduler import uninstall as uninstall_scheduler
 from memman.setup.scheduler import uninstall_backup
-from memman.setup.settings import add_claude_hooks_selective
+from memman.setup.settings import _contains_memman, add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
-from memman.setup.settings import remove_memman_permission, write_json_file
-from memman.setup.settings import write_or_remove_json_file
+from memman.setup.settings import remove_memman_permission, strip_json5
+from memman.setup.settings import write_json_file, write_or_remove_json_file
 from memman.store.db import store_dir, store_exists
 from memman.store.factory import open_backend, resolve_store_backend
 
@@ -116,21 +120,20 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
     Returns
     -------
     list[Exception]
-        Errors raised while cleaning the settings file. Empty on full
-        success.
+        Errors raised while removing assets or cleaning settings.
+        Empty on full success.
     """
     errs: list[Exception] = []
 
     print(f'\nRemoving Claude Code integration ({config_dir})...')
 
     hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
-    shutil.rmtree(hooks_dir, ignore_errors=True)
-    status_ok('Hooks', hooks_dir + ' removed')
+    _remove_claude_assets(hooks_dir, 'Hooks', errs)
     remove_if_empty(os.path.join(config_dir, 'hooks'))
 
     settings_path = os.path.join(config_dir, 'settings.json')
     try:
-        data = read_json_file(settings_path)
+        data = _read_claude_settings(Path(settings_path))
         remove_claude_hooks(data)
         remove_memman_permission(data)
         write_or_remove_json_file(settings_path, data)
@@ -140,12 +143,56 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
         errs.append(e)
 
     skill_dir = os.path.join(config_dir, 'skills', 'memman')
-    shutil.rmtree(skill_dir, ignore_errors=True)
-    status_ok('Skill', skill_dir + ' removed')
+    _remove_claude_assets(skill_dir, 'Skill', errs)
     remove_if_empty(os.path.join(config_dir, 'skills'))
 
     remove_if_empty(config_dir)
     return errs
+
+
+def _remove_claude_assets(path: str, label: str,
+                          errors: list[Exception]) -> None:
+    """Report failed asset removal without following directory symlinks."""
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        if not isinstance(exc, FileNotFoundError) or os.path.lexists(path):
+            status_error(label, exc)
+            errors.append(exc)
+            return
+    status_ok(label, path + ' removed')
+
+
+def _read_claude_settings(path: Path) -> dict:
+    """A missing file is empty; unreadable settings must remain untouched."""
+    try:
+        contents = path.read_text()
+    except FileNotFoundError:
+        return {}
+    return json.loads(strip_json5(contents)) if contents else {}
+
+
+def _claude_integration_installed(config_dir: str) -> bool:
+    """Recognize owned assets or hook registrations before shared teardown."""
+    base = Path(config_dir)
+    assets = [('claude/SKILL.md', base / 'skills/memman/SKILL.md')]
+    assets.extend(
+        (f'claude/{name}', base / 'hooks/memman' / name)
+        for name in ('prime.sh', 'user_prompt.sh', 'compact.sh',
+                     'task_recall.sh', 'exit_plan.sh'))
+    if any(starmap(is_asset_link, assets)):
+        return True
+    try:
+        data = _read_claude_settings(base / 'settings.json')
+        if not isinstance(data, dict):
+            return True
+        # Dependency checks include legacy/custom events beyond the events
+        # this installer manages (for example, a Stop hook calling memman).
+        return _contains_memman(data.get('hooks', {}))
+    except (OSError, ValueError):
+        # An unselected agent's settings are outside this uninstall's scope.
+        # If they cannot be inspected, retain its possible dependencies.
+        return True
 
 
 def _init_default_store(data_dir: str) -> None:
@@ -237,8 +284,6 @@ def _install_claude_code(env: dict, data_dir: str,
     print()
     print('Start a new Claude Code session to activate.')
 
-    _init_default_store(data_dir)
-
 
 def _uninstall_env(env: dict) -> bool:
     """Remove memman from Claude Code; True when cleanup reported an error.
@@ -252,7 +297,7 @@ def run_install(data_dir: str, claude_code: bool = False,
                 pg_dsn: str | None = None,
                 llm_endpoint: str | None = None,
                 embed_provider: str | None = None,
-                no_wizard: bool = False) -> None:
+                no_wizard: bool = False, codex: bool = False) -> None:
     """Install memman integration. Called by the `memman install` command.
 
     Parameters
@@ -273,6 +318,9 @@ def run_install(data_dir: str, claude_code: bool = False,
         Embed provider name.
     no_wizard : bool, default False
         Take flags, the env file, and defaults only; never prompt.
+    codex : bool, default False
+        Install the Codex skill even when Codex is not detected.
+        Explicit agent flags select only the named integrations.
 
     Raises
     ------
@@ -284,6 +332,9 @@ def run_install(data_dir: str, claude_code: bool = False,
         data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider)
     env = detect_claude_code()
+    codex_env = detect_codex()
+    if codex or (not claude_code and codex_env['detected']):
+        check_codex_skill(codex_env)
     wizard_out = wizard.run_wizard(
         data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider,
@@ -293,7 +344,8 @@ def run_install(data_dir: str, claude_code: bool = False,
         _write_env_keys(wizard_out, data_dir=data_dir)
     knobs = check_prereqs(data_dir)
     _run_install_flow(env, claude_code=claude_code, data_dir=data_dir,
-                      knobs=knobs, no_wizard=no_wizard)
+                      knobs=knobs, no_wizard=no_wizard,
+                      codex_env=codex_env, codex=codex)
 
 
 def _reject_flag_file_conflicts(
@@ -329,40 +381,52 @@ def _reject_flag_file_conflicts(
                 f' {flag_value!r}.\nRun: memman config set {key} {flag_value}')
 
 
-def run_uninstall(data_dir: str, claude_code: bool = False) -> None:
+def run_uninstall(data_dir: str, claude_code: bool = False,
+                  codex: bool = False) -> None:
     """Remove memman integration. Called by the `memman uninstall` command.
 
     Parameters
     ----------
     data_dir : str
         Holds the env file and the stores. The stores stay on disk;
-        the env file loses its secret keys and keeps the rest.
+        secrets are removed only when shared services are removed.
     claude_code : bool, default False
         Remove from `~/.claude` even when the `claude` binary is not
         on `PATH`.
+    codex : bool, default False
+        Remove the Codex skill even when Codex is not detected.
 
     Raises
     ------
     click.ClickException
-        The Claude Code cleanup reported an error; the scheduler unit
+        An integration cleanup reported an error; the scheduler unit
         is left in place.
     """
     env = detect_claude_code()
-    print('\n[backup]')
-    try:
-        backup_result = uninstall_backup()
-        for action in backup_result.get('actions', []):
-            status_ok(backup_result['platform'], action)
-    except RuntimeError:
-        pass
-    _run_uninstall_flow(env, claude_code=claude_code, data_dir=data_dir)
+    codex_env = detect_codex()
+    if codex or (not claude_code and codex_env['detected']):
+        check_codex_skill(codex_env)
+    removed_shared = _run_uninstall_flow(
+        env, claude_code=claude_code, data_dir=data_dir,
+        codex_env=codex_env, codex=codex)
+    if removed_shared:
+        print('\n[backup]')
+        try:
+            backup_result = uninstall_backup()
+            for action in backup_result.get('actions', []):
+                status_ok(backup_result['platform'], action)
+        except RuntimeError:
+            pass
+    print('\nDone! Selected integrations removed.')
 
 
 def _run_install_flow(env: dict, claude_code: bool,
                       data_dir: str,
                       knobs: dict[str, str],
-                      no_wizard: bool = False) -> None:
-    """Install Claude Code integration and the scheduler, then check the model.
+                      no_wizard: bool = False,
+                      codex_env: dict | None = None,
+                      codex: bool = False) -> None:
+    """Install selected integrations and the scheduler, then check the model.
 
     Parameters
     ----------
@@ -375,28 +439,41 @@ def _run_install_flow(env: dict, claude_code: bool,
     knobs : dict[str, str]
         Install values from `check_prereqs`, handed to the scheduler.
     no_wizard : bool, default False
-        Passed through to the Claude Code install.
+        Passed through to the Claude Code and Codex installs.
+    codex_env : dict or None, default None
+        `detect_codex` output, when Codex discovery was requested.
+    codex : bool, default False
+        Force the Codex install; explicit flags select integrations.
     """
-    if claude_code:
+    explicit = claude_code or codex
+    if not explicit:
+        print('Detecting LLM CLI environments...\n')
+        for detected_env in (env, codex_env):
+            if detected_env is not None:
+                detection_line(
+                    detected_env['detected'], detected_env['display'],
+                    detected_env['version'], detected_env['config_dir'])
+    use_claude = claude_code or (not explicit and env['detected'])
+    use_codex = codex or (not explicit and codex_env is not None
+                          and codex_env['detected'])
+    if use_claude:
         _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
-    else:
-        print('Detecting LLM CLI environments...')
-        print()
-        detection_line(
-            env['detected'], env['display'],
-            env['version'], env['config_dir'])
-        if env['detected']:
-            _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
-        else:
-            print('\nNo CLI integration installed'
-                  ' (no Claude Code detected).')
-            print('Installing scheduler only; manual'
-                  ' `memman remember` calls will still work.')
+    if use_codex:
+        install_codex(codex_env if codex_env is not None else detect_codex(),
+                      no_wizard=no_wizard)
+    if not use_claude and not use_codex:
+        print('\nNo CLI integration installed (no supported agent detected).')
+        print('Installing scheduler only; manual'
+              ' `memman remember` calls will still work.')
 
     print('\n[scheduler]')
     result = install_scheduler(data_dir, knobs)
     for action in result.get('env_actions', []) + result.get('actions', []):
         status_ok(result['platform'], action)
+    if use_claude or use_codex:
+        # The scheduler install persists the provider defaults first.
+        # Initializing in an agent installer fails on a fresh env file.
+        _init_default_store(data_dir)
 
     # Runs once the env file is final. A catalog outage prints an error
     # and the install still finishes.
@@ -418,31 +495,42 @@ def _run_install_flow(env: dict, claude_code: bool,
 
 
 def _run_uninstall_flow(env: dict, claude_code: bool,
-                        data_dir: str) -> None:
-    """Uninstall Claude Code integration and remove the scheduler unit.
+                        data_dir: str, codex_env: dict | None = None,
+                        codex: bool = False) -> bool:
+    """Uninstall integrations; return whether shared services were removed.
+
+    An explicit selection leaves shared services in place while another
+    memman integration remains installed. Detection of an agent CLI alone
+    is insufficient: check the actual memman assets.
     """
     failed = False
-    if claude_code:
+    explicit = claude_code or codex
+    if claude_code or (not explicit and env['detected']):
         failed = _uninstall_env(env)
-    else:
-        print('Detecting LLM CLI environments...')
-        print()
-        detection_line(
-            env['detected'], env['display'],
-            env['version'], env['config_dir'])
-        if env['detected']:
-            failed = _uninstall_env(env)
-        else:
-            print('\nNo CLI integration detected.')
+    if codex or (not explicit and codex_env is not None
+                 and codex_env['detected']):
+        try:
+            uninstall_codex(
+                codex_env if codex_env is not None else detect_codex())
+        except (OSError, click.ClickException) as exc:
+            status_error('Codex', exc)
+            failed = True
     if failed:
         raise click.ClickException(
-            'error during Claude Code integration uninstall;'
+            'error during agent integration uninstall;'
             ' scheduler left in place')
+
+    other_claude = not claude_code and _claude_integration_installed(
+        env['config_dir'])
+    other_codex = (not codex and codex_env is not None and is_asset_link(
+        'codex', Path(codex_env['skills_dir']) / 'memman'))
+    if explicit and (other_claude or other_codex):
+        print('\nAnother memman integration remains installed; keeping'
+              ' the shared scheduler, backups, and provider settings.')
+        return False
 
     print('\n[scheduler]')
     result = uninstall_scheduler(data_dir=data_dir)
     for action in result.get('actions', []):
         status_ok(result['platform'], action)
-
-    print()
-    print('Done! All detected integrations removed.')
+    return True

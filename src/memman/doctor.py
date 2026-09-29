@@ -11,6 +11,7 @@ import os
 import stat
 import time
 from datetime import datetime, timezone
+from itertools import starmap
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from memman.pipeline.remember import compute_prompt_version
 from memman.queue import last_worker_run, queue_db
 from memman.queue import stats as queue_stats
 from memman.setup import scheduler as sch
+from memman.setup.deploy import is_asset_link
 from memman.setup.settings import add_claude_hooks_selective, read_json_file
 from memman.store import factory
 from memman.store.backend import Backend
@@ -515,7 +517,7 @@ def check_claude_hooks() -> dict[str, Any]:
         registered command path no longer resolves (the shell exits
         127 at every matching event), `warn` when a registration only
         differs (`memman install` repairs it), else `pass`. A machine
-        with no Claude Code settings passes.
+        with no memman-owned Claude assets or registrations passes.
 
     Notes
     -----
@@ -528,19 +530,25 @@ def check_claude_hooks() -> dict[str, Any]:
     settings_path = config_dir / 'settings.json'
     detail: dict[str, Any] = {'settings': str(settings_path)}
 
-    if not settings_path.is_file():
-        return {
-            'name': 'claude_hooks',
-            'status': 'pass',
-            'detail': {**detail, 'reason': 'no Claude Code settings'},
-            }
-
     expected_data: dict[str, Any] = {}
     add_claude_hooks_selective(
         expected_data, str(config_dir / 'hooks' / 'memman'),
         remind=True, compact=True, task_recall=True, exit_plan=True)
     expected = _memman_hook_pairs(expected_data)
     live = _memman_hook_pairs(read_json_file(str(settings_path)))
+    # An unrelated Claude installation is not missing memman hooks.
+    # Derive expected script names from the installer, and retain drift
+    # checks for partial installs even when settings.json is absent.
+    assets = [('claude/SKILL.md', config_dir / 'skills/memman/SKILL.md')]
+    assets.extend(
+        (f'claude/{Path(command).name}',
+         config_dir / 'hooks/memman' / Path(command).name)
+        for _, _, command in expected)
+    if not live and not any(starmap(is_asset_link, assets)):
+        return {
+            'name': 'claude_hooks', 'status': 'pass',
+            'detail': {**detail, 'reason': 'no memman Claude integration installed'},
+            }
 
     detail['missing'] = sorted(
         ' '.join(part for part in triple if part)
@@ -565,6 +573,35 @@ def check_claude_hooks() -> dict[str, Any]:
     else:
         status = 'pass'
     return {'name': 'claude_hooks', 'status': status, 'detail': detail}
+
+
+def check_codex_skill() -> dict[str, Any]:
+    """Report an installed Codex skill whose packaged instructions cannot load.
+
+    User skills live under ``~/.agents/skills`` independently of
+    ``CODEX_HOME``. An absent or foreign skill is not a broken memman
+    integration; only links owned by the installer are inspected.
+    """
+    link = Path.home() / '.agents' / 'skills' / 'memman'
+    skill = link / 'SKILL.md'
+    detail: dict[str, Any] = {'skill': str(skill)}
+    if not is_asset_link('codex', link):
+        return {
+            'name': 'codex_skill', 'status': 'pass',
+            'detail': {**detail, 'reason': 'no packaged Codex skill installed'},
+            }
+    try:
+        skill.read_text(encoding='utf-8')
+    except (OSError, UnicodeError) as exc:
+        return {
+            'name': 'codex_skill', 'status': 'fail',
+            'detail': {
+                **detail,
+                'error': f'{type(exc).__name__}: {exc}',
+                'remediation': 'run `memman install --codex` to repair the skill',
+                },
+            }
+    return {'name': 'codex_skill', 'status': 'pass', 'detail': detail}
 
 
 def check_scheduler_state() -> dict[str, Any]:
@@ -1044,6 +1081,7 @@ def run_all_checks(
             check_stale_post_migrate_source(data_dir),
             check_env_permissions(),
             check_claude_hooks(),
+            check_codex_skill(),
             check_scheduler_state(),
             check_llm_probe(),
             check_embed_probe(),
