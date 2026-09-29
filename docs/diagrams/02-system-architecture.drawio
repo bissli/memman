@@ -49,7 +49,7 @@
         <mxCell id="a_sched" value="&lt;b&gt;setup/scheduler.py&lt;/b&gt;&lt;br&gt;systemd timer, launchd agent, or serve loop, running the drain each interval. State STARTED or STOPPED." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="618" y="442" width="220" height="76" as="geometry" />
         </mxCell>
-        <mxCell id="a_maint" value="&lt;b&gt;maintenance.py&lt;/b&gt;&lt;br&gt;After each drain: purge done rows, prune worker_runs, retry stale rows. For stores the drain wrote to: trim the oplog, re-enrich. Skipped when under 30 s of budget remain." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+        <mxCell id="a_maint" value="&lt;b&gt;maintenance.py&lt;/b&gt;&lt;br&gt;After each drain: purge done rows, prune worker_runs. For stores the drain wrote to: trim the oplog, re-enrich. Skipped when under 30 s of budget remain." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="90" y="556" width="220" height="96" as="geometry" />
         </mxCell>
         <mxCell id="a_lock" value="&lt;b&gt;drain_lock.py&lt;/b&gt;&lt;br&gt;flock on drain.lock: one drain at a time" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
@@ -172,7 +172,7 @@
         <mxCell id="e_drain_pipe" value="run_remember" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.88;exitY=1;exitDx=0;exitDy=0;entryX=0.15;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_drain" target="a_pipeline">
           <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="-10" as="offset" /><Array as="points"><mxPoint x="548" y="535" /><mxPoint x="651" y="535" /></Array></mxGeometry>
         </mxCell>
-        <mxCell id="e_maint_queue" value="purge, retry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.1818;exitY=0;exitDx=0;exitDy=0;entryX=0.1818;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_queue">
+        <mxCell id="e_maint_queue" value="purge" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.1818;exitY=0;exitDx=0;exitDy=0;entryX=0.1818;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_queue">
           <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
         </mxCell>
         <mxCell id="e_maint_graph" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.8182;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_graph">
