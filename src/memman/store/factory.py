@@ -142,7 +142,7 @@ def _build_postgres_descriptor() -> BackendDescriptor:
                         conn.cursor() as cur:
                     cur.execute(
                         "select nspname from pg_namespace"
-                        " where nspname like 'store_%'"
+                        " where starts_with(nspname, 'store_')"
                         ' order by nspname')
                     names.update(
                         row[0][len('store_'):]

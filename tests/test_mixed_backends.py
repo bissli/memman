@@ -323,3 +323,28 @@ def test_default_sqlite_with_work_postgres(
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'drop schema if exists {schema} cascade')
+
+
+@pytest.mark.postgres
+def test_list_stores_ignores_a_schema_that_only_looks_like_a_store(
+        env_file, pg_dsn):
+    """Verify a schema named `storexdecoy` is not listed as a store.
+
+    Mutation: the schema probe matching `like 'store_%'`, where `_` is a
+        one-character wildcard, so `storexdecoy` is reported as store
+        `decoy`.
+    Oracle: a hand-made schema one character off the `store_` prefix.
+    """
+    import psycopg
+    from memman.store.factory import list_stores
+
+    env_file(config.DEFAULT_PG_DSN, pg_dsn)
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        conn.execute('create schema if not exists storexdecoy')
+    try:
+        names = list_stores(os.environ[config.DATA_DIR])
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            conn.execute('drop schema if exists storexdecoy')
+
+    assert 'decoy' not in names
