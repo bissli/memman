@@ -178,6 +178,7 @@ def test_remember_queues_and_reports_a_corrupt_store(mm_runner):
 
 
 @pytest.mark.no_auto_drain
+@pytest.mark.postgres
 def test_remember_bounds_the_postgres_connect_and_still_queues(
         mm_runner, env_file, monkeypatch):
     """Verify an unreachable Postgres store fails fast and keeps the write.
