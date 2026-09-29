@@ -18,8 +18,9 @@ from tests.conftest import force_drain, invoke
 def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
     """Verify the skill examples run and a correction hides the old row.
 
-    Mutation: An example in SKILL.md names a wrong verb or flag, replace drops
-    replaced_id when queuing, or recall still returns the replaced memory.
+    Mutation: An example in SKILL.md names a wrong verb or flag or goes
+    missing, replace drops replaced_id when queuing, or recall still returns
+    the replaced memory.
     Oracle: Commands parsed from the installed SKILL.md; queue rows compared to
     hand-written tuples, then chain states "replaced" and "current".
     """
@@ -27,17 +28,33 @@ def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
     install_codex({'skills_dir': str(skills),
                    'config_dir': str(Path.home() / '.codex')})
     source = (skills / 'memman/SKILL.md').read_text()
-    examples = source.split('```bash\n', 1)[1].split('```', 1)[0]
-    commands = [shlex.split(line)[1:] for line in examples.splitlines()]
+    fill = {
+        '<thought>': 'The billing retry cap stays at three.',
+        '<category>': 'decision',
+        '<new content>': 'The billing retry cap is now four.',
+        '<query>': 'billing retry decisions',
+        # Basic recall is a literal text match, so use a phrase in the
+        # memory.
+        '<keyword>': 'billing retry',
+        }
+    examples = {}
+    for block in source.split('```bash\n')[1:]:
+        for line in block.split('```', 1)[0].splitlines():
+            template = line.split('#', 1)[0].strip()
+            examples[template] = [fill.get(arg, arg)
+                                  for arg in shlex.split(template)[1:]]
+    recall = examples['memman recall "<query>"']
 
-    initial = invoke(mm_runner, commands[0])
+    initial = invoke(mm_runner, recall)
     assert initial.exit_code == 0, initial.output
     assert initial.stdout == ''
-    remembered = invoke(mm_runner, commands[1])
+    remembered = invoke(
+        mm_runner, examples['memman remember "<thought>" --cat <category>'])
     assert remembered.exit_code == 0, remembered.output
     old_id = json.loads(remembered.output)['id']
-    corrected = invoke(mm_runner, [old_id if arg == '<id>' else arg
-                                   for arg in commands[2]])
+    corrected = invoke(mm_runner, [
+        old_id if arg == '<id>' else arg
+        for arg in examples['memman replace <id> "<new content>"']])
     assert corrected.exit_code == 0, corrected.output
     new_id = json.loads(corrected.output)['id']
 
@@ -50,14 +67,14 @@ def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
         (old_id, 'decision', None), (new_id, 'decision', old_id)]
     force_drain(data_dir)
 
-    history = invoke(mm_runner, [old_id if arg == '<id>' else arg
-                                 for arg in commands[3]])
+    history = invoke(mm_runner, [
+        old_id if arg == '<id>' else arg
+        for arg in examples['memman insights show <id>']] + ['--history'])
     assert history.exit_code == 0, history.output
     assert [(row['id'], row['state'])
             for row in json.loads(history.output)['chain']] == [
                 (old_id, 'replaced'), (new_id, 'current')]
-    # Basic recall is a literal text match, so use a phrase in the memory.
-    for args in (commands[0], ['recall', 'billing retry', '--basic']):
+    for args in (recall, examples['memman recall "<keyword>" --basic']):
         recalled = invoke(mm_runner, args)
         assert recalled.exit_code == 0, recalled.output
         assert new_id[:8] in recalled.output
