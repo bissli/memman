@@ -2,7 +2,8 @@
 
 Detects platform (systemd on Linux, launchd on macOS) and writes the
 appropriate user-scope unit / plist that runs `memman scheduler drain
---pending` every 60 s. Units handle sleep/power-off catch-up natively.
+--timeout N` once per interval, 60 s by default. Units handle
+sleep/power-off catch-up natively.
 
 Every `INSTALLABLE_KEYS` value present in `os.environ` at install time
 is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
