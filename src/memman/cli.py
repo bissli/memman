@@ -301,9 +301,11 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
 def _json_out(obj: object) -> None:
     """Write JSON to stdout as one line with sorted keys.
 
-    One line keeps every key on the line `| tail -1` shows.
+    One line keeps every key on the line `| tail -1` shows. Under
+    `--pretty` the JSON indents by two spaces instead.
     """
-    click.echo(json.dumps(obj, sort_keys=True))
+    pretty = click.get_current_context().meta.get('memman.pretty')
+    click.echo(json.dumps(obj, sort_keys=True, indent=2 if pretty else None))
 
 
 def _require_started(action: str) -> None:
@@ -420,6 +422,9 @@ def _parse_since(since: str) -> str:
 class MemmanGroup(click.Group):
     """Root group that reports a backend failure as a clean CLI error.
 
+    It also takes `--pretty` at any position before `--`, which indents
+    every JSON reply. The flag shows in no `--help`.
+
     Notes
     -----
     - One `invoke` override covers the whole command tree: a group
@@ -433,6 +438,27 @@ class MemmanGroup(click.Group):
       covers the queue, the read-only opens, and every mid-command
       failure the Postgres backend translates.
     """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Pull every `--pretty` before `--` out of args, then parse the rest.
+
+        Parameters
+        ----------
+        ctx : click.Context
+            Root context. `ctx.meta['memman.pretty']`, which every
+            subcommand context shares, records whether the flag appeared.
+        args : list[str]
+            The full command line after `memman`, subcommand included.
+
+        Returns
+        -------
+        list[str]
+            What `click.Group.parse_args` returns for the remaining args.
+        """
+        end = args.index('--') if '--' in args else len(args)
+        ctx.meta['memman.pretty'] = '--pretty' in args[:end]
+        kept = [arg for arg in args[:end] if arg != '--pretty'] + args[end:]
+        return super().parse_args(ctx, kept)
 
     def invoke(self, ctx: click.Context) -> Any:
         """Run the subcommand, reporting a backend failure as a message.
