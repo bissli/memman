@@ -142,3 +142,25 @@ class TestOplogTrimInMaintenance:
 
         row = tmp_db._query('select count(*) from oplog').fetchone()
         assert row[0] == MAX_OPLOG_ENTRIES
+
+    def test_maintenance_step_reclaims_more_than_one_page(
+            self, tmp_db, tmp_backend):
+        """Verify maintenance_step's vacuum returns many free pages at once.
+
+        Mutation: running `pragma incremental_vacuum(200)` through
+            `conn.execute`, which steps the pragma once and frees one
+            page per call.
+        Oracle: sqlite's own `pragma freelist_count`, before and after,
+            on a store with well over 200 free pages.
+        """
+        for i in range(600):
+            tmp_backend.oplog.log(
+                operation='probe', insight_id=str(i), detail='x' * 2000)
+        tmp_db._exec('delete from oplog')
+        freed_before = tmp_db._query('pragma freelist_count').fetchone()[0]
+
+        tmp_backend.oplog.maintenance_step()
+
+        freed_after = tmp_db._query('pragma freelist_count').fetchone()[0]
+        assert freed_before > 200
+        assert freed_before - freed_after == 200

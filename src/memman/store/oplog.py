@@ -73,7 +73,8 @@ where id <= (select max(id) from oplog) - ?
         db._exec(sql, (MAX_OPLOG_ENTRIES,))
     except Exception as e:
         logger.warning('oplog cap trim failed: %s', e)
-    db._exec('pragma incremental_vacuum(200)')
+    # execute() steps the pragma once, which frees a single page.
+    db._conn.executescript('pragma incremental_vacuum(200);')
 
 
 def trim_oplog_by_age(db: 'DB') -> int:

@@ -133,22 +133,20 @@ def _run_per_store_maintenance(
         logger.exception(
             f'maintenance: count_pending_enrich failed for {store_name!r}')
         return
-    if pending == 0:
-        return
-
-    try:
-        processed = enrich_pending(
-            ctx.backend,
-            embed_client=ctx.ec,
-            max_batch=MAINTENANCE_ENRICH_PENDING_MAX)
-        if processed:
-            logger.debug(
-                f'maintenance: enrich_pending processed {processed} insights'
-                f' in {store_name!r} (capped at'
-                f' {MAINTENANCE_ENRICH_PENDING_MAX})')
-    except Exception:
-        logger.exception(
-            f'maintenance: enrich_pending failed for {store_name!r}')
+    if pending > 0:
+        try:
+            processed = enrich_pending(
+                ctx.backend,
+                embed_client=ctx.ec,
+                max_batch=MAINTENANCE_ENRICH_PENDING_MAX)
+            if processed:
+                logger.debug(
+                    f'maintenance: enrich_pending processed {processed}'
+                    f' insights in {store_name!r} (capped at'
+                    f' {MAINTENANCE_ENRICH_PENDING_MAX})')
+        except Exception:
+            logger.exception(
+                f'maintenance: enrich_pending failed for {store_name!r}')
 
     if time.monotonic() >= deadline_monotonic:
         return

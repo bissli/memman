@@ -110,3 +110,23 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
         'select enriched_at from insights where id = ?',
         ('strand-1',)).fetchone()
     assert row[0] is not None
+
+
+def test_maintenance_caps_the_oplog_when_nothing_awaits_enrichment(
+        tmp_backend):
+    """Verify the oplog maintenance step runs on a store with no pending rows.
+
+    Mutation: the step placed after the `pending == 0` early return, so a
+        store whose rows are all enriched never has its oplog capped.
+    Oracle: a `maintenance_step` spy on an empty store, where
+        `count_pending_enrich` is 0.
+    """
+    ctx = MagicMock()
+    wrapped = MagicMock(wraps=tmp_backend)
+    wrapped.oplog = MagicMock(wraps=tmp_backend.oplog)
+    ctx.backend = wrapped
+
+    assert tmp_backend.nodes.count_pending_enrich() == 0
+    _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
+
+    assert wrapped.oplog.maintenance_step.called
