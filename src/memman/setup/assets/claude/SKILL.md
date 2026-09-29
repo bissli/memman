@@ -246,7 +246,7 @@ The query is focused and keyword-rich, never the raw user prompt.
 Recall fuses keyword, vector, and recency anchors, blends keyword,
 similarity, and the fused-anchor score, and reranks with a
 cross-encoder. Every query ranks the same way. The reranker runs by
-default on multi-token queries and skips 1-2 token queries.
+default on queries of three or more words, stopwords counted.
 
 ```bash
 memman recall "<query>"
