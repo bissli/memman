@@ -1,166 +1,218 @@
 <mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
   <diagram id="arch" name="System Architecture">
-    <mxGraphModel dx="1422" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1500" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="a_title" value="&lt;b&gt;System Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;The main modules under src/memman, grouped by layer&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="320" y="10" width="560" height="45" as="geometry" />
+        <mxCell id="a_title" value="&lt;b&gt;System Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;The main modules under src/memman, grouped by layer&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="400" y="10" width="560" height="45" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l1" value="&lt;b&gt;Claude Code integration&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="70" width="1160" height="110" as="geometry" />
+        <mxCell id="a_l1" value="&lt;b&gt;Claude Code integration&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="70" width="1220" height="124" as="geometry" />
         </mxCell>
-        <mxCell id="a_claude" value="&lt;b&gt;Claude Code&lt;/b&gt;&lt;br&gt;The agent. Runs memman verbs through Bash." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="100" width="210" height="64" as="geometry" />
+        <mxCell id="a_claude" value="&lt;b&gt;Claude Code&lt;/b&gt;&lt;br&gt;The agent. Runs the memory verbs, insights show and review, status, and doctor through Bash." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="90" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;prime.sh, user_prompt.sh, compact.sh, task_recall.sh, exit_plan.sh" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="285" y="100" width="210" height="64" as="geometry" />
+        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;prime.sh, user_prompt.sh, compact.sh, task_recall.sh, exit_plan.sh" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="328" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_guide" value="&lt;b&gt;Guide&lt;/b&gt;&lt;br&gt;guide.md: the recall and remember commands. memman prime prints it at session start." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="510" y="100" width="210" height="64" as="geometry" />
+        <mxCell id="a_guide" value="&lt;b&gt;Guide&lt;/b&gt;&lt;br&gt;guide.md: recall, remember, replace, forget, insights show, and the 1,000-byte limit. memman prime prints it at session start." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="566" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_skill" value="&lt;b&gt;Skill&lt;/b&gt;&lt;br&gt;SKILL.md: the full manual, loaded on demand" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="735" y="100" width="210" height="64" as="geometry" />
+        <mxCell id="a_skill" value="&lt;b&gt;Skill&lt;/b&gt;&lt;br&gt;SKILL.md: the full manual, loaded on demand" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="804" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_setup" value="&lt;b&gt;setup/&lt;/b&gt;&lt;br&gt;memman install: links the hooks and skill, merges settings.json, installs the scheduler" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="960" y="100" width="220" height="64" as="geometry" />
+        <mxCell id="a_setup" value="&lt;b&gt;setup/&lt;/b&gt;&lt;br&gt;memman install: links the hooks and skill, merges settings.json, installs the scheduler" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1042" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l2" value="&lt;b&gt;CLI&lt;/b&gt;  cli.py (Click)" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="200" width="1160" height="100" as="geometry" />
+        <mxCell id="a_l2" value="&lt;b&gt;CLI&lt;/b&gt;  cli.py (Click)" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="214" width="1220" height="124" as="geometry" />
         </mxCell>
-        <mxCell id="a_cli_mem" value="&lt;b&gt;Memory verbs&lt;/b&gt;&lt;br&gt;remember, replace, forget, recall" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="230" width="360" height="54" as="geometry" />
+        <mxCell id="a_cli_mem" value="&lt;b&gt;Memory verbs&lt;/b&gt;&lt;br&gt;remember, replace, forget, recall. Each command opens its store through session.py.&lt;br&gt;Straight to storage: forget, the recall oplog write and --basic, the related read in remember, the target lookup in replace." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="90" y="244" width="740" height="82" as="geometry" />
         </mxCell>
-        <mxCell id="a_cli_groups" value="&lt;b&gt;Command groups&lt;/b&gt;&lt;br&gt;insights, embed, store, scheduler, backup, log, config" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="440" y="230" width="360" height="54" as="geometry" />
+        <mxCell id="a_cli_groups" value="&lt;b&gt;Command groups&lt;/b&gt;&lt;br&gt;insights, embed, store, scheduler, backup, log, config" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="840" y="244" width="205" height="82" as="geometry" />
         </mxCell>
-        <mxCell id="a_cli_ops" value="&lt;b&gt;Other verbs&lt;/b&gt;&lt;br&gt;install, uninstall, migrate, status, doctor, enrich, and prime (hidden, run by prime.sh)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="820" y="230" width="360" height="54" as="geometry" />
+        <mxCell id="a_cli_ops" value="&lt;b&gt;Other verbs&lt;/b&gt;&lt;br&gt;install, uninstall, migrate, status, doctor, enrich. Hidden: prime (run by prime.sh), scheduler drain, backup worker." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="1055" y="244" width="215" height="82" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l3" value="&lt;b&gt;Write path&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="320" width="760" height="190" as="geometry" />
+        <mxCell id="a_l3" value="&lt;b&gt;Write path&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="412" width="788" height="356" as="geometry" />
         </mxCell>
-        <mxCell id="a_queue" value="&lt;b&gt;queue.py&lt;/b&gt;&lt;br&gt;queue.db: append, claim, retry with backoff" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="350" width="230" height="56" as="geometry" />
+        <mxCell id="a_queue" value="&lt;b&gt;queue.py&lt;/b&gt;&lt;br&gt;queue.db: append, claim, retry with backoff. Finds a still-queued id." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="90" y="442" width="220" height="76" as="geometry" />
         </mxCell>
-        <mxCell id="a_sched" value="&lt;b&gt;setup/scheduler.py&lt;/b&gt;&lt;br&gt;systemd timer, launchd agent, or serve loop. State STARTED or STOPPED." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="305" y="350" width="230" height="56" as="geometry" />
+        <mxCell id="a_drain" value="&lt;b&gt;cli.py: scheduler drain&lt;/b&gt;&lt;br&gt;Hidden. Takes the lock, claims rows, runs the pipeline per row, then maintenance." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="354" y="442" width="220" height="76" as="geometry" />
         </mxCell>
-        <mxCell id="a_lock" value="&lt;b&gt;drain_lock.py&lt;/b&gt;&lt;br&gt;flock on drain.lock: one drain at a time" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="550" y="350" width="230" height="56" as="geometry" />
+        <mxCell id="a_sched" value="&lt;b&gt;setup/scheduler.py&lt;/b&gt;&lt;br&gt;systemd timer, launchd agent, or serve loop, running the drain each interval. State STARTED or STOPPED." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="618" y="442" width="220" height="76" as="geometry" />
         </mxCell>
-        <mxCell id="a_pipeline" value="&lt;b&gt;pipeline/remember.py&lt;/b&gt;&lt;br&gt;Enrich and embed one write, then apply it in one transaction" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="436" width="230" height="56" as="geometry" />
+        <mxCell id="a_maint" value="&lt;b&gt;maintenance.py&lt;/b&gt;&lt;br&gt;After each drain: purge done rows, prune worker_runs, retry stale rows. For stores the drain wrote to: trim the oplog, re-enrich. Skipped when under 30 s of budget remain." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="90" y="556" width="220" height="96" as="geometry" />
         </mxCell>
-        <mxCell id="a_graph" value="&lt;b&gt;pipeline/enrich.py&lt;/b&gt;&lt;br&gt;The model call, and the pass that enriches pending rows." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="305" y="436" width="230" height="56" as="geometry" />
+        <mxCell id="a_lock" value="&lt;b&gt;drain_lock.py&lt;/b&gt;&lt;br&gt;flock on drain.lock: one drain at a time" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="354" y="556" width="220" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="a_maint" value="&lt;b&gt;maintenance.py&lt;/b&gt;&lt;br&gt;After each drain: purge done rows, retry stale rows, trim the oplog, re-enrich" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="550" y="436" width="230" height="56" as="geometry" />
+        <mxCell id="a_pipeline" value="&lt;b&gt;pipeline/remember.py&lt;/b&gt;&lt;br&gt;run_remember: enrich and embed one write, then apply it in one transaction" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="618" y="556" width="220" height="76" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_search" value="&lt;b&gt;search/&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="820" y="320" width="380" height="190" as="geometry" />
+        <mxCell id="a_graph" value="&lt;b&gt;pipeline/enrich.py&lt;/b&gt;&lt;br&gt;The model call, and the pass that enriches pending rows." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="354" y="690" width="220" height="62" as="geometry" />
         </mxCell>
-        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;Keyword, vector, and recency channels, RRF fusion, blend, rerank" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="840" y="350" width="165" height="142" as="geometry" />
+        <mxCell id="a_search" value="&lt;b&gt;search/&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="905" y="412" width="385" height="356" as="geometry" />
         </mxCell>
-        <mxCell id="a_kw" value="&lt;b&gt;keyword.py&lt;/b&gt;&lt;br&gt;Tokenizer and keyword score" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1020" y="350" width="160" height="56" as="geometry" />
+        <mxCell id="a_quality" value="&lt;b&gt;quality.py&lt;/b&gt;&lt;br&gt;Advisory warnings on write text. The CLI and the pipeline both call it." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="925" y="442" width="345" height="66" as="geometry" />
         </mxCell>
-        <mxCell id="a_quality" value="&lt;b&gt;quality.py&lt;/b&gt;&lt;br&gt;Advisory warnings on write text" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1020" y="436" width="160" height="56" as="geometry" />
+        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;Keyword, vector, and recency channels, RRF fusion, blend, rerank" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="925" y="558" width="345" height="76" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l4" value="&lt;b&gt;Providers&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="530" width="1160" height="110" as="geometry" />
+        <mxCell id="a_kw" value="&lt;b&gt;keyword.py&lt;/b&gt;&lt;br&gt;Tokenizer and keyword score" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="925" y="690" width="165" height="62" as="geometry" />
         </mxCell>
-        <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;&lt;br&gt;voyage, openai, openrouter, and ollama clients. fingerprint.py binds each store to one model. swap.py changes it." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="560" width="360" height="64" as="geometry" />
+        <mxCell id="a_l5" value="&lt;b&gt;Storage&lt;/b&gt;  store/, migrate/, backup/" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="798" width="1220" height="230" as="geometry" />
         </mxCell>
-        <mxCell id="a_llm" value="&lt;b&gt;llm/&lt;/b&gt;&lt;br&gt;client.py: one OpenAI-compatible client. openrouter_models.py: the daily model check. usage.py: token counts." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="440" y="560" width="360" height="64" as="geometry" />
+        <mxCell id="a_backend" value="&lt;b&gt;store/backend.py, store/factory.py&lt;/b&gt;&lt;br&gt;Backend protocol: nodes, meta, oplog, recall session. factory.py picks the backend per store." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="90" y="828" width="340" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_rerank" value="&lt;b&gt;rerank/&lt;/b&gt;&lt;br&gt;voyage.py: the cross-encoder, default model rerank-3-lite" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="820" y="560" width="360" height="64" as="geometry" />
+        <mxCell id="a_sqlite" value="&lt;b&gt;store/sqlite.py, db.py, node.py, oplog.py&lt;/b&gt;&lt;br&gt;SQLite in WAL mode: data/&amp;lt;store&amp;gt;/memman.db" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="90" y="928" width="340" height="84" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l5" value="&lt;b&gt;Storage&lt;/b&gt;  store/, migrate/, backup/" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="660" width="1160" height="190" as="geometry" />
+        <mxCell id="a_migrate" value="&lt;b&gt;migrate/&lt;/b&gt;&lt;br&gt;Moves a store between backends. --to postgres archives the SQLite source and switches the store to Postgres. --to sqlite archives the Postgres schema, then drops it." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="490" y="828" width="295" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_backend" value="&lt;b&gt;store/backend.py, store/factory.py&lt;/b&gt;&lt;br&gt;Backend protocol: nodes, meta, oplog, recall session. factory.py picks the backend per store." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="690" width="360" height="64" as="geometry" />
+        <mxCell id="a_backup" value="&lt;b&gt;backup/&lt;/b&gt;&lt;br&gt;Backs up every store to an external directory, on demand or on a schedule, and restores it" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="490" y="928" width="295" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_sqlite" value="&lt;b&gt;store/sqlite.py, db.py, node.py, oplog.py&lt;/b&gt;&lt;br&gt;SQLite in WAL mode: data/&amp;lt;store&amp;gt;/memman.db" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="440" y="690" width="360" height="64" as="geometry" />
+        <mxCell id="a_tables" value="&lt;b&gt;Tables&lt;/b&gt;&lt;br&gt;Each store: insights, oplog, meta, plus insights_fts (SQLite) or worker_runs (Postgres). queue.db: queue, worker_runs.&lt;br&gt;insights: no cap, no automatic deletion" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="905" y="828" width="325" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_postgres" value="&lt;b&gt;store/postgres.py&lt;/b&gt;&lt;br&gt;Postgres with pgvector: one schema, store_&amp;lt;name&amp;gt;, per store" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="820" y="690" width="360" height="64" as="geometry" />
+        <mxCell id="a_postgres" value="&lt;b&gt;store/postgres.py&lt;/b&gt;&lt;br&gt;Postgres with pgvector: one schema, store_&amp;lt;name&amp;gt;, per store" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF5EB;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="905" y="928" width="325" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_migrate" value="&lt;b&gt;migrate/&lt;/b&gt;&lt;br&gt;Copies a store between SQLite and Postgres" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="768" width="360" height="64" as="geometry" />
+        <mxCell id="a_l4" value="&lt;b&gt;Providers&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1058" width="1220" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_backup" value="&lt;b&gt;backup/&lt;/b&gt;&lt;br&gt;Backs up every store to an external directory, on demand or on a schedule, and restores it" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="440" y="768" width="360" height="64" as="geometry" />
+        <mxCell id="a_llm" value="&lt;b&gt;llm/&lt;/b&gt;&lt;br&gt;client.py: one OpenAI-compatible client. openrouter_models.py: the daily model check. usage.py: token counts." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF8E1;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1088" width="560" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_tables" value="&lt;b&gt;Tables&lt;/b&gt;&lt;br&gt;Each store: insights, oplog, meta, plus insights_fts (SQLite) or worker_runs (Postgres). queue.db: queue, worker_runs.&lt;br&gt;insights: no cap, no automatic deletion" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="820" y="768" width="360" height="64" as="geometry" />
+        <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;&lt;br&gt;voyage, openai, openrouter, and ollama clients. fingerprint.py binds each store to one model. swap.py changes it." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF8E1;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="665" y="1088" width="295" height="84" as="geometry" />
         </mxCell>
-
-        <mxCell id="a_l6" value="&lt;b&gt;External services&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="40" y="870" width="1160" height="100" as="geometry" />
+        <mxCell id="a_rerank" value="&lt;b&gt;rerank/&lt;/b&gt;&lt;br&gt;voyage.py: the cross-encoder. Model from MEMMAN_VOYAGE_RERANK_MODEL." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#FFF8E1;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="1088" width="210" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_ext_llm" value="&lt;b&gt;LLM endpoint&lt;/b&gt;&lt;br&gt;MEMMAN_LLM_ENDPOINT, OpenRouter by default" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="900" width="265" height="54" as="geometry" />
+        <mxCell id="a_l6" value="&lt;b&gt;External services&lt;/b&gt;" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1218" width="1220" height="102" as="geometry" />
         </mxCell>
-        <mxCell id="a_ext_embed" value="&lt;b&gt;Embedding provider&lt;/b&gt;&lt;br&gt;MEMMAN_EMBED_PROVIDER, voyage by default" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="345" y="900" width="265" height="54" as="geometry" />
+        <mxCell id="a_ext_llm" value="&lt;b&gt;LLM endpoint&lt;/b&gt;&lt;br&gt;Named by MEMMAN_LLM_ENDPOINT" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1248" width="470" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="a_ext_rerank" value="&lt;b&gt;Voyage reranker&lt;/b&gt;&lt;br&gt;Needs MEMMAN_VOYAGE_API_KEY" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="630" y="900" width="265" height="54" as="geometry" />
+        <mxCell id="a_ext_embed" value="&lt;b&gt;Embedding provider&lt;/b&gt;&lt;br&gt;The store's embed fingerprint names it. MEMMAN_EMBED_PROVIDER seeds a new store." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="580" y="1248" width="320" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="a_ext_pg" value="&lt;b&gt;Postgres server&lt;/b&gt;&lt;br&gt;Only for stores on the Postgres backend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="915" y="900" width="265" height="54" as="geometry" />
+        <mxCell id="a_ext_pg" value="&lt;b&gt;Postgres server&lt;/b&gt;&lt;br&gt;Only for stores on the Postgres backend" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="920" y="1248" width="160" height="60" as="geometry" />
         </mxCell>
-
-        <mxCell id="e_claude_cli" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#9673a6;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.2917;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_claude" target="a_cli_mem">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="a_ext_rerank" value="&lt;b&gt;Voyage reranker&lt;/b&gt;&lt;br&gt;Needs MEMMAN_VOYAGE_API_KEY" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="1248" width="170" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="e_hooks_cli" value="memman prime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#9673a6;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_hooks" target="a_cli_ops">
-          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="390" y="190" /><mxPoint x="1000" y="190" /></Array></mxGeometry>
+        <mxCell id="a_l7" value="&lt;b&gt;Support modules&lt;/b&gt;  used across the layers" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#f8f8f8;strokeColor=#999999;verticalAlign=top;fontSize=13;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1350" width="1220" height="112" as="geometry" />
         </mxCell>
-        <mxCell id="e_cli_write" value="remember, replace" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.3194;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_queue">
-          <mxGeometry x="-0.21" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        <mxCell id="a_config" value="&lt;b&gt;config.py&lt;/b&gt;&lt;br&gt;Central env-var configuration: one constant per setting name" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1380" width="290" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="e_cli_search" value="recall" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.9722;exitY=1;exitDx=0;exitDy=0;entryX=0.497;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_recall">
-          <mxGeometry x="0.91" relative="1" as="geometry"><Array as="points"><mxPoint x="410" y="305" /><mxPoint x="922" y="305" /></Array></mxGeometry>
+        <mxCell id="a_session" value="&lt;b&gt;session.py&lt;/b&gt;&lt;br&gt;active_store: opens the configured backend, runs the pre-flight, and closes it. Every CLI store open goes through it." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="400" y="1380" width="290" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="e_pipe_embed" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3194;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_pipeline" target="a_embed">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="a_doctor" value="&lt;b&gt;doctor.py&lt;/b&gt;&lt;br&gt;Read-only health checks per store: pass, warn, or fail" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="710" y="1380" width="290" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="e_graph_llm" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.8043;exitY=1;exitDx=0;exitDy=0;entryX=0.1389;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_graph" target="a_llm">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="a_trace" value="&lt;b&gt;trace.py&lt;/b&gt;&lt;br&gt;JSONL debug events, off unless MEMMAN_DEBUG=1 or scheduler debug on" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="1380" width="250" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="e_pipe_store" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_pipeline" target="a_backend">
-          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="20" y="464" /><mxPoint x="20" y="722" /></Array></mxGeometry>
+        <mxCell id="e_claude_cli" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#9673a6;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.1541;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_claude" target="a_cli_mem">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
         </mxCell>
-        <mxCell id="e_recall_rerank" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.497;exitY=1;exitDx=0;exitDy=0;entryX=0.2833;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_recall" target="a_rerank">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e_hooks_cli" value="memman prime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#9673a6;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_hooks" target="a_cli_ops">
+          <mxGeometry relative="1" as="geometry" x="-0.6"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="442" y="204" /><mxPoint x="1162" y="204" /></Array></mxGeometry>
         </mxCell>
-        <mxCell id="e_recall_store" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.0789;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_recall" target="a_l5">
-          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1220" y="421" /><mxPoint x="1220" y="675" /></Array></mxGeometry>
+        <mxCell id="e_cli_write" value="write, find pending" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.1486;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_queue">
+          <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
         </mxCell>
-        <mxCell id="e_cli_direct" value="forget" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.9167;exitY=1;exitDx=0;exitDy=0;entryX=0.6638;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_l5">
-          <mxGeometry x="0.648" relative="1" as="geometry"><Array as="points"><mxPoint x="390" y="315" /><mxPoint x="810" y="315" /></Array><mxPoint as="offset" /></mxGeometry>
+        <mxCell id="e_cli_search" value="recall" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.9486;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_recall">
+          <mxGeometry relative="1" as="geometry" x="-0.48"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="792" y="372" /><mxPoint x="890" y="372" /><mxPoint x="890" y="596" /></Array></mxGeometry>
         </mxCell>
-        <mxCell id="e_cli_embed" value="query embed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.6597;exitY=1;exitDx=0;exitDy=0;entryX=0.6597;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_embed">
-          <mxGeometry x="0.7" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
+        <mxCell id="e_cli_embed" value="query embed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.9108;exitY=1;exitDx=0;exitDy=0;entryX=0.7085;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_embed">
+          <mxGeometry relative="1" as="geometry" x="-0.72"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="764" y="392" /><mxPoint x="874" y="392" /></Array></mxGeometry>
         </mxCell>
-        <mxCell id="e_queue_pipe" value="drain" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=9;labelBackgroundColor=none;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_queue" target="a_pipeline">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="18" as="offset" /></mxGeometry>
+        <mxCell id="e_cli_quality" value="write check" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0.9865;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_quality">
+          <mxGeometry relative="1" as="geometry" x="-0.13"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="820" y="352" /><mxPoint x="1097" y="352" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_cli_direct" value="forget, reads" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#6c8ebf;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.3565;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_cli_mem" target="a_l5">
+          <mxGeometry relative="1" as="geometry" x="0.3"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="40" y="285" /><mxPoint x="40" y="880" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_sched_drain" value="runs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_sched" target="a_drain">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_drain_queue" value="claim" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_drain" target="a_queue">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_drain_lock" value="flock" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_drain" target="a_lock">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_drain_maint" value="maintenance" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.12;exitY=1;exitDx=0;exitDy=0;entryX=0.8182;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_drain" target="a_maint">
+          <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="-10" as="offset" /><Array as="points"><mxPoint x="380" y="535" /><mxPoint x="270" y="535" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_drain_pipe" value="run_remember" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.88;exitY=1;exitDx=0;exitDy=0;entryX=0.15;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_drain" target="a_pipeline">
+          <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="-10" as="offset" /><Array as="points"><mxPoint x="548" y="535" /><mxPoint x="651" y="535" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_maint_queue" value="purge, retry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.1818;exitY=0;exitDx=0;exitDy=0;entryX=0.1818;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_queue">
+          <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_maint_graph" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.8182;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_graph">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="270" y="721" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_pipe_graph" value="enrich" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.1;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_pipeline" target="a_graph">
+          <mxGeometry relative="1" as="geometry" x="0"><mxPoint x="0" y="0" as="offset" /><Array as="points"><mxPoint x="640" y="721" /></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e_maint_store" value="oplog trim" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.2727;exitY=1;exitDx=0;exitDy=0;entryX=0.0656;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_maint" target="a_l5">
+          <mxGeometry relative="1" as="geometry" x="0.3"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_pipe_store" value="commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.4;exitY=1;exitDx=0;exitDy=0;entryX=0.5213;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_pipeline" target="a_l5">
+          <mxGeometry relative="1" as="geometry" x="0.3"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_pipe_embed" value="embed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.9;exitY=1;exitDx=0;exitDy=0;entryX=0.5119;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_pipeline" target="a_embed">
+          <mxGeometry relative="1" as="geometry" x="-0.34"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_graph_llm" value="model call" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.6679;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_graph" target="a_llm">
+          <mxGeometry relative="1" as="geometry" x="-0.82"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_recall_kw" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.2174;exitY=1;exitDx=0;exitDy=0;entryX=0.4545;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_recall" target="a_kw">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_recall_store" value="read" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.6522;exitY=1;exitDx=0;exitDy=0;entryX=0.8852;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_recall" target="a_l5">
+          <mxGeometry relative="1" as="geometry" x="0.3"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_recall_rerank" value="rerank" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#82b366;exitX=0.942;exitY=1;exitDx=0;exitDy=0;entryX=0.9048;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_recall" target="a_rerank">
+          <mxGeometry relative="1" as="geometry" x="-0.34"><mxPoint x="0" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e_llm_ext" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#d6b656;exitX=0.6429;exitY=1;exitDx=0;exitDy=0;entryX=0.766;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_llm" target="a_ext_llm">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_embed_ext" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#d6b656;exitX=0.1864;exitY=1;exitDx=0;exitDy=0;entryX=0.4375;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_embed" target="a_ext_embed">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_rerank_ext" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#d6b656;exitX=0.6667;exitY=1;exitDx=0;exitDy=0;entryX=0.5882;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_rerank" target="a_ext_rerank">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
+        </mxCell>
+        <mxCell id="e_pg_ext" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;endArrow=block;endFill=1;strokeColor=#d6b656;exitX=0.3231;exitY=1;exitDx=0;exitDy=0;entryX=0.5625;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="a_postgres" target="a_ext_pg">
+          <mxGeometry relative="1" as="geometry"></mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>

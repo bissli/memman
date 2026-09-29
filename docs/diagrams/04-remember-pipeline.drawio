@@ -1,156 +1,59 @@
 <mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
   <diagram id="remember" name="Write Pipeline">
-    <mxGraphModel dx="1422" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1250" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1700" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="r_title" value="&lt;b&gt;Write Pipeline&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;remember and replace queue the write in the turn. The background worker enriches, embeds, and stores it.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="150" y="10" width="800" height="45" as="geometry" />
-        </mxCell>
-
-        <mxCell id="t1_box" value="&lt;b&gt;In the turn&lt;/b&gt;  memman remember or memman replace" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="70" width="1020" height="300" as="geometry" />
-        </mxCell>
-        <mxCell id="r_start" value="&lt;b&gt;memman remember &amp;lt;content&amp;gt;&lt;br&gt;memman replace &amp;lt;id&amp;gt; &amp;lt;content&amp;gt;&lt;/b&gt;&lt;br&gt;Options: --cat. On replace, an unflagged option inherits the target's value." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="105" width="310" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="r_check_state" value="Scheduler&lt;br&gt;STOPPED?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="420" y="102" width="160" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="r_reject" value="&lt;b&gt;Exit 1&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;Scheduler is stopped; cannot write.&lt;br&gt;Run 'memman scheduler start' to enable.&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="640" y="112" width="290" height="60" as="geometry" />
-        </mxCell>
-
-        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current or a write still queued for this store, with no replacement of it queued. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
-          <mxGeometry x="60" y="215" width="330" height="120" as="geometry" />
-        </mxCell>
-        <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, content, category, replaced_id (replace only), a new queue_uuid, author" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="420" y="215" width="290" height="120" as="geometry" />
-        </mxCell>
-        <mxCell id="r_return" value="&lt;b&gt;Read related, print JSON&lt;/b&gt;&lt;br&gt;remember reads the store for up to three rows the text may correct. It prints action: queued, id, queue_id, store, quality_warnings, and related, or related_error when the read fails. replace prints replaced_id in place of related." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="740" y="215" width="300" height="120" as="geometry" />
-        </mxCell>
-        <mxCell id="r_t1_note" value="No LLM call and no embedding run in the turn." style="text;html=1;align=left;fontSize=10;fontStyle=2;fillColor=none;strokeColor=none;fontColor=#9673a6;" vertex="1" parent="1">
-          <mxGeometry x="60" y="342" width="600" height="20" as="geometry" />
-        </mxCell>
-
-        <mxCell id="r_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_start" target="r_check_state">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e2" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;strokeColor=#b85450;labelBackgroundColor=#e1d5e7;" edge="1" parent="1" source="r_check_state" target="r_reject">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e3" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#e1d5e7;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_check_state" target="r_validate">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_validate" target="r_enqueue">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_enqueue" target="r_return">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <mxCell id="r_trigger" value="&lt;b&gt;A drain runs once per interval (default 60 seconds)&lt;/b&gt;&lt;br&gt;systemd timer on Linux, launchd agent on macOS, memman scheduler serve in a container" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="40" y="380" width="1020" height="36" as="geometry" />
-        </mxCell>
-        <mxCell id="r_trigger_arrow" style="endArrow=classic;html=1;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry">
-            <mxPoint x="550" y="418" as="sourcePoint" />
-            <mxPoint x="550" y="440" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
-
-        <mxCell id="t2_box" value="&lt;b&gt;Background worker&lt;/b&gt;  memman scheduler drain" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="440" width="1020" height="760" as="geometry" />
-        </mxCell>
-        <mxCell id="r_lock" value="&lt;b&gt;Take the flock on drain.lock&lt;/b&gt;&lt;br&gt;If another drain holds it, exit at once." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="475" width="460" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="r_claim" value="&lt;b&gt;Claim the next pending row&lt;/b&gt;&lt;br&gt;Oldest first. A replace waits while its target, or any earlier replace in its store, is still pending. Adds 1 to attempts. Stops at 100 rows, the timeout, an empty queue, or a STOPPED scheduler." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="545" width="460" height="60" as="geometry" />
-        </mxCell>
-        <mxCell id="r_idem" value="Any stored memory&lt;br&gt;holds this queue_uuid?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="220" y="625" width="220" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="r_skip" value="&lt;b&gt;Mark the row done, store nothing&lt;/b&gt;&lt;br&gt;A crashed drain already stored it." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="640" y="640" width="260" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="r_redirect" value="&lt;b&gt;On replace, find the current target&lt;/b&gt;&lt;br&gt;Follow replaced_by from the named row to the head of its chain." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="725" width="460" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="r_plan" value="&lt;b&gt;Plan, with no database write&lt;/b&gt;&lt;br&gt;One enrichment call returns a summary, with a second call when the reply does not parse. One embedding call embeds the content. A failed call leaves the row without that output. A missing embedding key or LLM setting fails the row." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="795" width="460" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;Insert the row. On replace, retire the target. If the target is not current, store a plain add and log target-gone. Write the vector and summary. Stamp enrich_attempted_at. Stamp enriched_at only when enrichment and a vector both landed." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="895" width="460" height="95" as="geometry" />
-        </mxCell>
-        <mxCell id="r_done" value="&lt;b&gt;Mark the row done&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="1010" width="460" height="36" as="geometry" />
-        </mxCell>
-        <mxCell id="r_failed" value="&lt;b&gt;On an error, retry with backoff&lt;/b&gt;&lt;br&gt;The row unlocks after 60, 120, 240, then 480 seconds. After 5 attempts its status is failed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="640" y="907" width="300" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="r_maint" value="&lt;b&gt;After the row loop&lt;/b&gt;&lt;br&gt;Purge done rows, prune worker_runs, and return stale rows to pending. For each store the drain wrote to: drop oplog rows older than 180 days, reset up to 3 memories that have enrich_attempted_at but no enriched_at, and enrich up to 3 memories with no enrich_attempted_at. Then run the daily model check." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="100" y="1090" width="840" height="80" as="geometry" />
-        </mxCell>
-
-        <mxCell id="r_e_lock_claim" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_lock" target="r_claim">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_claim_idem" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_claim" target="r_idem">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_idem_skip" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;" edge="1" parent="1" source="r_idem" target="r_skip">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_idem_redirect" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;" edge="1" parent="1" source="r_idem" target="r_redirect">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_redirect_plan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_redirect" target="r_plan">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_plan_apply" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_plan" target="r_apply">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_apply_done" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="r_apply" target="r_done">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_fail" value="error" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;dashed=1;strokeColor=#b85450;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_apply" target="r_failed">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_loop" value="next row" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_done" target="r_claim">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="70" y="1028" />
-              <mxPoint x="70" y="575" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="r_e_done_maint" value="loop ends" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_claim" target="r_maint">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="990" y="563" />
-              <mxPoint x="990" y="1130" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="r_e_skip_loop" value="next row" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.7;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_skip" target="r_claim">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="770" y="587" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="r_e_fail_loop" value="next row" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#fce5cd;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_failed" target="r_claim">
-          <mxGeometry x="-0.8" relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="790" y="1066" />
-              <mxPoint x="70" y="1066" />
-              <mxPoint x="70" y="575" />
-            </Array>
-            <mxPoint as="offset" />
-          </mxGeometry>
-        </mxCell>
+        <mxCell id="r_title" value="&lt;b&gt;Write Pipeline&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;remember and replace queue the write in the turn. The background worker enriches, embeds, and stores it.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1"><mxGeometry x="150" y="10" width="800" height="45" as="geometry" /></mxCell>
+        <mxCell id="t1_box" value="&lt;b&gt;In the turn&lt;/b&gt;  memman remember or memman replace" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="40" y="70" width="1020" height="420" as="geometry" /></mxCell>
+        <mxCell id="r_start" value="&lt;b&gt;memman remember &amp;lt;content&amp;gt;&lt;br&gt;memman replace &amp;lt;id&amp;gt; &amp;lt;content&amp;gt;&lt;/b&gt;&lt;br&gt;Options: --cat. On replace, an unflagged option inherits the target's value." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;align=center;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="60" y="107" width="320" height="76" as="geometry" /></mxCell>
+        <mxCell id="r_check_state" value="Scheduler&lt;br&gt;STOPPED?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1"><mxGeometry x="430" y="105" width="160" height="80" as="geometry" /></mxCell>
+        <mxCell id="r_reject" value="&lt;b&gt;Exit 1 with the reason&lt;/b&gt;&lt;br&gt;The scheduler is stopped (run memman scheduler start), or Validate refused the input." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="760" y="105" width="280" height="80" as="geometry" /></mxCell>
+        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Check the text, category, and replace target against the refusals at left.&lt;br&gt;Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="430" y="225" width="320" height="74" as="geometry" /></mxCell>
+        <mxCell id="r_refusals" value="&lt;b&gt;Refused&lt;/b&gt;&lt;br&gt;Text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR or a label, text spanning lines, an unknown category.&lt;br&gt;On replace: a target not found, forgotten, or replaced; an ambiguous id prefix; a replace already queued for the target." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=6;spacingRight=6;dashed=1;" vertex="1" parent="1"><mxGeometry x="60" y="207" width="340" height="110" as="geometry" /></mxCell>
+        <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, store, content, category, author, queued_at, a new queue_uuid, and replaced_id (replace only)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="430" y="345" width="320" height="100" as="geometry" /></mxCell>
+        <mxCell id="r_return" value="&lt;b&gt;Read related, print JSON&lt;/b&gt;&lt;br&gt;remember reads up to three rows the text may correct; a failed read gives related_error. replace prints replaced_id in place of related.&lt;br&gt;Both print action: queued, id, queue_id, store, quality_warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="780" y="345" width="260" height="125" as="geometry" /></mxCell>
+        <mxCell id="r_t1_note" value="remember opens the store read-only: no LLM call and no embedding. replace opens it with a fingerprint check: a store with no rows and no fingerprint gets one test embed request to its embed provider, to seed the fingerprint." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=11;fontStyle=2;fillColor=none;strokeColor=none;fontColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="60" y="345" width="340" height="100" as="geometry" /></mxCell>
+        <mxCell id="r_e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_start" target="r_check_state"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e2" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;labelBackgroundColor=#e1d5e7;" edge="1" parent="1" source="r_check_state" target="r_reject"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e3" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;labelBackgroundColor=#e1d5e7;" edge="1" parent="1" source="r_check_state" target="r_validate"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_refused" value="refused" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;strokeColor=#b85450;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;labelBackgroundColor=#e1d5e7;" edge="1" parent="1" source="r_validate" target="r_reject"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="900" y="262" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_refusal_note" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;endArrow=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_refusals" target="r_validate"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_validate" target="r_enqueue"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_enqueue" target="r_return"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_trigger" value="&lt;b&gt;A drain runs once per interval (default 60 seconds)&lt;/b&gt;&lt;br&gt;systemd timer on Linux, launchd agent on macOS, memman scheduler serve in a container" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fillColor=none;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="40" y="500" width="1020" height="36" as="geometry" /></mxCell>
+        <mxCell id="t2_box" value="&lt;b&gt;Background worker&lt;/b&gt;  memman scheduler drain" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1"><mxGeometry x="40" y="580" width="1020" height="1090" as="geometry" /></mxCell>
+        <mxCell id="r_trigger_arrow" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_trigger" target="t2_box"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_lock" value="&lt;b&gt;Take the flock on drain.lock&lt;/b&gt;&lt;br&gt;If another drain holds it, exit at once." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;align=center;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="620" width="460" height="50" as="geometry" /></mxCell>
+        <mxCell id="r_claim" value="&lt;b&gt;Claim the next pending row&lt;/b&gt;&lt;br&gt;Oldest first; adds 1 to attempts. A replace waits while its target, or an earlier replace in its store, is still pending." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="695" width="460" height="62" as="geometry" /></mxCell>
+        <mxCell id="r_open" value="&lt;b&gt;Open the row's store, check the embed fingerprint&lt;/b&gt;&lt;br&gt;First row of a store: open it and seed its fingerprint if the store is fresh.&lt;br&gt;Every row: fail if an embed swap finished since the open." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="782" width="460" height="80" as="geometry" /></mxCell>
+        <mxCell id="r_idem" value="Any stored memory&lt;br&gt;holds this queue_uuid?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1"><mxGeometry x="240" y="887" width="220" height="80" as="geometry" /></mxCell>
+        <mxCell id="r_redirect" value="&lt;b&gt;On replace, find the current target&lt;/b&gt;&lt;br&gt;Follow replaced_by from the named row to the head of its chain." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="992" width="460" height="50" as="geometry" /></mxCell>
+        <mxCell id="r_plan" value="&lt;b&gt;Plan, with no database write&lt;/b&gt;&lt;br&gt;Enrichment: one call for a summary, a second when the reply does not parse. Embedding: one call for the content.&lt;br&gt;A missing embedding key or LLM setting raises, and the row goes to retry." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="1067" width="460" height="88" as="geometry" /></mxCell>
+        <mxCell id="r_enrich_note" value="&lt;b&gt;Enrichment outcomes&lt;/b&gt;&lt;br&gt;A call that raises leaves enriched_at unset; maintenance retries the row.&lt;br&gt;Two replies that do not parse give an empty summary; the row counts as enriched and is never retried.&lt;br&gt;A summary at least 85% as long as the content is dropped the same way.&lt;br&gt;An embedding HTTP failure stores the row with no vector and no enriched_at." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;dashed=1;" vertex="1" parent="1"><mxGeometry x="660" y="1000" width="300" height="150" as="geometry" /></mxCell>
+        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;On replace, retire the target first. A target no longer current gives a plain add, logged as target-gone.&lt;br&gt;Insert the row, write the vector and summary, and log a remember oplog row.&lt;br&gt;Stamp enrich_attempted_at. Stamp enriched_at when a vector landed and the enrichment call did not raise." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="1180" width="460" height="115" as="geometry" /></mxCell>
+        <mxCell id="r_done" value="&lt;b&gt;Mark the row done&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1"><mxGeometry x="120" y="1320" width="460" height="36" as="geometry" /></mxCell>
+        <mxCell id="r_failed" value="&lt;b&gt;On an error, retry with backoff&lt;/b&gt;&lt;br&gt;The row unlocks after 60, 120, 240, then 480 seconds. After 5 attempts its status is failed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="660" y="1200" width="300" height="70" as="geometry" /></mxCell>
+        <mxCell id="r_maint" value="&lt;b&gt;Upkeep after the row loop&lt;/b&gt;&lt;br&gt;Skipped when less than 30 s of the drain's time budget remains.&lt;br&gt;Queue: purge done rows, prune worker_runs, and return rows marked stale to pending." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="1400" width="840" height="64" as="geometry" /></mxCell>
+        <mxCell id="r_maint_store" value="&lt;b&gt;Upkeep for each store the drain wrote to&lt;/b&gt;&lt;br&gt;Drop oplog rows older than 180 days. Reset up to 3 memories that have enrich_attempted_at but no enriched_at, then enrich up to 3 with no enrich_attempted_at.&lt;br&gt;When a memory awaited enrichment and budget remains: cap the oplog at 5,000 entries and, on SQLite, run an incremental vacuum." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="1489" width="840" height="80" as="geometry" /></mxCell>
+        <mxCell id="r_model" value="&lt;b&gt;Daily model check&lt;/b&gt;&lt;br&gt;Runs even when upkeep is skipped. Reads the public OpenRouter catalogs and records whether a zero-data-retention endpoint serves the configured model and whether it is retiring." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="120" y="1594" width="840" height="52" as="geometry" /></mxCell>
+        <mxCell id="r_e_lock_claim" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_lock" target="r_claim"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_claim_open" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_claim" target="r_open"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_open_idem" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_open" target="r_idem"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_idem_redirect" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;labelBackgroundColor=#fce5cd;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_idem" target="r_redirect"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_idem_done" value="yes: stored by a crashed&lt;br&gt;drain, so store nothing" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;labelBackgroundColor=#fce5cd;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_idem" target="r_done"><mxGeometry x="-0.75" relative="1" as="geometry"><Array as="points"><mxPoint x="95" y="927" /><mxPoint x="95" y="1329" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_redirect_plan" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_redirect" target="r_plan"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_plan_apply" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_plan" target="r_apply"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_apply_done" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_apply" target="r_done"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_open_fail" value="error" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;strokeColor=#b85450;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_open" target="r_failed"><mxGeometry x="-0.9" relative="1" as="geometry"><Array as="points"><mxPoint x="982" y="822" /><mxPoint x="982" y="1235" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_plan_fail" value="error" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;strokeColor=#b85450;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.85;exitDx=0;exitDy=0;entryX=0;entryY=0.214;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_plan" target="r_failed"><mxGeometry x="0.6" relative="1" as="geometry"><Array as="points"><mxPoint x="620" y="1142" /><mxPoint x="620" y="1215" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_fail" value="error" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;strokeColor=#b85450;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.536;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_apply" target="r_failed"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_enrich_note" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;dashed=1;endArrow=none;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.09;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_enrich_note" target="r_plan"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_loop" value="next row" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;labelBackgroundColor=#fce5cd;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_done" target="r_claim"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="65" y="1347" /><mxPoint x="65" y="726" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_fail_loop" value="next row" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.85;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_failed" target="r_claim"><mxGeometry x="0.56" relative="1" as="geometry"><Array as="points"><mxPoint x="1005" y="1259" /><mxPoint x="1005" y="739" /><mxPoint x="580" y="739" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_done_maint" value="loop ends: row limit, timeout, empty queue,&lt;br&gt;STOPPED scheduler, or SIGTERM in scheduler serve" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;labelBackgroundColor=#fce5cd;exitX=1;exitY=0.15;exitDx=0;exitDy=0;entryX=0.69;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_claim" target="r_maint"><mxGeometry x="0.75" relative="1" as="geometry"><Array as="points"><mxPoint x="1035" y="704" /><mxPoint x="1035" y="1382" /><mxPoint x="700" y="1382" /></Array></mxGeometry></mxCell>
+        <mxCell id="r_e_maint_store" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_maint" target="r_maint_store"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="r_e_store_model" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_maint_store" target="r_model"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

@@ -1,100 +1,53 @@
 <mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
   <diagram id="llm-supervised" name="LLM-Supervised Design">
-    <mxGraphModel dx="1522" dy="950" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="700" math="0" shadow="0">
+    <mxGraphModel dx="1522" dy="950" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="997" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" value="&lt;b&gt;LLM-Supervised Design&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;The agent makes the judgment calls. memman code does the deterministic work. One enrichment model adds a summary to each write.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="100" y="10" width="1130" height="45" as="geometry" />
-        </mxCell>
-
-        <mxCell id="agent_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
-          <mxGeometry x="30" y="75" width="360" height="520" as="geometry" />
-        </mxCell>
-        <mxCell id="agent_title" value="&lt;b&gt;Claude Code (the agent)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Holds the whole conversation. Runs memman through Bash.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="50" y="85" width="320" height="44" as="geometry" />
-        </mxCell>
-        <mxCell id="l1" value="&lt;b&gt;What to store&lt;/b&gt;&lt;br&gt;Preferences, decisions, corrections, conclusions, and context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="145" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="l2" value="&lt;b&gt;Writing the memory&lt;/b&gt;&lt;br&gt;One self-contained thought per call, with category" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="199" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="l3" value="&lt;b&gt;Writing the query&lt;/b&gt;&lt;br&gt;Focused keywords drawn from the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="253" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="l4" value="&lt;b&gt;Reading the results&lt;/b&gt;&lt;br&gt;Judges each recalled row against the query and the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="307" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="l5" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Decides when to replace or forget a memory" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="50" y="361" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="agent_note" value="The judgment runs inside the agent's own turns and needs no extra API call." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="50" y="425" width="320" height="40" as="geometry" />
-        </mxCell>
-
-        <mxCell id="bin_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="500" y="75" width="360" height="520" as="geometry" />
-        </mxCell>
-        <mxCell id="bin_title" value="&lt;b&gt;memman CLI and worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Deterministic code. Recall calls the embedding provider and the reranker, never an LLM.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="520" y="85" width="320" height="44" as="geometry" />
-        </mxCell>
-        <mxCell id="b1" value="&lt;b&gt;Storage&lt;/b&gt;&lt;br&gt;SQLite (WAL, one file per store) or Postgres with pgvector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="145" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b2" value="&lt;b&gt;Write queue&lt;/b&gt;&lt;br&gt;remember and replace append to queue.db. A background worker drains it." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="199" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b3" value="&lt;b&gt;Keyword channel&lt;/b&gt;&lt;br&gt;Query tokens counted per memory: FTS5 on SQLite, a token array on Postgres" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="253" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b4" value="&lt;b&gt;Vector channel&lt;/b&gt;&lt;br&gt;Cosine similarity of the query vector and each memory vector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="307" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b5" value="&lt;b&gt;Fusion&lt;/b&gt;&lt;br&gt;RRF over the keyword, vector, and recency lists (k=60)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="361" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b6" value="&lt;b&gt;Blend&lt;/b&gt;&lt;br&gt;Keyword score + similarity + fused rank, fixed weights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="415" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b7" value="&lt;b&gt;Rerank&lt;/b&gt;&lt;br&gt;Voyage cross-encoder over the top 100, for queries of three or more words" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="469" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="b8" value="&lt;b&gt;Retention&lt;/b&gt;&lt;br&gt;No cap and no automatic deletion. Rows leave recall only by forget or replace." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="523" width="320" height="46" as="geometry" />
-        </mxCell>
-
-        <mxCell id="llm_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
-          <mxGeometry x="970" y="75" width="360" height="520" as="geometry" />
-        </mxCell>
-        <mxCell id="llm_title" value="&lt;b&gt;Enrichment model&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;One model, named by MEMMAN_LLM_MODEL. No call on recall.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="990" y="85" width="320" height="44" as="geometry" />
-        </mxCell>
-        <mxCell id="h1" value="&lt;b&gt;Model&lt;/b&gt;&lt;br&gt;Set at install. Changed with memman config set MEMMAN_LLM_MODEL." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="990" y="145" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="h2" value="&lt;b&gt;Enrichment&lt;/b&gt;&lt;br&gt;A short summary. One call per write, a second when the reply does not parse." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="990" y="199" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="h3" value="&lt;b&gt;Content stays as written&lt;/b&gt;&lt;br&gt;The model never rewords a memory or picks its category." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="990" y="253" width="320" height="46" as="geometry" />
-        </mxCell>
-        <mxCell id="h4" value="&lt;b&gt;Model check&lt;/b&gt;&lt;br&gt;memman install and a daily drain check that the model still routes and has no retirement date. OpenRouter endpoints only." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="990" y="307" width="320" height="58" as="geometry" />
-        </mxCell>
-
-        <mxCell id="arrow_remember" value="memman remember" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="l2" target="b2">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="arrow_recall_vec" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=9;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="l3" target="b4">
-          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="276" /><mxPoint x="480" y="330" /></Array></mxGeometry>
-        </mxCell>
-        <mxCell id="arrow_recall" value="memman recall" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="l3" target="b3">
-          <mxGeometry x="-0.3" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
-        </mxCell>
-        <mxCell id="arrow_enrich" value="worker" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="b2" target="h2">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
+        <mxCell id="title" value="&lt;b&gt;LLM-Supervised Design&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;The agent makes the judgment calls. memman code does the deterministic work. One enrichment model adds a summary to each write.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=16;fillColor=none;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="100" y="10" width="1130" height="45" as="geometry" /></mxCell>
+        <mxCell id="agent_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1"><mxGeometry x="30" y="75" width="360" height="607.0" as="geometry" /></mxCell>
+        <mxCell id="agent_title" value="&lt;b&gt;Claude Code (the agent)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Holds the whole conversation. Runs memman through Bash.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="50" y="85" width="320" height="44" as="geometry" /></mxCell>
+        <mxCell id="l1" value="&lt;b&gt;What to store&lt;/b&gt;&lt;br&gt;Preferences, decisions, corrections, conclusions, and context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="50" y="139" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="l2" value="&lt;b&gt;Writing the memory&lt;/b&gt;&lt;br&gt;One self-contained thought per call, with category" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="50" y="199" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="l5" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Decides when to replace or forget a memory. Reads the related rows that remember returns." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="50" y="262" width="320" height="128" as="geometry" /></mxCell>
+        <mxCell id="l3" value="&lt;b&gt;Writing the query&lt;/b&gt;&lt;br&gt;Focused keywords drawn from the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="50" y="516.0" width="320" height="46" as="geometry" /></mxCell>
+        <mxCell id="l4" value="&lt;b&gt;Reading the results&lt;/b&gt;&lt;br&gt;Judges each recalled row against the query and the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="50" y="570.0" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="agent_note" value="The judgment runs inside the agent&#x27;s own turns and needs no extra API call." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=11;fillColor=none;strokeColor=none;fontStyle=2;" vertex="1" parent="1"><mxGeometry x="50" y="632.0" width="320" height="40" as="geometry" /></mxCell>
+        <mxCell id="bin_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="500" y="75" width="360" height="882" as="geometry" /></mxCell>
+        <mxCell id="bin_title" value="&lt;b&gt;memman CLI and worker&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Deterministic code. Recall calls the embedding provider and the reranker, never an LLM.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="520" y="85" width="320" height="44" as="geometry" /></mxCell>
+        <mxCell id="write_path" value="&lt;b&gt;Write path&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#6c8ebf;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="510" y="155" width="340" height="170" as="geometry" /></mxCell>
+        <mxCell id="door_check" value="&lt;b&gt;Door check&lt;/b&gt;&lt;br&gt;Refuses text over 1,000 UTF-8 bytes, naming a line number, opening with the author name or a label, or spanning lines." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="181" width="320" height="66" as="geometry" /></mxCell>
+        <mxCell id="b2" value="&lt;b&gt;Write queue&lt;/b&gt;&lt;br&gt;remember and replace append to queue.db. A background worker drains it." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="263" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b1" value="&lt;b&gt;Storage&lt;/b&gt;&lt;br&gt;SQLite (WAL, one file per store) or Postgres with pgvector. forget soft-deletes here directly, with no queue." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="343" width="320" height="66" as="geometry" /></mxCell>
+        <mxCell id="recall_channels" value="&lt;b&gt;Recall channels&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#6c8ebf;verticalAlign=top;fontSize=11;" vertex="1" parent="1"><mxGeometry x="510" y="427" width="340" height="224" as="geometry" /></mxCell>
+        <mxCell id="b3" value="&lt;b&gt;Keyword channel&lt;/b&gt;&lt;br&gt;Query tokens counted per memory: FTS5 on SQLite, a token array on Postgres" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="453" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b4" value="&lt;b&gt;Vector channel&lt;/b&gt;&lt;br&gt;Cosine similarity of the query vector and each memory vector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="521" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b_recency" value="&lt;b&gt;Recency channel&lt;/b&gt;&lt;br&gt;The 30 newest memories, ranked by creation time" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="589" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b5" value="&lt;b&gt;Fusion&lt;/b&gt;&lt;br&gt;RRF over the keyword, vector, and recency lists (k=60)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="669" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b6" value="&lt;b&gt;Blend&lt;/b&gt;&lt;br&gt;Keyword score + similarity + min-max-scaled fused RRF score, fixed weights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="737" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="b7" value="&lt;b&gt;Rerank&lt;/b&gt;&lt;br&gt;Voyage cross-encoder over the top 100. Needs 3+ query words, 2+ candidates, and MEMMAN_RERANK_ENABLED on (default on, per-store override)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="805" width="320" height="66" as="geometry" /></mxCell>
+        <mxCell id="b8" value="&lt;b&gt;Retention&lt;/b&gt;&lt;br&gt;No cap and no automatic deletion. Rows leave recall only by forget or replace." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="520" y="887" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="llm_box" value="" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="970" y="75" width="360" height="550" as="geometry" /></mxCell>
+        <mxCell id="llm_title" value="&lt;b&gt;Enrichment model&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;One model, named by MEMMAN_LLM_MODEL. No call on recall.&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1"><mxGeometry x="990" y="85" width="320" height="44" as="geometry" /></mxCell>
+        <mxCell id="h1" value="&lt;b&gt;Model&lt;/b&gt;&lt;br&gt;Set at install. Changed with memman config set MEMMAN_LLM_MODEL." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="181" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="h2" value="&lt;b&gt;Enrichment&lt;/b&gt;&lt;br&gt;A short summary. One call per write, a second when the reply does not parse." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="263" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="h2_retry" value="&lt;b&gt;Retry rule&lt;/b&gt;&lt;br&gt;A failed call, or a row stored without a vector, is enriched again by a later drain. Two unparseable replies store an empty summary, and the row is not retried." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="331" width="320" height="66" as="geometry" /></mxCell>
+        <mxCell id="h3" value="&lt;b&gt;Content stays as written&lt;/b&gt;&lt;br&gt;The model never rewords a memory or picks its category." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="413" width="320" height="52" as="geometry" /></mxCell>
+        <mxCell id="h4" value="&lt;b&gt;Model check&lt;/b&gt;&lt;br&gt;memman install and a daily drain check that the model still routes and has no retirement date. OpenRouter endpoints only." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="481" width="320" height="66" as="geometry" /></mxCell>
+        <mxCell id="h4_prime" value="&lt;b&gt;Verdict to the agent&lt;/b&gt;&lt;br&gt;memman prime prints it as one status line." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=11;spacingLeft=6;spacingRight=6;" vertex="1" parent="1"><mxGeometry x="990" y="563" width="320" height="44" as="geometry" /></mxCell>
+        <mxCell id="arrow_remember" value="memman remember" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.4118;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="l2" target="write_path"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_replace" value="memman replace" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.3125;entryX=0;entryY=0.8647;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="l5" target="write_path"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_related" value="related&lt;br&gt;(up to 3 rows)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.25;entryX=1;entryY=0.1094;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b2" target="l5"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_forget" value="memman forget" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.8906;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="l5" target="b1"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_check" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=1.5;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="door_check" target="b2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_recall" value="memman recall" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="l3" target="recall_channels"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_channels" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=1.5;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="recall_channels" target="b5"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_fuse" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=1.5;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b5" target="b6"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_blend" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=1.5;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b6" target="b7"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="arrow_results" value="results:&lt;br&gt;plain-text lines,&lt;br&gt;best first" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b7" target="l4"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="445" y="838.0" /><mxPoint x="445" y="596.0" /></Array></mxGeometry></mxCell>
+        <mxCell id="arrow_enrich" value="worker" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="b2" target="h2"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="link_retry" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=1;fontSize=11;labelBackgroundColor=#ffffff;dashed=1;endArrow=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="h2" target="h2_retry"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
+        <mxCell id="link_prime" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=1;fontSize=11;labelBackgroundColor=#ffffff;dashed=1;endArrow=none;exitX=0.5;exitY=1;entryX=0.5;entryY=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="h4" target="h4_prime"><mxGeometry relative="1" as="geometry"></mxGeometry></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

@@ -11,89 +11,105 @@
           <mxGeometry x="430" y="65" width="240" height="35" as="geometry" />
         </mxCell>
 
-        <mxCell id="i_hook_box" value="&lt;b&gt;Hooks&lt;/b&gt;  scripts in ~/.claude/hooks/memman/, registered in ~/.claude/settings.json" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="120" width="1020" height="210" as="geometry" />
+        <mxCell id="i_hook_box" value="&lt;b&gt;Event hooks&lt;/b&gt;  run on their events during the session. Scripts in ~/.claude/hooks/memman/, like prime.sh" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="470" width="1020" height="215" as="geometry" />
         </mxCell>
-        <mxCell id="i_h_prime" value="&lt;b&gt;prime.sh&lt;/b&gt;&lt;br&gt;SessionStart&lt;br&gt;&lt;br&gt;Runs memman prime: the status line, any model notice, a recall hint after compaction, then guide.md.&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;[memman] Memory active (N insights).&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="60" y="150" width="188" height="130" as="geometry" />
+        <mxCell id="i_h_prime" value="&lt;b&gt;prime.sh&lt;/b&gt;  SessionStart, the only hook that runs at session start&lt;br&gt;Runs memman prime: the status line, any model notice, a recall hint after compaction, then guide.md.&lt;br&gt;Without a readable store the status line has no count. Without memman on PATH, prime.sh prints a warning and exits 0.&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;[memman] Memory active (N insights).&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="250" y="125" width="600" height="95" as="geometry" />
         </mxCell>
         <mxCell id="i_h1" value="&lt;b&gt;user_prompt.sh&lt;/b&gt;&lt;br&gt;UserPromptSubmit&lt;br&gt;&lt;br&gt;Reminds the agent to recall before it answers.&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;[memman] Recall: memman recall &quot;&amp;lt;focused query&amp;gt;&quot;&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="256" y="150" width="188" height="130" as="geometry" />
+          <mxGeometry x="315" y="500" width="235" height="125" as="geometry" />
         </mxCell>
         <mxCell id="i_h_compact" value="&lt;b&gt;compact.sh&lt;/b&gt;&lt;br&gt;PreCompact&lt;br&gt;&lt;br&gt;Records the trigger (auto or manual) in a flag file under ~/.memman/compact/. memman prime reads it after compaction.&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;(prints nothing)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="452" y="150" width="188" height="130" as="geometry" />
+          <mxGeometry x="60" y="500" width="235" height="125" as="geometry" />
         </mxCell>
         <mxCell id="i_h_recall" value="&lt;b&gt;task_recall.sh&lt;/b&gt;&lt;br&gt;PreToolUse on Agent or Task&lt;br&gt;&lt;br&gt;Reminds the agent to recall before its next delegation.&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;[memman] Before the next delegation, run memman recall ...&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="648" y="150" width="188" height="130" as="geometry" />
+          <mxGeometry x="570" y="500" width="235" height="125" as="geometry" />
         </mxCell>
         <mxCell id="i_h_exitplan" value="&lt;b&gt;exit_plan.sh&lt;/b&gt;&lt;br&gt;PreToolUse on ExitPlanMode&lt;br&gt;&lt;br&gt;Reminds the agent to store the plan's conclusions before it executes.&lt;br&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:8px&quot;&gt;[memman] Plan-to-execute transition: store ...&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="844" y="150" width="196" height="130" as="geometry" />
+          <mxGeometry x="825" y="500" width="215" height="125" as="geometry" />
         </mxCell>
-        <mxCell id="i_h_note" value="prime.sh and user_prompt.sh print plain text. task_recall.sh and exit_plan.sh print hookSpecificOutput.additionalContext JSON. Every hook exits 0. No hook writes a memory." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=9;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="60" y="286" width="980" height="30" as="geometry" />
+        <mxCell id="i_h_note" value="prime.sh and user_prompt.sh print plain text. task_recall.sh and exit_plan.sh print hookSpecificOutput.additionalContext JSON. compact.sh prints nothing. Every hook exits 0. No hook writes a memory." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;fontSize=9;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="633" width="980" height="40" as="geometry" />
         </mxCell>
 
-        <mxCell id="i_guide_box" value="&lt;b&gt;Guide&lt;/b&gt;  guide.md, printed by memman prime at session start" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="360" width="1020" height="150" as="geometry" />
+        <mxCell id="i_guide_box" value="&lt;b&gt;Guide&lt;/b&gt;  guide.md, printed by memman prime and held in context for the session" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="275" width="1020" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="i_c1" value="&lt;b&gt;Recall&lt;/b&gt;&lt;br&gt;Before a new message, task, topic switch, design decision, or delegation. Focused keywords, never the raw prompt. Skip only a direct follow-up." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="390" width="235" height="100" as="geometry" />
+        <mxCell id="i_c1" value="&lt;b&gt;Recall&lt;/b&gt;&lt;br&gt;Before a new message, task, topic switch, design decision, or delegation. Focused keywords, never the raw prompt. Skip only a direct follow-up. The agent judges each row against the query, never a fixed score, and opens a row with memman insights show." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="60" y="305" width="235" height="115" as="geometry" />
         </mxCell>
         <mxCell id="i_c2" value="&lt;b&gt;Remember&lt;/b&gt;&lt;br&gt;Store a preference or decision at once. A correction replaces the row it corrects, and a related row with a sentence now false is forgotten or replaced." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="305" y="390" width="235" height="100" as="geometry" />
+          <mxGeometry x="305" y="305" width="235" height="115" as="geometry" />
         </mxCell>
         <mxCell id="i_c3" value="&lt;b&gt;Shape of a memory&lt;/b&gt;&lt;br&gt;One thought per call, one paragraph, subject first. memman refuses text over 1,000 bytes." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="550" y="390" width="235" height="100" as="geometry" />
+          <mxGeometry x="550" y="305" width="235" height="115" as="geometry" />
         </mxCell>
         <mxCell id="i_c4" value="&lt;b&gt;Elsewhere&lt;/b&gt;&lt;br&gt;A behavioral rule goes to the project CLAUDE.md. The skill is the full manual." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="795" y="390" width="245" height="100" as="geometry" />
+          <mxGeometry x="795" y="305" width="245" height="115" as="geometry" />
         </mxCell>
 
         <mxCell id="i_skill_box" value="&lt;b&gt;Skill&lt;/b&gt;  ~/.claude/skills/memman/SKILL.md, loaded on demand" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="40" y="540" width="1020" height="140" as="geometry" />
+          <mxGeometry x="40" y="725" width="1020" height="150" as="geometry" />
         </mxCell>
-        <mxCell id="i_s1" value="&lt;b&gt;Storing&lt;/b&gt;&lt;br&gt;When to write, categories, what never to store, corrections, the write pipeline" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="570" width="235" height="90" as="geometry" />
+        <mxCell id="i_s1" value="&lt;b&gt;Storing memories&lt;/b&gt;&lt;br&gt;Categories, when to write, corrections, the related list, the text, the write pipeline" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="60" y="755" width="235" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="i_s2" value="&lt;b&gt;Recalling&lt;/b&gt;&lt;br&gt;Writing the query, reading the page, opening a row with memman insights show" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="305" y="570" width="235" height="90" as="geometry" />
+        <mxCell id="i_s2" value="&lt;b&gt;Recall&lt;/b&gt;&lt;br&gt;Writing the query, reading the page, opening a row with memman insights show" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="305" y="755" width="235" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="i_s3" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Forgetting, inspecting the system, scheduler controls, guardrails" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="550" y="570" width="235" height="90" as="geometry" />
+        <mxCell id="i_s3" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Forgetting, inspecting the system, scheduler controls, operator commands, guardrails" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="550" y="755" width="235" height="100" as="geometry" />
         </mxCell>
         <mxCell id="i_s4" value="&lt;b&gt;Why two files&lt;/b&gt;&lt;br&gt;The guide lands in every session, so it stays short. The skill carries the depth and costs nothing until the agent loads it." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="795" y="570" width="245" height="90" as="geometry" />
+          <mxGeometry x="795" y="755" width="245" height="100" as="geometry" />
         </mxCell>
 
         <mxCell id="i_response" value="&lt;b&gt;The agent answers, then stores what it learned&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="300" y="710" width="500" height="40" as="geometry" />
+          <mxGeometry x="300" y="905" width="500" height="40" as="geometry" />
         </mxCell>
 
         <mxCell id="i_direct_box" value="&lt;b&gt;Direct Bash call&lt;/b&gt;  in the same turn, never through a sub-agent" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="40" y="780" width="1020" height="140" as="geometry" />
+          <mxGeometry x="40" y="975" width="1020" height="150" as="geometry" />
         </mxCell>
         <mxCell id="i_d_host" value="&lt;b&gt;Claude Code, this turn&lt;/b&gt;&lt;br&gt;Holds the context. Picks --cat. Replaces every &quot;this&quot; and &quot;it&quot; with its subject." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="60" y="815" width="280" height="80" as="geometry" />
+          <mxGeometry x="60" y="1010" width="250" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="i_d_bash" value="&lt;b&gt;memman remember&lt;/b&gt;&lt;br&gt;Appends to the queue, lists the related rows it may correct, and prints action: queued, id, queue_id, store, quality_warnings, related. The worker stores the row later under that id." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="420" y="815" width="300" height="80" as="geometry" />
+        <mxCell id="i_d_bash" value="&lt;b&gt;memman remember&lt;/b&gt;&lt;br&gt;Refuses while the scheduler is stopped. Otherwise appends to the queue, lists the related rows it may correct, and prints action: queued, id, queue_id, store, quality_warnings, related. If the related read fails, the reply carries related_error in place of related, still exit 0. The worker stores the row later under that id." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="390" y="1010" width="380" height="100" as="geometry" />
         </mxCell>
         <mxCell id="i_d_why" value="&lt;b&gt;Why direct&lt;/b&gt;&lt;br&gt;The agent already holds the context. A sub-agent would pay for it again. The slow work runs in the worker." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="780" y="815" width="260" height="80" as="geometry" />
+          <mxGeometry x="810" y="1010" width="230" height="100" as="geometry" />
         </mxCell>
 
-        <mxCell id="i_setup" value="memman install links the hooks and the skill into ~/.claude and registers the hooks. memman uninstall removes them. guide.md stays in the package." style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
-          <mxGeometry x="40" y="940" width="1020" height="20" as="geometry" />
+        <mxCell id="i_setup" value="memman install links the hooks and the skill into ~/.claude, registers the hooks, and adds 8 Bash(memman &amp;lt;verb&amp;gt;:*) entries to settings.json permissions.allow (asking first on a terminal). It also installs the scheduler unit and sets up the default store. memman uninstall removes the links, registrations, and permission entries. guide.md stays in the package." style="rounded=0;whiteSpace=wrap;html=1;align=left;spacingLeft=8;spacingRight=8;fontSize=10;fillColor=#f5f5f5;strokeColor=#999999;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1145" width="1020" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="i_eu" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;" edge="1" parent="1" source="i_session" target="i_hook_box">
+        <mxCell id="i_eu" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;" edge="1" parent="1" source="i_session" target="i_h_prime">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i_ec" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="i_hook_box" target="i_guide_box">
+        <mxCell id="i_ec" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1" source="i_h_prime" target="i_guide_box">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i_es" value="when needed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="i_guide_box" target="i_skill_box">
+        <mxCell id="i_e_guide_hooks" value="during the session" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=2;fontSize=9;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="i_guide_box" target="i_hook_box">
           <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="i_e_flag" value="flag read at&lt;br&gt;the next prime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6c8ebf;strokeWidth=1;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="i_h_compact" target="i_h_prime">
+          <mxGeometry x="-0.1" y="0" relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="562" />
+              <mxPoint x="20" y="172" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="i_es" value="when needed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#d6b656;strokeWidth=2;dashed=1;fontSize=9;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.1;entryDx=0;entryDy=0;" edge="1" parent="1" source="i_guide_box" target="i_skill_box">
+          <mxGeometry x="0.2" y="40" relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1085" y="355" />
+              <mxPoint x="1085" y="740" />
+            </Array>
+          </mxGeometry>
         </mxCell>
         <mxCell id="i_er" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9673a6;strokeWidth=2;" edge="1" parent="1" source="i_skill_box" target="i_response">
           <mxGeometry relative="1" as="geometry" />
