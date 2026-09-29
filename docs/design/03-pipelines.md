@@ -1,288 +1,212 @@
-# 3. Read & Write Pipelines
+# 3. Read and write pipelines
 
-[< Back to Design Overview](../DESIGN.md)
-
----
+[Previous: core concepts](02-concepts.md) | [Design overview](../DESIGN.md) | [Next: lifecycle and embedding](04-lifecycle.md)
 
 ## 3.1 The turn and the background worker
 
-memman runs commands during the agent's turn and processes queued writes in a background worker. The agent waits for commands to finish. The worker runs separately on a timer.
+The agent waits for CLI commands during its turn. A separate worker processes queued writes. A **drain** is one worker run, scheduled every 60 seconds by default.
 
-| Work                                   | Where it runs     | Model calls                                                    |
-| -------------------------------------- | ----------------- | -------------------------------------------------------------- |
-| `remember`, `replace`: check and queue | in the turn       | none                                                           |
-| Enrich, embed and store a queued write | background worker | one LLM call (two if parsing fails) and one embedding call     |
-| `forget`                               | in the turn       | none                                                           |
-| `recall`                               | in the turn       | one query embedding call and, when enabled, one reranking call |
+| Operation                               | Runs in      | Model work                               |
+| --------------------------------------- | ------------ | ---------------------------------------- |
+| Validate and queue `remember`           | Agent's turn | None                                     |
+| Enrich, embed, and store a queued write | Worker       | Summary generation and content embedding |
+| `replace` and `forget`                  | Agent's turn | None                                     |
+| Scored `recall`                         | Agent's turn | Query embedding and optional reranking   |
+| `recall --basic`                        | Agent's turn | No query embedding or reranking          |
 
-- **When memories become available.** Recall cannot see a queued write until a drain stores it. Recall reads the live store on every call, so a stored memory is recallable at once, in the same session or any later one.
-- **No write in the turn calls the LLM.** `remember` and `replace` call no model. Recall calls the embedding model and the reranker but never the LLM. The LLM runs in the drain, in `memman enrich`, and in the `memman doctor` probe.
-- **Recall-only while stopped.** When the scheduler is stopped, `remember`, `replace`, and `forget` report that writes are disabled and ask the user to run `memman scheduler start`. `memman scheduler trigger` also refuses to run. Recall keeps working. A drain in progress stops claiming rows once it reads the stopped state.
+`replace`, `forget`, and recall open normal store sessions. Their store-opening checks can require embedding credentials or send a probe, separate from the model work listed above. Summary generation and content embedding for a new write always run in the worker.
 
-[USAGE](../USAGE.md#scheduler) covers the scheduler commands and the queue states.
+A queued memory becomes searchable only after the worker stores it. Recall reads the store on each call, so it can see a memory saved earlier in the same session.
 
----
+Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drain triggers. Recall remains available. Maintenance commands that rebuild generated fields require this stopped state ([scheduler controls](../USAGE.md#scheduler)).
 
 ## 3.2 Write pipeline: remember
 
-![Write Pipeline](../diagrams/04-remember-pipeline.drawio.png)
+![Write submission, background processing, and storage](../diagrams/04-remember-pipeline.drawio.png)
 
-### Step 1: queue the write during the session
+### Queue the write
 
-`memman remember [--cat C] "<text>"` runs these steps in order:
+`remember` performs these steps before returning:
 
-1. Stop if the scheduler is stopped.
-2. Reject text over 1,000 UTF-8 bytes or text containing a line number, an opening author name, a line break, or a leading label. Reject an unknown category. [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists each refusal.
-3. Run the quality check. Regular expressions flag temporary information, such as an AWS instance id, the word "currently", or a dated observation. The warnings return as `quality_warnings` and never block the write.
-4. Add one row to the queue, `<data dir>/queue.db`, with `status='pending'`, the text, the flag values, and a newly generated random UUID in `queue_uuid`. Every store shares this one SQLite file, in WAL mode, whatever backend the store uses.
-5. Read the store for the rows the write may correct. Take the current rows of at most 1,000 bytes that share a word with the text, rank them by shared words divided by the square root of the row's distinct words, and keep up to three, each as `<id8> <content>`. A SQLite store with no database yet gives an empty list. The read sets `PGCONNECT_TIMEOUT` to 3 seconds unless the environment sets it, so an unreachable Postgres host fails fast. Any failure of the read becomes `related_error`: the write is already queued, and the command exits 0.
-6. Print `{action: queued, id, queue_id, store, quality_warnings, related}`, with `related_error` in place of `related` when the read failed.
+1. Check that writes are enabled, then validate the text and category against the [input rules](../USAGE.md#what-remember-and-replace-refuse).
+2. Identify potentially temporary information and report it as advisory `quality_warnings`.
+3. Append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity.
+4. Look for up to three related current memories. This uses word overlap and calls no model.
+5. Return JSON with `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related`.
 
-`queue_id` names the queue row. The maintenance step after a drain deletes done rows older than 60 seconds, so the ID soon becomes unavailable. The drain stores the memory under the write's `queue_uuid`, which is the `id` this step printed, so that id outlives the queue row and resolves once the write lands.
+Related memories must be at most 1,000 bytes. Their score is shared-word count divided by the square root of the memory's distinct-word count. This favors focused matches. A missing SQLite store yields an empty list. A failed read returns `related_error`; the write remains queued and the command succeeds. The Postgres read defaults `PGCONNECT_TIMEOUT` to three seconds unless already configured.
 
-`memman replace <id> "<text>"` runs steps 1 to 4 and prints the same fields less `related`, with three differences:
+The UUID returned as `id` becomes the memory's persistent ID. The numeric `queue_id` identifies the queue entry, which maintenance can delete after processing.
 
-- The id may name a current memory or a write still in the queue for the same store. It rejects a target that is neither. If the target is already replaced, the error names its successor. If a replacement of the target is still queued, the error quotes that replacement's id and text, since a second one would retire it on the drain. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending.
-- When `--cat` is omitted, the replacement inherits the target's value.
-- The queue row carries the target as `replaced_id`, and the output carries the same field.
+`replace` also queues a write, with a `replaced_id`, and inherits the target's category unless `--cat` is supplied. It accepts a current memory or a queued write in the same store. It rejects forgotten or replaced targets and targets with a replacement already queued. Its response includes `replaced_id` instead of `related`.
 
-### Step 2: process the write in the background worker
+### Process the write
 
-A drain is one run of the hidden `memman scheduler drain`. The scheduler starts one every interval, 60 seconds by default. On systemd and launchd the unit file holds the interval, and `memman scheduler interval --seconds N` rewrites it. `memman scheduler serve` reads `--interval`, then `MEMMAN_INTERVAL`, then 60.
+A systemd timer or launchd agent runs the hidden `scheduler drain` command, and the serve loop runs the same drain inside its own process. An exclusive file lock on `<data dir>/drain.lock` prevents overlapping drains; the operating system releases it if the process exits. A drain that cannot acquire the lock reports `skipped`.
 
-| Host                            | Scheduler                                                                      | Drain timeout (seconds)                     |
-| ------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| Linux with systemd              | user timer `~/.config/systemd/user/memman-enrich.timer`                        | `max(60, interval - 20)`                    |
-| macOS                           | launchd agent `~/Library/LaunchAgents/com.memman.enrich.plist`                 | `max(60, interval - 20)`                    |
-| Host without systemd or launchd | `memman scheduler serve` in the foreground, with `MEMMAN_SCHEDULER_KIND=serve` | `max(10, interval - 10)`, 300 at interval 0 |
+Each drain processes up to 100 entries by default, stopping when it reaches its limit or timeout, empties the queue, or sees the stopped state.
 
-`memman scheduler serve` runs as the container's main process. It reads the scheduler state before each drain and every second while it waits, and exits once the state is `stopped`. SIGTERM or SIGINT stops the drain after the row in hand, and the process exits 0.
+1. **Claim an entry.** An atomic update claims the oldest eligible pending write and increments its attempt count. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no entry. A replacement waits for its pending target and for earlier replacements in the same store, so replacements land in queue order. A write that fails or goes stale stops holding the entries behind it.
+2. **Open the store.** Resolve its backend and embedding fingerprint. Before each write, check that the fingerprint still matches the cached client, because a swap that finishes mid-drain would leave that client writing vectors of the wrong size.
+3. **Check for a completed attempt.** If any memory already carries the entry's `queue_uuid`, mark the entry done without inserting again. Retired memories count too. The UUID identifies the write across retries, since a backup restore can reset the queue's row id counter.
+4. **Resolve a replacement.** Follow an existing replacement chain to its current successor when necessary, recording `redirected_from`.
+5. **Generate a summary and embedding.** Enrichment requests a one-sentence summary, with one additional request if no JSON object parses. A summary at least 85% as long as the original content is discarded. The embedder processes the original content.
+6. **Commit one transaction.** Insert the new memory, save generated fields and markers, record operations, and link the replacement target to the new ID when it is still current.
+7. **Finish the queue entry.** Mark it done, or record an error for retry.
 
-Drains never overlap. Each drain takes an exclusive flock on `<data dir>/drain.lock`. A flock is an advisory file lock that the kernel releases when the holding process exits, so a crash leaves no stale lock. A drain that finds the lock held prints a `skipped` result and exits.
-
-A drain claims rows one at a time until it has handled 100 (`--limit`), reaches its timeout, empties the queue, or reads the stopped state. The drain processes each row as follows:
-
-1. **Claim.** One `update ... returning` statement takes the oldest pending row and adds 1 to `attempts`. A replacement waits while an earlier pending write in its store is its target or is itself a replacement, so replacements land in the order they were queued, whatever retries they take. A write that fails or goes stale stops holding the rows behind it. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no row.
-2. **Open the store.** The first row for a store opens it, checks its embedding fingerprint, and builds its embedding client ([chapter 4](04-lifecycle.md)). If the store cannot be opened, the row fails. Before each row the drain checks that the fingerprint has not changed, because a swap that finished mid-drain would make the cached client write vectors of the wrong size.
-3. **Check for an earlier attempt.** When the store holds a memory with the row's `queue_uuid`, the drain marks the row done and stores nothing. A replaced or forgotten memory counts, because either one still holds the write's id. This check makes a replay after a crash safe. The UUID identifies the write across retries. Restoring a backup can reset the queue's row ID counter.
-4. **Redirect a replacement.** If an earlier queued replacement has already replaced the target, the new replacement follows the `replaced_by` chain to the current memory and targets it. The result carries `redirected_from`.
-5. **Enrich.** One LLM call returns a one-sentence summary. A reply with no JSON object gets one more call. memman then drops a summary at least 85% as long as the content. This limit is defined in code. Changing it leaves the prompt and `prompt_version` unchanged.
-6. **Embed.** The store's embedding model embeds the content.
-7. **Apply.** One transaction commits the write:
-   - For a replacement, retire the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten, replaced, or never stored by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result names the target under `target_gone`.
-   - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `enrich_attempted_at`, and store the summary.
-   - Set `enriched_at` only when both enrichment and the vector were saved.
-8. **Finish.** Mark the row `done`. Any exception in steps 2-7 calls `mark_failed` instead.
-
-### Metadata used in a replacement
-
-A replacement never edits a memory in place. It retires the target and stores one successor. The target keeps its content and records its successor in `replaced_by`. Recall and listings skip it.
-
-| Field                       | Value used                               | Why                                                       |
-| --------------------------- | ---------------------------------------- | --------------------------------------------------------- |
-| `content`                   | incoming                                 | the replacement text, stored as written                   |
-| `category`                  | flag value if supplied, otherwise target | omitted flag inherits the target's metadata               |
-| `queue_uuid`, `author`      | incoming                                 | identifies the write that produced the row and its author |
-| `summary`, vector           | fresh                                    | enrichment and embedding use the replacement text         |
-| `created_at`                | successor's own                          | the successor is a new row                                |
-| `replaced_by` on the target | the successor's id                       | `insights show --history` reads the link                  |
+A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. Only its omitted category comes from the target. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
 
 ### Failure and retry
 
-Some errors cause the queued write to fail. Others allow it to be stored without complete enrichment or an embedding.
+| Failure                                                                                                                | Outcome                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Store cannot open; required configuration or embedding credentials are missing; fingerprint changes; transaction fails | Retry the queued write.                                                                                                      |
+| LLM request or a handled embedding HTTP/runtime error persists after client retries                                    | Save the memory with incomplete generated fields.                                                                            |
+| Neither enrichment response contains a JSON object                                                                     | Save an empty summary. With a saved vector, this counts as completed enrichment, so later drains do not bill the call again. |
 
-- **The row fails.** A store that fails to open, a missing LLM endpoint or model, a missing embedding credential, a changed fingerprint, or an insert error raises an exception. `mark_failed` records the error. The row then waits 60, 120, 240 and 480 seconds before successive retries. The fifth failed attempt sets `status='failed'`. The failed row stays in the queue, with its text, until `memman scheduler queue retry <id>` returns it to pending.
-- **The memory is stored without complete enrichment or an embedding.** An LLM or embedding call that still fails after the client's retries does not cause the row to fail. The memory is stored without `enriched_at`, and the re-enrichment pass retries it (next section). When neither reply carries a JSON object, enrichment ends for that memory. The memory gets an empty summary. If its vector was saved, it also gets `enriched_at`, so later drains do not repeat the enrichment call.
+Queue retries wait 60, 120, 240, and 480 seconds. After five failed attempts, the entry stays `failed` until an explicit retry ([queue commands](../USAGE.md#queue)).
+
+`enrich_attempted_at` records the attempt. `enriched_at` is set only when both enrichment and a vector were saved. A memory with an attempt but no completion is **stranded** and can be retried through maintenance or `enrich --stale-only`.
 
 ### Maintenance after each drain
 
-After processing rows, the drain runs maintenance. It skips the whole step when less than 30 seconds of its timeout remain.
+Maintenance runs when at least 30 seconds remain in the drain's timeout:
 
-1. Delete done queue rows older than 60 seconds.
-2. Delete `worker_runs` rows older than 7 days.
-3. Return every `stale` queue row to pending.
-4. For each store where the drain finished a row:
-   - Delete oplog rows older than 180 days.
-   - Re-enrichment pass: clear `enrich_attempted_at` on up to 3 memories that carry `enrich_attempted_at` but no `enriched_at` (`MAINTENANCE_REENRICH_MAX`), so `enrich_pending` picks them up.
-   - `enrich_pending`: enrich and embed up to 3 memories with no `enrich_attempted_at` (`MAINTENANCE_ENRICH_PENDING_MAX`).
-   - When `enrich_pending` had work, keep the newest 5,000 oplog rows (`MAX_OPLOG_ENTRIES`). On SQLite, also run one `incremental_vacuum` step.
+- Delete completed queue entries older than 60 seconds and drain history older than seven days.
+- Return stale queue entries to pending.
+- For each store where this drain completed an entry, trim operation logs older than 180 days (`OPLOG_RETENTION_DAYS`), make up to three stranded memories eligible for enrichment (`MAINTENANCE_REENRICH_MAX`), and enrich up to three pending memories (`MAINTENANCE_ENRICH_PENDING_MAX`).
+- When that enrichment pass has work, retain only the newest 5,000 operation-log entries (`MAX_OPLOG_ENTRIES`) and run one SQLite incremental-vacuum step.
 
-Then, regardless of the time remaining, the drain runs the daily model check ([3.3](#daily-model-check)).
+A store with no completed entry in the drain gets no store maintenance. Its stranded memories wait for a later write or an explicit [re-enrichment](../USAGE.md#re-enrichment).
 
-Maintenance reaches only the stores where the drain finished a row. An incomplete memory in any other store waits for that store's next write or for `memman enrich` ([USAGE](../USAGE.md#re-enrichment)).
+The daily model check runs afterward, regardless of remaining maintenance time.
 
----
+### Scheduler implementations
+
+| Host                      | Mechanism                         | Drain timeout in seconds                            |
+| ------------------------- | --------------------------------- | --------------------------------------------------- |
+| Linux                     | systemd user timer                | `max(60, interval - 20)`                            |
+| macOS                     | launchd agent                     | `max(60, interval - 20)`                            |
+| Other hosts or containers | Foreground `scheduler serve` loop | `max(10, interval - 10)`; 300 when interval is zero |
+
+The systemd/launchd interval is written into the installed unit. The serve loop takes `--interval`, then the installed `MEMMAN_INTERVAL`, then 60. It checks stopped state while waiting and exits when stopped. SIGTERM or SIGINT lets it finish the current memory before exiting successfully.
 
 ## 3.3 LLM calls
 
 ### LLM routing
 
-One client, `MemmanLLMClient`, makes every LLM call: enrichment in the drain and in `memman enrich`, and the connectivity probe in `memman doctor`. One model, `MEMMAN_LLM_MODEL`, serves every call. The client posts to `<MEMMAN_LLM_ENDPOINT>/chat/completions` in the OpenAI chat format. Switching vendors changes `MEMMAN_LLM_ENDPOINT`, `MEMMAN_LLM_API_KEY` and `MEMMAN_LLM_MODEL`, and no code. The default endpoint at installation is `https://openrouter.ai/api/v1`.
+`MemmanLLMClient` handles enrichment and the `doctor` connectivity probe. It posts to `<MEMMAN_LLM_ENDPOINT>/chat/completions` using `MEMMAN_LLM_MODEL` and `MEMMAN_LLM_API_KEY`.
 
-The client makes up to 3 attempts. After a 429, 500, 502, 503, 504 or 529 response, the client waits 1 second before the first retry and 2 seconds before the second. After an empty reply, the client waits 0.1 seconds before retrying. Each call asks for at most 4,096 output tokens and has a 60-second timeout.
+Each request allows up to 4,096 output tokens and has a 60-second timeout. The client makes up to three attempts. Retriable HTTP responses (429, 500, 502, 503, 504, 529) use one- and two-second waits; empty replies use a 0.1-second wait. The enrichment parser's extra request is separate from these transport retries.
 
-On an OpenRouter endpoint the client adds memman's attribution headers and a `provider` routing block built from three env file values:
+On OpenRouter, the client adds attribution headers and provider routing:
 
-| Variable                     | Install default                      | Sent as                                         |
-| ---------------------------- | ------------------------------------ | ----------------------------------------------- |
-| `MEMMAN_LLM_PROVIDER_ONLY`   | `amazon-bedrock,azure,google-vertex` | `only`, the vendors allowed to serve the call   |
-| `MEMMAN_LLM_DATA_COLLECTION` | `deny`                               | `data_collection`                               |
-| `MEMMAN_LLM_ZDR`             | `true`                               | `zdr: true`, zero-data-retention endpoints only |
+| Setting                      | Install default                      | Request field     |
+| ---------------------------- | ------------------------------------ | ----------------- |
+| `MEMMAN_LLM_PROVIDER_ONLY`   | `amazon-bedrock,azure,google-vertex` | `only`            |
+| `MEMMAN_LLM_DATA_COLLECTION` | `deny`                               | `data_collection` |
+| `MEMMAN_LLM_ZDR`             | `true`                               | `zdr`             |
 
-The call fails if no vendor meets the configured routing requirements. An empty `MEMMAN_LLM_PROVIDER_ONLY` sends no `only` list. Any other endpoint receives neither the headers nor the routing block.
+No eligible provider means the request fails. An empty provider list removes the `only` restriction. Other endpoints receive neither OpenRouter headers nor routing fields.
 
-On an OpenRouter endpoint, installation sets the model `qwen/qwen3-235b-a22b-2507` from `INSTALL_DEFAULTS`. Other endpoints have no default model, because the shipped id is an OpenRouter id that another endpoint rejects. The install wizard asks for the model id. A noninteractive installation fails if `MEMMAN_LLM_MODEL` is missing. `memman config set MEMMAN_LLM_MODEL <id>` changes the model. memman never changes it on its own.
+The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints require an explicit model ID, because the shipped id is an OpenRouter id that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
 
 ### Daily model check
 
-On an OpenRouter endpoint, `llm/openrouter_models.py` checks the configured model against two public catalogs. It sends no API key and makes no LLM call.
+For OpenRouter, installation and the worker check public catalogs without an API key or an LLM request:
 
-- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id on a vendor in `MEMMAN_LLM_PROVIDER_ONLY`. The vendor is the endpoint tag before its first `/`. An empty provider list allows every vendor.
-- `/models` must carry no `expiration_date` for the model.
+- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id on a vendor in `MEMMAN_LLM_PROVIDER_ONLY`. The vendor is the endpoint tag before its first `/`, and an empty provider list allows every vendor.
+- `/models` must not list an expiration date for it.
 
-`memman install` runs the check at once and prints the result under `[model]`. If a catalog cannot be read, installation prints an error and continues. Each drain runs the check unless `model.state` records a check of the configured model less than 24 hours old (`CHECK_INTERVAL_SECONDS = 86_400`). It writes `{model, checked_at, notice}` to `<data dir>/model.state`. A failed fetch keeps the existing notice and restarts the 24-hour clock. `memman prime` prints the recorded notice if it refers to the configured model. The LLM client never reads a catalog: it sends the configured id through unchanged.
+The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). A model change therefore triggers a check on the next drain. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.
 
-If the configured model becomes unavailable, memories are still stored. The enrichment call fails, so the write is stored without a summary, and the re-enrichment pass enriches it once a working model is set.
+The check never selects a replacement model. If enrichment requests fail, memories are still stored, without summaries, and re-enrichment fills them in once a working model is set.
 
-### Per-stage token accounting
+### Token accounting
 
-Each `complete` call names its stage: `enrichment` or `probe`. An unknown stage raises an exception. The client records the provider's `usage` block once per attempt, inside the retry loop, because every HTTP 200 attempt is billed, even an empty one.
+LLM calls identify their stage as `enrichment` or `probe`. Usage is counted for each attempt, including an HTTP 200 response that is empty and subsequently retried. Missing usage blocks and HTTP errors have separate counters; tokens reported in an error response still count.
 
-- A non-2xx attempt counts under `http_errors`, never under `calls` or `missing_usage`. A `usage` block in its error body still adds its tokens.
-- An HTTP 200 reply with no `usage` block counts under `missing_usage` and adds no tokens.
-- The tally is process-wide. The drain records the current tally before processing each row. Each `queue_done` and `queue_failed` trace event carries that row's usage. The drain's JSON output (`llm_usage`) and its `llm_usage_summary` trace event carry the drain total.
-
----
+The drain reports totals in `llm_usage`. Debug events include per-entry usage in `queue_done` and `queue_failed`, plus a drain-level `llm_usage_summary`.
 
 ## 3.4 Read pipeline: recall
 
-![Recall Pipeline](../diagrams/05-recall-pipeline.drawio.png)
+![Keyword, vector, and recency retrieval followed by reranking](../diagrams/05-recall-pipeline.drawio.png)
 
-### Output
+Recall considers current memories only. The [command reference](../USAGE.md#recall) describes its output, filters, and limits.
 
-`memman recall "<query>"` prints one line per memory, best first:
+### Basic matching
 
-```
-<id8> <score> <created_at> <author> <category> | <text>
-```
+`--basic` bypasses scoring. Every whitespace-separated query word must appear as a substring of the content. Matching is case-insensitive, limited to ASCII case folding on SQLite. Results are newest first.
 
-- `id8` is the first 8 characters of the id. Every command that takes an id accepts an unambiguous prefix.
-- `score` has two decimals. Compare scores only within the same result page.
-- `author` is `-` when unset. Whitespace inside it becomes `_`.
-- `text` is the summary, or else the first 200 characters of content, with `...` marking shortened text. Line breaks become spaces, so each memory takes one line.
+This path skips query embedding and reranking, but normal store-opening checks still run, so it can still need a key and a network call.
 
-An empty page prints nothing and exits 0. `--limit` defaults to 20. Recall writes one oplog row and nothing else, and it works while the scheduler is stopped.
+### Candidate selection
 
-### `--basic`
+Scored recall embeds the query with the store's bound model. If embedding fails, it logs a warning and proceeds with keyword and recency retrieval.
 
-`--basic` returns before the steps below and computes no score. Each whitespace-separated query word must appear as a substring of the content. The match ignores letter case (ASCII letters only on SQLite). Rows sort newest first. The line omits `score`.
+| Channel | Ranking                                       | Candidate count          |
+| ------- | --------------------------------------------- | ------------------------ |
+| Keyword | Number of distinct query terms in the content | `ANCHOR_TOP_K` = 30      |
+| Vector  | Positive cosine similarity                    | `RERANK_SHORTLIST` = 100 |
+| Recency | Creation time, newest first                   | `ANCHOR_TOP_K` = 30      |
 
-`--limit` still applies. `--basic` passes the limit straight to SQL `limit`, so `--basic --limit 0` returns nothing. The scored path treats `--limit 0` as no limit.
+The union of these lists forms the candidate set, with no further cap. The vector channel takes 100 so the reranker sees a full shortlist of the query's nearest memories.
 
-### Step 1: combine keyword, vector, and recency rankings
+Keyword tokenization lowercases text, splits outside `[a-zA-Z0-9]`, and removes stopwords. SQLite uses an FTS5 probe per term; Postgres counts intersections with `kw_tokens`. Non-ASCII text can yield different counts because FTS5 tokenizes it differently.
 
-The store's embedding model embeds the query once ([chapter 4](04-lifecycle.md)). When the embedding call fails, recall logs a warning and runs the keyword and recency channels only.
+SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails if an absolute floor returns.
 
-| Channel | Ranks by                                                    | Takes                |
-| ------- | ----------------------------------------------------------- | -------------------- |
-| Keyword | distinct query words the memory holds                       | `anchor_k`           |
-| Vector  | cosine similarity to the query vector, positive values only | `max(100, anchor_k)` |
-| Recency | `created_at`, newest first                                  | `anchor_k`           |
+### Combined scoring
 
-- `anchor_k` is `ANCHOR_TOP_K = 30`.
-- The vector channel takes at least `RERANK_SHORTLIST = 100` rows, so the reranker can see a full shortlist of the query's nearest memories.
+Reciprocal Rank Fusion (RRF) gives a candidate one contribution per channel that found it:
 
-**Keyword search.** memman lowercases the query, splits it on every character outside `[a-zA-Z0-9]`, and drops stopwords. The count covers the memory's content. The store counts the matches, so recall never tokenizes every row per query.
-
-- SQLite runs one FTS5 probe per query word.
-- Postgres stores each memory's word set in `insights.kw_tokens` at write time and counts with one GIN-indexed array intersection.
-- A word with a letter outside ASCII splits differently in FTS5 than in memman's tokenizer, so SQLite counts can differ from Postgres counts on such text.
-
-**Vector search.** SQLite scores every stored vector in one matrix product. Postgres queries its pgvector HNSW index. The channel keeps positive cosines only. A memory at zero or negative cosine is not a vector candidate, so a store with fewer positive rows than the channel size returns fewer rows. There is no additional cosine threshold. Positive values provide a common threshold across models, while the meaning of a specific score varies by model.
-
-**Fusion.** Reciprocal Rank Fusion (RRF) sums one term for each channel that ranks a memory:
-
-```
-rrf = Σ 1 / (k + r)    over the channels that rank the memory
-      k = 60 (RRF_K), r = the memory's 1-based rank in that channel
+```text
+rrf = sum(1 / (RRF_K + rank))    # RRF_K = 60, ranks start at 1
 ```
 
-`RRF_K = 60` is the standard RRF constant. A channel adds at most 1/61 to a memory's score, so no single channel decides the fused order. All combined results become candidates for reranking.
+The fused score is normalized across the candidate set and combined with keyword overlap and cosine similarity:
 
-### Step 2: calculate a combined score
-
-Each candidate gets three scores and one weighted sum:
-
-```
-keyword    = (distinct query words the memory holds) / (distinct query words)
-similarity = cosine(query vector, memory vector), 0 when not positive or missing
-anchor     = (rrf - min rrf) / (max rrf - min rrf), over this query's candidates
-
-score = w_kw * keyword + w_sim * similarity + w_anchor * anchor
+```text
+keyword = matched distinct query terms / distinct query terms
+anchor  = (rrf - minimum rrf) / (maximum rrf - minimum rrf)
+score   = (0.25 * keyword + 0.45 * similarity + 0.15 * anchor) / 0.85
 ```
 
-The weights come from `_RERANK_WEIGHTS_RAW = (0.25, 0.45, 0.15)` divided by their sum, 0.85, so they sum to 1:
+The raw weights are `_RERANK_WEIGHTS_RAW`, divided by their sum so the used weights sum to 1.
 
-| Term         | Raw weight | Weight used |
-| ------------ | ---------- | ----------- |
-| `keyword`    | 0.25       | 0.294       |
-| `similarity` | 0.45       | 0.529       |
-| `anchor`     | 0.15       | 0.176       |
+With no query terms, the keyword term is zero. With equal RRF scores, the anchor term is zero. Missing vectors and nonpositive cosines contribute zero similarity. Candidates sort by the combined score.
 
-The `anchor` term is the only one that carries the recency channel into the score, so a recent memory with no keyword or vector match can still rank. Candidates sort by score.
+Recency contributes only through the anchor term, so a recent memory can appear without a keyword or vector match. The agent judges each row's relevance.
 
-### Step 3: rerank with a cross-encoder
+### Reranking and limits
 
-A cross-encoder reads the query and one memory's text together and scores their relevance directly. Cosine similarity compares two independently computed vectors. The cross-encoder catches a match that cosine and word overlap miss.
+A cross-encoder reads the query and one memory together and scores their relevance directly, so it catches matches that cosine and word overlap miss. Voyage reranking runs when enabled, the query has more than two whitespace-separated words (`MIN_RERANK_TOKENS`), and at least two candidates exist. It scores the query against the original content of the top 100 candidates (`RERANK_SHORTLIST`), then replaces their scores and order. A failed request, including a missing key, preserves the combined ranking and logs a warning.
 
-Reranking is on by default. It runs when all three conditions hold:
+The default model is `rerank-3-lite`. `MEMMAN_RERANK_ENABLED_<store>` overrides the global `MEMMAN_RERANK_ENABLED` setting. Reranking always uses `MEMMAN_VOYAGE_API_KEY`, whatever the embedding provider. Recall has no rerank flag, so the agent never makes this choice.
 
-- Reranking is on for the store: `MEMMAN_RERANK_ENABLED_<store>` when set, otherwise `MEMMAN_RERANK_ENABLED` (install default `true`).
-- The query has more than 2 whitespace-separated words (`MIN_RERANK_TOKENS = 2`).
-- At least 2 candidates exist.
+Reranking changes what the blend weights decide:
 
-Recall sends the query and the content of the top `min(100, candidates)` (`RERANK_SHORTLIST`) to the Voyage reranker. It uses the model `MEMMAN_VOYAGE_RERANK_MODEL` (default `rerank-3-lite`) and the key `MEMMAN_VOYAGE_API_KEY`. The rerank score replaces the blended score on the shortlist, and the shortlist reorders by it. Any failure, including a missing key, logs a WARNING and preserves the Step 2 order.
+- With 100 or fewer candidates, the reranker rescores all of them, and the weights have no effect on the final order.
+- With more than 100, the weights decide which candidates reach the reranker.
 
-`memman config set MEMMAN_RERANK_ENABLED_<store> false` turns rerank off for one store. Recall has no rerank flag, so the agent never makes this choice.
-
-Reranking changes how the Step 2 weights affect the results:
-
-- With 100 or fewer candidates, rerank rescores all of them, and the weights have no effect on the final order.
-- With more than 100, the weights decide which candidates reach the reranker. The first 100 results then use reranker scores, and the remaining results keep their combined scores. The default limit excludes those remaining results. `--limit 0` or a limit over 100 returns both groups. Compare scores only within the same group.
-
-### Order and limit
-
-A positive `--limit` is applied last, with no further sorting. Increasing the limit preserves the order of the existing results. Results stay in relevance order because sorting them by date could suggest a timeline. Each line includes `created_at` for readers who need dates.
+A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place, and relevance order stays because a date sort would make the results read as a timeline. Each line prints `created_at` for a reader who needs dates. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
 
 ### Recall trace events
 
-With tracing on (`MEMMAN_DEBUG=1`, or `memman scheduler debug on`), recall emits two events:
+With tracing enabled, `recall_anchors` reports each channel's hits and the candidate union; `recall_rerank` reports shortlist size and changed positions. These events help distinguish poor candidate selection from an ineffective rerank.
 
-- `recall_anchors`: `anchor_k`, `vector_k`, each channel's hit count (`keyword_hits`, `vector_hits`, `time_hits`), the number of combined candidates (`fused_pool`), and the candidate count per `via` label (`via_counts`). `vector_hits` below `vector_k` means the store held fewer positive-cosine rows than the channel asked for, or the query had no vector and the channel ran empty.
-- `recall_rerank`: the shortlist size and `moved`, the number of shortlist positions whose memory changed. The count compares ids, because the reranker replaces every score.
-
-Only the drain and `memman scheduler serve` attach the trace file handler (`~/.memman/logs/debug.log`). A `memman recall` process does not, so its events are not written to a file.
-
----
+Only the drain and serve loop attach the trace file handler. A standalone recall process does not write these events to `~/.memman/logs/debug.log`.
 
 ## 3.5 Handling model changes
 
-Prompts, models and providers change. memman does not aim for identical output across versions. It records what produced each memory and re-runs the work when an input changes.
+Prompts, models, and providers change. memman does not aim for identical output across versions. It records the inputs behind each summary and vector, so an operator can rebuild only the affected fields. It applies no fixed similarity cutoff, which would tie the code to one model's behavior.
 
-1. **Process writes in the background.** The write path defers LLM work to the drain (Step 2 in [3.2](#32-write-pipeline-remember)). Recall calls only the embedding model and the reranker.
-2. **Record how outputs were produced.** Each model output records its origin so a command can repeat the work when the model or prompt changes. memman does not compare outputs from multiple models or apply a fixed similarity cutoff. A fixed cutoff would tie the code to one model's behavior.
+| Record                                      | Detects                                 | Check or recovery                                           |
+| ------------------------------------------- | --------------------------------------- | ----------------------------------------------------------- |
+| `prompt_version`                            | Changed enrichment prompt or LLM model  | `provenance_drift`; `enrich --stale-only`                   |
+| `enrich_attempted_at` without `enriched_at` | Incomplete enrichment or missing vector | `enrichment_coverage`; maintenance or `enrich --stale-only` |
+| `embed_fingerprint`                         | Store's bound embedding model           | `embed status`; model swap or re-embed                      |
+| `embedding_model`                           | Model recorded for a memory's vector    | `embed reembed` checks model and vector width               |
+| `embed_swap_*`                              | Unfinished model swap                   | `no_stale_swap_meta`; resume or abort                       |
 
-### Records used to detect changes
-
-| Record                                                         | Stored at | Detects                               | Operator action                                                  |
-| -------------------------------------------------------------- | --------- | ------------------------------------- | ---------------------------------------------------------------- |
-| `embed_fingerprint`                                            | `meta`    | the store's embedding model           | `memman embed swap` or `memman embed reembed` (chapter 4)        |
-| `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_*` | `meta`    | a swap in progress                    | cutover or `--abort` deletes them. Doctor warns if keys remain   |
-| `embedding_model`                                              | per row   | the model behind the row's vector     | `memman embed reembed` re-embeds rows that differ                |
-| `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman enrich --stale-only`                       |
-| `enrich_attempted_at`, `enriched_at`                           | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich --stale-only` |
-
-- The doctor check for leftover swap keys is `no_stale_swap_meta`. The check for a changed prompt version is `provenance_drift`. The check for a stranded row, one attempted and never enriched, is `enrichment_coverage`.
-- A null `prompt_version` on an enriched row is not treated as outdated.
-
-A per-row marker shows the scope of a change. `provenance_drift` reports how many memories each prompt version produced, so a rebuild can target only rows with outdated versions.
+An enriched memory with a null `prompt_version` counts as current. A change to the summary-length filter alone leaves the prompt hash unchanged. [Chapter 4](04-lifecycle.md) covers embedding model changes, and [re-enrichment](../USAGE.md#re-enrichment) covers the commands.

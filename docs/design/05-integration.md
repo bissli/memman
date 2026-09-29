@@ -1,110 +1,90 @@
-# 5. Claude Code Integration
+# 5. Claude Code integration
 
-[< Back to Design Overview](../DESIGN.md)
+[Previous: lifecycle and embedding](04-lifecycle.md) | [Design overview](../DESIGN.md)
 
----
-
-![Claude Code Integration](../diagrams/06-integration.drawio.png)
-
-memman includes three parts for Claude Code integration: lifecycle hooks, a skill and a guide. `memman install` installs the hooks and the skill and registers each hook with Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks). The hooks never write a memory. The agent runs every memory command itself.
+memman supplies hooks, a short session guide, and a skill manual. Together they tell the agent when and how to use memory. The agent runs every memory command itself; hooks provide instructions and reminders.
 
 ## 5.1 Integration architecture
 
-The integration runs at these points in a session:
+| Part  | Role                                                                           | Location                                      |
+| ----- | ------------------------------------------------------------------------------ | --------------------------------------------- |
+| Hooks | Respond to session events and supply memory reminders.                         | `~/.claude/hooks/memman/`                     |
+| Guide | Introduce recall, remember, and replace at session start.                      | Package `guide.md`, printed by `memman prime` |
+| Skill | Explain memory selection, queries, corrections, and command details on demand. | `~/.claude/skills/memman/SKILL.md`            |
 
-1. **Session start.** `prime.sh` (SessionStart) runs `memman prime`, which prints a status line and the guide.
-2. **Every user message.** `user_prompt.sh` (UserPromptSubmit) reminds the agent to recall.
-3. **On demand.** Claude Code lists the memman skill by its description and loads `SKILL.md` when the agent invokes it.
-4. **Before sub-agent delegation.** `task_recall.sh` (PreToolUse on Agent or Task) reminds the agent to recall before the next delegation.
-5. **Before leaving plan mode.** `exit_plan.sh` (PreToolUse on ExitPlanMode) reminds the agent to store the decisions made during planning.
-6. **After compaction.** `compact.sh` (PreCompact) writes a flag file. The SessionStart that follows compaction adds a recall reminder.
+![Hooks and instructions in a Claude Code session](../diagrams/06-integration.drawio.png)
 
-Each part has a separate role:
+The guide stays short for two reasons:
 
-| Layer     | What                                                   | Where                                            | Role                                                          |
-| --------- | ------------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------- |
-| **Hooks** | Five shell scripts run on Claude Code events           | `~/.claude/hooks/memman/`                        | Print the guide and remind the agent to recall and to store   |
-| **Skill** | `SKILL.md`, the full manual                            | `~/.claude/skills/memman/`                       | When to recall, what to remember, how to use each command     |
-| **Guide** | `guide.md`, the recall, remember, and replace commands | The installed package, printed by `memman prime` | Shows the three commands in every session and names the skill |
+- **Silent truncation.** Claude Code cuts hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error, so the agent acts on an instruction cut mid-sentence.
+- **Cost.** Every injected byte bills on every later request in the session.
 
-**Why the guide stays small.** Claude Code truncates hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error. The injected text also adds to the cost of every later request in the session. The guide contains only what each session needs. The skill provides details when loaded on demand. `tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output reaches 10,000 bytes or loses any of the recall, remember, or replace commands.
+`tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output on a fresh data directory reaches 10,000 bytes or loses the recall, remember, or replace command. The model notice and the compaction line add to that payload in a live session. The skill carries the depth and loads on demand.
 
 ## 5.2 Hook details
 
-| Hook        | Event                     | Matcher           | Script                    | Output                   | Role                                                  |
-| ----------- | ------------------------- | ----------------- | ------------------------- | ------------------------ | ----------------------------------------------------- |
-| `prime`     | SessionStart              | none              | `prime.sh`                | Plain text               | Status line, model notice, compaction reminder, guide |
-| `remind`    | UserPromptSubmit          | none              | `user_prompt.sh`          | Plain text               | Recall reminder                                       |
-| `compact`   | PreCompact + SessionStart | none              | `compact.sh` + `prime.sh` | Flag file                | Recall reminder after compaction                      |
-| `recall`    | PreToolUse                | `Agent` or `Task` | `task_recall.sh`          | `additionalContext` JSON | Recall reminder before delegation                     |
-| `exit_plan` | PreToolUse                | `ExitPlanMode`    | `exit_plan.sh`            | `additionalContext` JSON | Reminder to store conclusions before execution        |
+| Script           | Event              | Matcher           | Effect                                                                                     |
+| ---------------- | ------------------ | ----------------- | ------------------------------------------------------------------------------------------ |
+| `prime.sh`       | `SessionStart`     | Any               | Print status, any model notice, a post-compaction reminder when applicable, and the guide. |
+| `user_prompt.sh` | `UserPromptSubmit` | Any               | Remind the agent to recall before answering.                                               |
+| `task_recall.sh` | `PreToolUse`       | `Agent` or `Task` | Remind the agent to recall before its next delegation.                                     |
+| `exit_plan.sh`   | `PreToolUse`       | `ExitPlanMode`    | Remind the agent to save planning conclusions.                                             |
+| `compact.sh`     | `PreCompact`       | Any               | Record the compaction trigger for the next session-start reminder.                         |
 
-The Hook column gives the label `memman install` prints. Claude Code passes plain hook stdout to the agent only on SessionStart and UserPromptSubmit, so the two PreToolUse hooks print `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "..."}}` instead.
+Claude Code passes plain hook stdout to the agent only on `SessionStart` and `UserPromptSubmit`, so those two hooks print text. The two pre-tool hooks put their reminder in `hookSpecificOutput.additionalContext`, with `hookEventName: PreToolUse`, because plain stdout on that event never reaches the agent.
 
-The reminder each hook delivers:
+The reminders:
 
 - `user_prompt.sh`: `[memman] Recall: memman recall "<focused query>"`
-- `task_recall.sh`: `[memman] Before the next delegation, run memman recall "<focused query>" and carry anything relevant into its brief.` PreToolUse fires after the agent has written the brief, so the reminder applies to the next delegation.
+- `task_recall.sh`: `[memman] Before the next delegation, run memman recall "<focused query>" and carry anything relevant into its brief.`
 - `exit_plan.sh`: `[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ..., or memman replace <id> ... to correct a stored row) before proceeding.`
 
-**Prime hook.** `prime.sh` pipes the SessionStart JSON to the hidden command `memman prime`. When `memman` is not on PATH, it prints a warning that the hooks are inactive. `memman prime` prints, in order:
+The delegation reminder concerns the **next** delegation because the current tool call's brief has already been written when the hook runs.
 
-1. The status line, `[memman] Memory active (N insights).`, where N counts the current memories in the active store. When the store does not exist yet, or the count fails, the line is `[memman] Memory active.`
-2. One `[memman]` model notice if the daily model check reports a problem with the configured model ([chapter 3](03-pipelines.md#daily-model-check)).
-3. The compaction reminder when the session follows compaction.
-4. The guide.
+### Session start
 
-**Compact hook: passing a reminder through compaction.** Claude Code does not pass PreCompact stdout to the agent, so the reminder goes out on the SessionStart that follows:
+`prime.sh` passes the session event to the hidden `memman prime` command. If the binary is missing from `PATH`, the script prints a warning. Otherwise, prime prints:
 
-1. `compact.sh` fires at PreCompact and writes the trigger and a UTC timestamp to `~/.memman/compact/<session_id>.json`.
-2. After compaction, Claude Code fires SessionStart with `source` set to `compact`.
-3. `memman prime` sees that source, reads the trigger from the flag file (default `auto`), and prints the recall reminder.
+1. The status line `[memman] Memory active (N insights).`, where N counts the current memories in the active store. Without a store or a count, the line is `[memman] Memory active.`
+2. Any recorded [model notice](03-pipelines.md#daily-model-check) for the configured model.
+3. A recall reminder if the session started after compaction.
+4. The guide from the installed package.
 
-`memman prime` checks only `source`. The flag file supplies only the trigger, so the reminder appears even when `compact.sh` did not run. The flag directory is always `~/.memman/compact/`, regardless of `MEMMAN_DATA_DIR`.
+### Compaction
 
-```bash
-# compact.sh (PreCompact) - writes the flag file
-cat > "${COMPACT_DIR}/${SESSION_ID}.json" <<FLAGEOF
-{"trigger":"${TRIGGER:-auto}","ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
-FLAGEOF
-```
+Claude Code drops `PreCompact` stdout, so the reminder rides on the session-start event that follows. `compact.sh` records the trigger and UTC timestamp in `~/.memman/compact/<session_id>.json`. When the next session-start event has `source: compact`, prime prints a recall reminder with that trigger, defaulting to `auto`:
 
-```
-# memman prime output after compaction
+```text
 [memman] Context was just compacted (auto). Recall critical context now: memman recall "<topic>"
 ```
 
+The event source determines whether the reminder appears; it still appears if the flag file is missing. The flag directory remains under `~/.memman`, regardless of `MEMMAN_DATA_DIR`.
+
 ## 5.3 Automated setup
 
-`memman install` writes into `~/.claude/` when it detects Claude Code (a `claude` binary on PATH or an existing `~/.claude/`), or when `--claude-code` is passed. Otherwise it installs the scheduler only. Installation creates the following links and settings:
+`memman install` detects Claude Code through a `claude` binary on `PATH` or an existing `~/.claude` directory. `--claude-code` forces integration installation. Without detection or the flag, installation sets up only the scheduler.
 
-| Target                              | What install writes                                                                      |
-| ----------------------------------- | ---------------------------------------------------------------------------------------- |
-| `skills/memman/SKILL.md`            | Symlink to `memman/setup/assets/claude/SKILL.md` in the installed package                |
-| `hooks/memman/<script>.sh`          | One symlink per hook script into the same package directory                              |
-| `settings.json` `hooks`             | One entry per script, with the events and matchers above                                 |
-| `settings.json` `permissions.allow` | One `Bash(memman <verb>:*)` entry for each of 8 commands the agent runs without a prompt |
-| `guide.md`                          | Nothing. `memman prime` reads it from the package on every SessionStart                  |
+| Target                                             | Installed content                      |
+| -------------------------------------------------- | -------------------------------------- |
+| `~/.claude/skills/memman/SKILL.md`                 | Symlink to the packaged skill.         |
+| `~/.claude/hooks/memman/*.sh`                      | Symlinks to the five packaged scripts. |
+| `~/.claude/settings.json`, key `hooks`             | Event registrations and matchers.      |
+| `~/.claude/settings.json`, key `permissions.allow` | Eight `Bash(memman <verb>:*)` entries. |
 
-- Install first removes every hook entry that mentions `memman`, so a second run leaves one set. Other hooks stay as they are.
-- The 8 permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, and `status`. In a terminal, install lists the entries and asks first. With `--no-wizard` or without a terminal, it adds them without asking.
+The permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, and `status`. In an interactive installation, memman lists the entries and asks before adding them. With `--no-wizard` or no terminal, it adds them without a prompt.
 
-**Upgrades.** `pipx upgrade memman` refreshes the hook scripts and `SKILL.md` through the symlinks, and `memman prime` reads the new `guide.md`. A change confined to those assets needs no reinstall. A change to a hook registration or the permission list does: only `memman install` rewrites `settings.json`. The `claude_hooks` check in `memman doctor` warns when the registrations differ from what install writes, and fails when a registered script is missing.
+Installation replaces existing hook entries mentioning memman and preserves other hooks. Re-running it leaves one set of registrations. The guide needs no symlink because prime reads it from the package. Installation never moves an existing SQLite store to a newly chosen Postgres backend. `memman migrate` moves a store.
 
-**Wizard.** In a terminal, install runs a wizard that asks for the LLM endpoint, the embedding provider and its key, the LLM key, a model slug on an endpoint other than OpenRouter, the backend, and a Postgres DSN when needed. The [USAGE guide](../USAGE.md#install-wizard) lists each step.
+### Upgrades and removal
 
-**Existing SQLite stores.** Install does not move existing SQLite stores to a newly chosen Postgres backend. `memman migrate` moves a store ([USAGE guide](../USAGE.md#migrating-between-sqlite-and-postgres)).
+Package upgrades refresh the scripts, skill, and guide. Registration changes, scheduler-unit changes, and new installed defaults require another `memman install`. `doctor` checks hook registrations and missing scripts.
 
-**Configure after install.** Install refuses a flag that conflicts with an env-file value and prints the `memman config set` command that changes it.
+`memman uninstall` removes integration and scheduler setup while retaining stores, queue, and logs. The [usage guide](../USAGE.md#install-and-uninstall) owns the full installation flags, wizard steps, and settings-removal details.
 
-**Uninstall.** `memman uninstall` strips the secret keys (`MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`) and keeps the other settings, so a later install reuses them. It leaves the stores, queue and logs under `~/.memman/` in place. `pipx uninstall memman` removes the binary.
+## 5.4 Direct memory commands
 
-The [USAGE guide](../USAGE.md#install-and-uninstall) gives the full flag list.
+The packaged skill instructs the agent to run `remember` directly through Bash during its own turn. Submission validates and queues the memory, then reads related memories without calling a model. The agent already has the context needed to write a self-contained claim and decide whether a related memory needs correction.
 
-## 5.4 Running memory commands directly through Bash
+The worker handles summary generation and embedding later. Delegating submission would add another handoff without moving that background work out of the turn.
 
-`SKILL.md` requires the agent to run `memman remember` directly through Bash in its own turn without delegating to a sub-agent. There are three reasons:
-
-- **The command queues a write and reads the store once.** It checks the text, appends one row to `queue.db`, reads the store for `related`, and returns. It calls no model. Enrichment and embedding run later in the background worker, so there is no slow work to delegate.
-- **The agent holds the context.** It already knows the right `--cat`, and what each "this" or "it" refers to. Passing that context to a sub-agent would use more tokens.
-- **A sub-agent learns nothing more, and `related` needs the agent.** `remember` returns `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related` (or `related_error` when the store read fails) once the write is queued. The memory reaches recall after the next drain. Acting on `related` in the same turn takes the context the agent holds, which a sub-agent lacks.
+The guide and skill are package assets, so a customization edits the package source. An editable installation uses those edits at once. A change to a hook registration still requires `memman install`.

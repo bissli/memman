@@ -1,141 +1,119 @@
-# 4. Lifecycle & Embedding
+# 4. Lifecycle and embedding
 
-[< Back to Design Overview](../DESIGN.md)
-
----
-
-No memory expires. A memory stays in recall until a `forget` or `replace` call takes it out.
+[Previous: pipelines](03-pipelines.md) | [Design overview](../DESIGN.md) | [Next: Claude Code integration](05-integration.md)
 
 ## 4.1 Retention
 
-A store has no size cap and no retention score. Deletion is always an operator or agent action. Two calls take a memory out of recall:
+Memories have no expiry date or automatic size cap. A memory stays current until an agent or operator replaces or forgets it.
 
-| Call                           | Effect                                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `memman forget <id>`           | Soft delete: sets `deleted_at`. The row stays in the table, and no command restores it.              |
-| `memman replace <id> "<text>"` | Queues a successor. The drain stores it and sets the target's `replaced_by` to the successor's id.   |
+| Action                  | Stored change                                                                  | Effect on recall                               |
+| ----------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `replace <id> "<text>"` | Create a successor and set the target's `replaced_by` when the worker commits. | Return the successor; exclude the old version. |
+| `forget <id>`           | Set `deleted_at`; keep the row.                                                | Exclude the forgotten memory.                  |
+| `store remove <name>`   | Delete the store and its queued writes.                                        | Remove the entire collection.                  |
 
-A replaced memory keeps its content but leaves every recall and listing. Nothing returns a replaced memory to recall. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` still shows the earlier text. `forget` refuses a current memory that replaced one not yet forgotten, and the error names `replace`. `forget` and `replace` are writes, so neither can run while the scheduler is stopped.
+No command undoes a forget or makes a replaced row current again. A wrong correction is fixed by replacing its successor. `insights show <id> --history` displays the chain; forgotten entries omit their content.
 
-**Rationale.**
+`forget` refuses a current memory whose predecessor has not been forgotten. The error directs the caller to `replace` so the correction history remains intact. Both commands require a started scheduler.
 
-- **No size cap.** A store becomes more useful as it accumulates memories. A cap would force memman to delete true claims to make room.
-- **Replacement keeps content.** `replace` never deletes. The old row keeps its text and records its successor in `replaced_by`. `memman insights show <id> --history` shows the chain of replacements.
-- **The oplog is bounded.** The oplog records changes to memories. After each drain, memman deletes oplog rows older than 180 days (`OPLOG_RETENTION_DAYS`) in every store where the drain finished a row. The 5,000-row cap (`MAX_OPLOG_ENTRIES`) runs only when that store still has a current memory without `enrich_attempted_at`.
+The operation log has its own retention rules. Maintenance trims entries older than 180 days (`OPLOG_RETENTION_DAYS`) in stores where a drain completed work. A 5,000-entry cap (`MAX_OPLOG_ENTRIES`) applies when the enrichment pass that follows has work. Neither limit touches a stored memory ([drain maintenance](03-pipelines.md#maintenance-after-each-drain)).
 
 ## 4.2 Inspecting memories
 
-The `memman insights` commands inspect memories.
+| Command                        | Purpose                                                             |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `insights show <id>`           | Inspect a current or replaced memory in full.                       |
+| `insights show <id> --history` | Inspect its replacement chain, including forgotten entries.         |
+| `insights review`              | Find current memories containing potentially temporary information. |
 
-`insights review` scans current memories, newest first, for the temporary information flagged by `quality_warnings`, including an AWS instance id, a resource count, a line count, a state observation ("state is clean"), the word "currently" and an "as of <date>" statement. It stops at `--limit` flagged memories (default 20) and returns each with its `quality_warnings`. The user or agent decides what to forget. `remember` and `replace` run the same scan at write time and store the text anyway, so `review` finds temporary information that was stored. Both commands reject text that names a line number.
+Review uses the same pattern checks as write-time `quality_warnings`: instance IDs, counts, the word `currently`, dated observations, and similar wording. Warnings leave the decision to the agent or operator. The separate CLI validation rules reject line references and other invalid input before queueing.
 
-The [USAGE guide](../USAGE.md#insights) lists the output of each command.
-
----
+[Inspection commands](../USAGE.md#insights) lists the limits and output.
 
 ## 4.3 Embedding support
 
-Recall uses embeddings for vector search. Each store is bound to one embedding model. The store's `meta.embed_fingerprint` row holds that model as JSON: provider, model and vector dimension. This record is the store's **fingerprint**. A store changes model only through an explicit `memman embed swap` or `memman embed reembed` ([4.3.5](#435-changing-the-embedding-model)).
+An embedding is a numeric representation of memory content used for semantic search. Vectors from different models cannot be treated as interchangeable, even when their dimensions match.
 
-**Model selection.** The fingerprint determines the embedding client for every reader and writer of the store: the background worker, recall, and `enrich`. Each resolves the client through `bound_embedder`, which reads the fingerprint and builds the client for that provider and model. One process can open stores that use different providers. The [USAGE guide](../USAGE.md#embedding-operations) gives a worked example.
+Each store records an **embedding fingerprint** in `meta.embed_fingerprint`: provider, model, and vector dimension. Recall, the worker, and re-enrichment build their client from this fingerprint through `bound_embedder`, so stores in one process can use different embedding models.
 
-**What `MEMMAN_EMBED_PROVIDER` controls.**
+The global `MEMMAN_EMBED_PROVIDER` setting serves three purposes:
 
-| Role                | Effect                                                                                                                                                                                                               |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New stores          | When a store has no fingerprint and no rows, the first open writes this provider's fingerprint. `memman install` configures a new SQLite default store this way.                                                     |
-| Target              | It names the target of `memman embed reembed` and the default provider of `memman embed swap`.                                                                                                                       |
-| Startup requirement | Every command that reads a store first builds this provider's client. A missing Voyage or OpenRouter key causes the command to fail. `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` skip this step. |
+| Role                 | Effect                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| New store            | Supplies the fingerprint when an empty store is first initialized.                                                                    |
+| Model change         | Selects the target for `embed reembed` and the default provider for `embed swap`.                                                     |
+| Store-opening checks | Normal store sessions also construct this provider's client. Missing Voyage or OpenRouter keys can stop the command before retrieval. |
 
-**Missing credentials for the bound provider.** Recall logs a warning and ranks with the keyword and recency channels only. The background worker marks the queued write as failed after retries are exhausted.
+The diagnostic and maintenance paths for `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` bypass the normal fingerprint initialization check. The related-memory read in `remember` also avoids model clients.
 
-`memman embed status` reports the stored fingerprint, any swap in progress, and whether credentials for the fingerprint's provider are available. The `embed_fingerprint` check in `memman doctor` passes when the store has a fingerprint and its provider's key is present. It fails when the key is missing, and it fails on a store that holds memories but has no fingerprint.
+If the store-bound provider lacks credentials, recall falls back to keyword and recency ranking, and the worker fails queued writes that need those credentials. This fallback cannot rescue a command that already failed while building the global provider's client.
 
-### 4.3.1 Supported providers
+`embed status` reports the fingerprint, any swap in progress, and whether the fingerprint's provider has credentials. The `embed_fingerprint` check in `doctor` fails when that key is missing, and on a store that holds memories but has no fingerprint, which the drain refuses.
 
-| Provider     | Default model             | Key                                        | Offered by install |
-| ------------ | ------------------------- | ------------------------------------------ | ------------------ |
-| `voyage`     | `voyage-3-lite` (512-dim) | `MEMMAN_VOYAGE_API_KEY`                    | Yes (default)      |
-| `openai`     | `text-embedding-3-small`  | `MEMMAN_OPENAI_EMBED_API_KEY`              | Yes                |
-| `openrouter` | `baai/bge-m3`             | `MEMMAN_OPENROUTER_API_KEY`                | Yes                |
-| `ollama`     | `nomic-embed-text`        | None. Local server at `MEMMAN_OLLAMA_HOST` | No                 |
+### Supported providers
 
-- `openai` accepts any OpenAI-compatible endpoint through `MEMMAN_OPENAI_EMBED_ENDPOINT` (default `https://api.openai.com`).
-- `openrouter` reads `MEMMAN_OPENROUTER_ENDPOINT` (default `https://openrouter.ai/api/v1`). On an OpenRouter LLM endpoint, install copies `MEMMAN_OPENROUTER_API_KEY` into `MEMMAN_LLM_API_KEY` when the LLM key is unset, so one secret serves both.
-- `MEMMAN_OLLAMA_HOST` defaults to `http://localhost:11434`.
-- Each provider's model is a setting: `MEMMAN_VOYAGE_EMBED_MODEL`, `MEMMAN_OPENAI_EMBED_MODEL`, `MEMMAN_OPENROUTER_EMBED_MODEL`, `MEMMAN_OLLAMA_EMBED_MODEL`. For every model except the Voyage default, memman determines the vector dimension from an initial test embedding.
+These are the model defaults shipped with memman:
 
-### 4.3.2 Vector storage
+| Provider     | Default model            | Credential                    | Install wizard      |
+| ------------ | ------------------------ | ----------------------------- | ------------------- |
+| `voyage`     | `voyage-3-lite`          | `MEMMAN_VOYAGE_API_KEY`       | Yes                 |
+| `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` | Yes                 |
+| `openrouter` | `baai/bge-m3`            | `MEMMAN_OPENROUTER_API_KEY`   | Yes                 |
+| `ollama`     | `nomic-embed-text`       | None                          | Configure afterward |
 
-The store's backend decides the vector format:
+The Voyage default has a known dimension of 512. Other models take an initial embedding probe to learn their dimension. [Provider setup](../USAGE.md#provider-setup) lists endpoints and settings.
 
-| Backend  | Column                           | Format                                       | Search                                                    |
-| -------- | -------------------------------- | -------------------------------------------- | --------------------------------------------------------- |
-| SQLite   | `insights.embedding` BLOB        | Little-endian float64, 8 bytes per dimension | One matrix product over every vector of the query's width |
-| Postgres | `insights.embedding` `vector(N)` | pgvector, stored as float32                  | HNSW index on current rows, cosine distance               |
+### Vector storage
 
-HNSW (hierarchical navigable small world) is an index for approximate nearest-neighbor search. A fresh Postgres store sizes its `vector(N)` column using the dimension of the initial embedding client. On SQLite, a vector of another width scores 0 against the query.
+| Backend  | Representation                                        | Search                                                         |
+| -------- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| SQLite   | Little-endian float64 BLOB, eight bytes per dimension | Matrix product over vectors matching the query width.          |
+| Postgres | pgvector `vector(N)`, stored as float32               | HNSW approximate-nearest-neighbor index for vector candidates. |
 
-### 4.3.3 Embedding in the pipeline
+A new Postgres store sizes its vector column from the embedding client. On SQLite, a vector with a different width contributes zero similarity.
 
-| Step                      | Client                  | Text embedded      |
-| ------------------------- | ----------------------- | ------------------ |
-| Drain (remember, replace) | The store's fingerprint | Content alone      |
-| `memman enrich`           | The store's fingerprint | Content alone      |
-| Recall                    | The store's fingerprint | The query as given |
-| `memman embed swap`       | The target model        | Content alone      |
-| `memman embed reembed`    | `MEMMAN_EMBED_PROVIDER` | Content alone      |
+### Text sent for embedding
 
-The drain embeds each row once, after LLM enrichment. When the embedding call fails with an HTTP or provider error, the drain stores the row without a vector. Missing credentials cause the row to fail.
+| Operation          | Model selection          | Text                    |
+| ------------------ | ------------------------ | ----------------------- |
+| Drain and `enrich` | Store fingerprint        | Original memory content |
+| Recall             | Store fingerprint        | Query                   |
+| `embed swap`       | Explicit target          | Original memory content |
+| `embed reembed`    | Global provider settings | Original memory content |
 
-### 4.3.4 Recovery
+The worker attempts embedding after enrichment. A handled HTTP or provider runtime failure leaves the memory without a vector; missing credentials fail the queued write. A later enrichment pass can repair incomplete memories, as described in [failure and retry](03-pipelines.md#failure-and-retry).
 
-`memman enrich` re-enriches every current memory through the full LLM pipeline and re-embeds it. This adds vectors to rows stored without them. The maintenance step after a later drain that finishes a row in the same store also retries up to 3 such rows ([chapter 3](03-pipelines.md#maintenance-after-each-drain)). It requires `memman scheduler stop` first, except with `--dry-run`. `--stale-only` limits the pass to rows whose enrichment prompt or LLM model changed, and to stranded rows. A stranded row carries `enrich_attempted_at` but no `enriched_at`, because its enrichment call failed, as on a rate limit. `memman doctor` counts stranded rows under `enrichment_coverage` and warns on any.
+### Changing the embedding model
 
-### 4.3.5 Changing the embedding model
+A configuration change alone leaves an existing store's fingerprint as it was. One of these operations moves it, with the scheduler stopped:
 
-Two commands replace existing vectors with vectors from another model. Both require `memman scheduler stop` first, so memman is recall-only while they run. The [USAGE guide](../USAGE.md#embedding-operations) gives the command syntax.
+| Command         | Scope                                   | During the operation                                            |
+| --------------- | --------------------------------------- | --------------------------------------------------------------- |
+| `embed swap`    | One SQLite or Postgres store            | Recall uses old vectors until an atomic switch.                 |
+| `embed reembed` | All SQLite stores in the data directory | Vectors are rewritten in place, so recall may see mixed models. |
 
-| Command                | Scope                                       | Target                                                       | Recall during the run                        |
-| ---------------------- | ------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------- |
-| `memman embed swap`    | One store, SQLite or Postgres               | `--to <model>`, with `--provider` or `MEMMAN_EMBED_PROVIDER` | Reads the old vectors until the final switch |
-| `memman embed reembed` | Every SQLite store under the data directory | The `MEMMAN_EMBED_PROVIDER` client                           | Mixes vectors from both models               |
+The [embedding command reference](../USAGE.md#embedding-operations) gives complete stop, change, and restart examples.
 
-### 4.3.6 Embedding swap
+### Embedding swap
 
-`memman embed swap` fills a separate column, `embedding_pending`, with vectors from the target model, then switches the store to those vectors. The code in `src/memman/embed/swap.py` records its progress in the store's `embed_swap_*` meta keys:
+A swap writes target-model vectors to `embedding_pending`, then switches the store to them. Progress is recorded in `embed_swap_*` metadata in [embed/swap.py](../../src/memman/embed/swap.py).
 
-```
-(no swap) --swap--> backfilling --backfill done--> cutover --commit--> (no swap)
+| State            | Meaning                                                            | Recovery after interruption                    |
+| ---------------- | ------------------------------------------------------------------ | ---------------------------------------------- |
+| `backfilling`    | Fill pending vectors in batches, saving a cursor after each batch. | `--resume` continues from the cursor.          |
+| `cutover`        | Backfill is complete; the final transaction is next.               | `--resume` retries the switch.                 |
+| No swap metadata | No swap is in progress.                                            | `embed status` reports the active fingerprint. |
 
-A swap that stops early keeps its state and cursor:
-  swap --resume   continues from the recorded state
-  swap --abort    discards the pending vectors -> (no swap)
-```
+On SQLite, cutover copies pending vectors into `embedding` and clears the pending column. On Postgres, it replaces the old column and index with the pending ones. The cutover commits in its own transaction. A second transaction then writes the target fingerprint and deletes every `embed_swap_*` key, so a store with no such key has no swap in progress.
 
-| State         | Meaning                                                                                                                                                                                        |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backfilling` | Each batch embeds the next `MEMMAN_EMBED_SWAP_BATCH_SIZE` current memories (default 200) into `embedding_pending`. The cursor advances per batch, so `--resume` continues from the last batch. |
-| `cutover`     | Set just before the cutover transaction. `--resume` from this state runs the cutover again.                                                                                                    |
-| (no swap)     | No `embed_swap_*` key exists. `memman embed status` shows the target fingerprint.                                                                                                              |
+Postgres builds the pending HNSW index concurrently before backfill and requires Postgres 12 or newer. `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` limits that index build; zero means no timeout. `MEMMAN_EMBED_SWAP_BATCH_SIZE` controls batch size, defaulting to 200. Both are process-environment settings.
 
-**Switching to the new vectors (cutover).**
+Only current memories receive new vectors. At cutover, Postgres clears vectors on retired memories; SQLite keeps their old vectors. A swap to the current fingerprint does nothing. Returning to an earlier model requires another swap.
 
-- **Postgres.** Before filling the new column, memman adds `embedding_pending vector(N)` and builds its HNSW index concurrently. `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` caps that build in seconds (default 0, no limit). The cutover runs in one transaction and replaces the old column and index with the pending ones. On Postgres older than 12, memman refuses the swap before the backfill starts.
-- **SQLite.** The cutover copies `embedding_pending` into `embedding` and clears the pending column in one transaction.
-- **Both.** One transaction writes the target fingerprint and deletes every `embed_swap_*` key. When these keys are absent, no swap is in progress. Returning to the old model requires another full swap. A swap to the model the fingerprint already names does nothing.
-- **Replaced and forgotten memories.** Only current memories receive new vectors. At cutover, a forgotten or replaced memory loses its vector on Postgres and keeps its old vector on SQLite.
+`--abort` discards pending vectors and swap metadata and does not require a stopped scheduler. It refuses a swap in the `cutover` state, because the cutover may have committed before a crash, and clearing the metadata then would leave the old fingerprint over the new vectors. `--resume` finishes such a swap: on Postgres, a schema with no `embedding_pending` column counts as cut over, and on SQLite the copy touches only rows whose pending vector is set. `doctor` reports leftover swap metadata through `no_stale_swap_meta` until the swap completes or is aborted.
 
-**Abort.** `--abort` discards the pending vectors and deletes the swap meta keys. It does not need a stopped scheduler. The `no_stale_swap_meta` check in `memman doctor` warns while any `embed_swap_*` key remains, which includes a swap that stopped and waits for `--resume` or `--abort`.
+### In-place re-embedding
 
-memman reads `MEMMAN_EMBED_SWAP_BATCH_SIZE` and `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` directly from the process environment.
+`embed reembed` visits all SQLite stores and rewrites current memories whose model or vector width differs from the target, or whose vector is missing. It skips matching vectors and retired memories, saves a cursor to support resumption, and writes each store's fingerprint after completion.
 
-### 4.3.7 Offline re-embed
-
-`memman embed reembed` rewrites vectors in place, store by store, with the `MEMMAN_EMBED_PROVIDER` client. To change providers for all SQLite stores, run `memman config set MEMMAN_EMBED_PROVIDER <name>` followed by `memman embed reembed`. For a Postgres store, use `embed swap`.
-
-- It refuses to run when the active store uses Postgres. Otherwise, it skips any Postgres stores.
-- It re-embeds a current memory whose model or vector width differs from the target, or that has no vector, and skips the rest. A replaced or forgotten memory keeps its old vector.
-- It keeps a per-store cursor, so a second run resumes where the first stopped.
-- At the end of each store it writes the fingerprint.
-- `--dry-run` scans the current memories and writes nothing. It does not need a stopped scheduler.
+It refuses to start with a Postgres store selected and otherwise skips Postgres stores. `--dry-run` counts the changes without writing and does not require stopping the scheduler.

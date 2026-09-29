@@ -1,15 +1,28 @@
-# memman - Design & Architecture
+# Design and architecture
 
-memman is persistent memory for Claude Code, supervised by the agent. Five chapters cover the reasons for memman's design, its data model, its write and recall pipelines, the memory lifecycle, and its Claude Code integration.
+memman gives Claude Code persistent, searchable memory. The agent decides what to save, recall, replace, or forget. A background worker prepares queued memories for search, and the CLI retrieves them on demand.
 
----
+This guide explains the implementation and the reasons behind it. The [usage guide](USAGE.md) covers installation and commands.
 
-## Chapters
+## Reading guide
 
-| #   | Chapter                        | File                                          | Topics                                                                                 |
-| --- | ------------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 1   | Background                     | [01-background.md](design/01-background.md)   | Context loss, scope, the LLM-supervised pattern, retrieval, design trade-offs, storage |
-| 2   | Core Concepts and Architecture | [02-concepts.md](design/02-concepts.md)       | The memory record, schema, system architecture, data directory, store isolation        |
-| 3   | Read & Write Pipelines         | [03-pipelines.md](design/03-pipelines.md)     | The turn and the worker, write pipeline, LLM calls, recall, handling model changes     |
-| 4   | Lifecycle & Embedding          | [04-lifecycle.md](design/04-lifecycle.md)     | Retention, inspecting memories, embedding providers, embedding swap and re-embed       |
-| 5   | Claude Code Integration        | [05-integration.md](design/05-integration.md) | Integration layers, hooks, automated setup, direct Bash calls                          |
+| Chapter                                                    | What it explains                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------------------- |
+| [1. Background](design/01-background.md)                   | The problem, scope, and main design trade-offs.                       |
+| [2. Core concepts and architecture](design/02-concepts.md) | Memory records, stores, schemas, modules, and data paths.             |
+| [3. Read and write pipelines](design/03-pipelines.md)      | Queued writes, retries, enrichment, search ranking, and model checks. |
+| [4. Lifecycle and embedding](design/04-lifecycle.md)       | Retention, embedding model bindings, recovery, and model changes.     |
+| [5. Claude Code integration](design/05-integration.md)     | Hooks, agent instructions, installation, and upgrades.                |
+
+The chapters build on each other in order, and each links to the command reference.
+
+## Terms used here
+
+| Term                  | Meaning                                                                         |
+| --------------------- | ------------------------------------------------------------------------------- |
+| Memory                | One saved claim. Called an **insight** in the database and inspection commands. |
+| Store                 | A named collection of memories with its own database file or schema.            |
+| Drain                 | One worker run that processes queued writes.                                    |
+| Enrichment            | A model-generated summary; the original memory text stays unchanged.            |
+| Embedding fingerprint | The provider, model, and vector dimension recorded for a store.                 |
+| Current memory        | A memory that has been neither replaced nor forgotten.                          |

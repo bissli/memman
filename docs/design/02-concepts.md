@@ -1,54 +1,47 @@
-# 2. Core Concepts and Architecture
+# 2. Core concepts and architecture
 
-[< Back to Design Overview](../DESIGN.md)
-
----
+[Previous: background](01-background.md) | [Design overview](../DESIGN.md) | [Next: pipelines](03-pipelines.md)
 
 ## 2.1 The memory record
 
-A memory is one stored claim. The caller sets its text and metadata. The background worker adds the rest.
+A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content and category; the worker adds a summary and embedding.
 
-| Field        | Set by                                       | Meaning                                                                                                                                     |
-| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `content`    | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                                                                                    |
-| `category`   | `--cat`, default `fact`                      | One of the five categories below.                                                                                                           |
-| `author`     | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                                                                       |
-| `id`         | `remember` or `replace`, when queued         | A version 4 UUID, equal to the write's `queue_uuid` and printed as `id`. Every command that takes an id also accepts an unambiguous prefix. |
-| `summary`    | the enrichment model                         | Display text. Recall prints it in place of the content. Search reads `content`.                                                             |
-| `created_at` | the worker                                   | When the worker stored the memory.                                                                                                          |
-| `queue_uuid` | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                                                                        |
+| Field        | Meaning                                                                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes.                                                                  |
+| `category`   | `preference`, `decision`, `fact`, `insight`, or `context`. Defaults to `fact`; a replacement inherits its target's category unless overridden. |
+| `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.                                                                         |
+| `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.                                                                     |
+| `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.                                                                      |
+| `summary`    | Optional display text from enrichment. Search uses the original content.                                                                       |
+| `created_at` | Time the worker stored the memory.                                                                                                             |
 
-`replace` inherits the target's category when `--cat` is omitted.
+Every command that takes an id accepts an unambiguous prefix, such as the eight characters recall prints. The numeric `queue_id` names the queue entry, which maintenance deletes soon after the drain stores the memory. The `id` outlives it.
 
-[USAGE](../USAGE.md#what-remember-and-replace-refuse) lists every rule `remember` and `replace` enforce on the text.
+| Category     | Example                                                   |
+| ------------ | --------------------------------------------------------- |
+| `preference` | "The user prefers explicit SQL over an ORM."              |
+| `decision`   | "The cache uses SQLite to avoid running another service." |
+| `fact`       | "The billing API allows 100 requests per second."         |
+| `insight`    | "The flaky test fails only when the cache is cold."       |
+| `context`    | "The billing service deploys to AWS ECS."                 |
 
-Five categories describe what a memory holds:
-
-| Category     | Meaning                                              | Example                                                                |
-| ------------ | ---------------------------------------------------- | ---------------------------------------------------------------------- |
-| `preference` | A preference the user stated                         | "Prefers communicating in Chinese"                                     |
-| `decision`   | An architectural or design decision                  | "Chose SQLite over PostgreSQL for the cache"                           |
-| `fact`       | A fact about a system, tool, or domain               | "The billing API rate limit is 100 req/s"                              |
-| `insight`    | A conclusion drawn from several sources              | "The flaky test fails only when the cache is cold"                     |
-| `context`    | Background: project setup, user role, or environment | "The user maintains the billing service and deploys it with Terraform" |
-
----
+[Input rules](../USAGE.md#what-remember-and-replace-refuse) lists what the text must pass.
 
 ## 2.2 Database schema
 
-![Memory Data Model](../diagrams/03-insight-datamodel.drawio.png)
+Each store has a separate SQLite database or Postgres schema named `store_<name>`. Both backends expose the same logical model.
 
-Each store has its own tables. SQLite keeps them in one `memman.db` file per store. Postgres keeps them in one schema per store, named `store_<name>`. The schema has one source per backend, with no in-place migration steps:
+A **current memory** has both `deleted_at` and `replaced_by` unset. Recall and quality review consider only current memories. Replacement preserves the old row and points it to its successor; forgetting sets `deleted_at`. [Chapter 4](04-lifecycle.md#41-retention) explains these transitions.
 
-- SQLite: `_BASELINE_SCHEMA` in `src/memman/store/db.py`, plus `_FTS_STATEMENTS` for the keyword index.
-- Postgres: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`.
-- The write queue: `_BASELINE_SCHEMA` in `src/memman/queue.py`.
+The main tables are:
 
-Each store has its own backend setting, `MEMMAN_BACKEND_<store>`, so a `work` store on Postgres can share a data directory with a `default` store on SQLite. `memman migrate` moves a store in either direction and updates that setting. `MEMMAN_DEFAULT_BACKEND` picks the backend of a new store. The first drain that serves a store writes its `MEMMAN_BACKEND_<store>` from the default, so a later change to the default leaves that store in place. [USAGE](../USAGE.md#migrating-between-sqlite-and-postgres) covers the workflow.
+- `insights`: memories, their generated fields, and lifecycle markers.
+- `oplog`: an operation log with before/after snapshots where supplied.
+- `meta`: embedding fingerprints and progress markers for model changes.
+- `insights_fts` on SQLite: the full-text index over memory content. Postgres uses `kw_tokens` instead.
 
-The maintainer applies a schema change to each live store by hand, once. [CONTRIBUTING](../../CONTRIBUTING.md#baseline-schemas) gives the procedure.
-
-The per-store tables, with SQLite types:
+The field reference below uses SQLite types. The executable schemas are listed under [Schema sources](#schema-sources).
 
 ```sql
 insights (
@@ -88,133 +81,71 @@ meta (
 )
 ```
 
-**Current memories.** A memory is current when `deleted_at is null and replaced_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `replaced_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `replacement_integrity` check in `memman doctor` is the only check that validates the pointer.
+The [memory data-model diagram](../diagrams/03-insight-datamodel.drawio.png) shows these tables and lifecycle states together.
 
-**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when a row is inserted or deleted or its `content` changes. It indexes every row, including forgotten and replaced memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
+### Indexes and backend differences
 
-**Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale. So is a stranded memory, one with `enrich_attempted_at` set and no `enriched_at`, left by a failed enrichment call. `memman enrich --stale-only` re-enriches both. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
+SQLite's FTS5 index covers all memory content and is maintained by triggers. Searches join back to `insights` to exclude retired memories. Opening a store without the index creates and populates it in a transaction. Postgres stores distinct content tokens in `kw_tokens`, with a GIN index for keyword lookup.
 
-**Meta keys.**
+| Detail               | SQLite                              | Postgres                                       |
+| -------------------- | ----------------------------------- | ---------------------------------------------- |
+| Timestamps           | ISO 8601 text                       | `timestamptz`                                  |
+| Operation snapshots  | JSON text                           | `jsonb`                                        |
+| Embeddings           | Little-endian float64 BLOB          | pgvector `vector(N)`, float32                  |
+| Vector lookup        | Matrix product                      | HNSW index on current memories                 |
+| Pending swap vectors | Baseline `embedding_pending` column | Column added during a swap                     |
+| Migration log IDs    | Native oplog ID                     | Additional unique `legacy_id`                  |
+| Store worker history | In the shared queue database        | Additional `worker_runs` table with heartbeats |
 
-- `embed_fingerprint`: the store's embedding model, as provider, model, and dimension. [Lifecycle](04-lifecycle.md) explains the binding.
-- `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_provider`, `embed_swap_target_model`, `embed_swap_target_dim`: the progress of an `embed swap`.
-- `embed_reembed_state`, `embed_reembed_cursor`: the progress of an `embed reembed`.
+Both backends index category, creation time, deletion time, queue UUID, and oplog time. Composite indexes support pending enrichment and current-memory listings. Postgres creates a missing HNSW index when opening a store for reading and writing.
 
-**Postgres differences.** The logical layout matches. These columns differ:
+`replaced_by` has no foreign key. The worker sets the pointer before it inserts the successor, and the migrators copy rows in id order, so a pointer can name a row not yet inserted. `memman doctor` checks the chain through `replacement_integrity`.
 
-| Column                  | SQLite                        | Postgres                                                      |
-| ----------------------- | ----------------------------- | ------------------------------------------------------------- |
-| timestamps              | ISO 8601 text                 | `timestamptz`                                                 |
-| `oplog.before`, `after` | JSON text                     | `jsonb`                                                       |
-| `embedding`             | BLOB of little-endian float64 | `vector(N)`, where N is the store's embedding dimension       |
-| `embedding_pending`     | in the baseline               | added by `embed swap`, renamed to `embedding` at cutover      |
-| `kw_tokens`             | absent                        | `text[] not null`: the distinct tokens of `content`           |
-| `oplog.legacy_id`       | absent                        | `bigint unique`: the SQLite oplog id a migration copied       |
-| `worker_runs`           | absent                        | one row per drain that opens the store, with a heartbeat time |
+### Schema sources
 
-**Indexes.** Both backends index `category`, `created_at`, `deleted_at`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
+The executable schemas live in the source:
 
-- `idx_insights_pending_enrich` on `(enrich_attempted_at, created_at)`, limited to current memories with no `enrich_attempted_at`. The enrichment pass reads pending memories in order from it.
-- `idx_insights_current_listing` on `(deleted_at, replaced_by, created_at)`. `recall --basic` reads its filter and sort order from it.
+- [SQLite baseline and FTS](../../src/memman/store/db.py)
+- [Postgres baseline](../../src/memman/store/postgres.py)
+- [Queue baseline](../../src/memman/queue.py)
 
-Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both limited to current memories. Opening a Postgres store for reading and writing builds the HNSW index if it is missing.
+There are no automatic in-place schema migrations. Maintainers apply schema changes using the [baseline schema procedure](../../CONTRIBUTING.md#baseline-schemas).
 
-**The write queue.** `queue.db` sits in the data directory and serves every store. It is always SQLite:
+### Queue and generated-field markers
 
-```sql
-queue (
-  id, store, content,
-  category,
-  replaced_id,                            -- replace target, null for remember
-  queue_uuid,                             -- unique
-  queued_at, claimed_at, worker_pid, attempts,
-  status,                                 -- pending, done, failed, or stale
-  last_error, processed_at, author
-)
+`<data dir>/queue.db` is always SQLite and serves all stores in that directory. Each entry records the store, content, category, author, replacement target, UUID, attempt count, status, and timestamps. Its `worker_runs` table records drain outcomes. [Queue states](../USAGE.md#queue) and [write processing](03-pipelines.md#32-write-pipeline-remember) describe its use.
 
-worker_runs (                             -- drain history, at most one idle row a minute
-  id, started_at, finished_at, worker_pid,
-  rows_claimed, rows_done, rows_failed, duration_ms, error
-)
-```
+The worker checks `queue_uuid` against all stored memories, including forgotten and replaced ones, before inserting a retried write.
 
-The worker skips a queued write if any stored memory, forgotten or not, already has its `queue_uuid`. This prevents a retry from creating a duplicate memory.
+Generated fields carry markers for later maintenance:
 
----
+| Marker                                       | Purpose                                                                           |
+| -------------------------------------------- | --------------------------------------------------------------------------------- |
+| `prompt_version`                             | First 16 hex characters of a SHA-256 hash of the enrichment prompt and LLM model. |
+| `embedding_model`                            | Model that produced the memory's vector.                                          |
+| `enrich_attempted_at`                        | Records an enrichment attempt.                                                    |
+| `enriched_at`                                | Records that enrichment and a vector were both saved.                             |
+| `meta.embed_fingerprint`                     | Store's embedding provider, model, and dimension.                                 |
+| `meta.embed_swap_*` / `meta.embed_reembed_*` | Progress of an embedding model change.                                            |
+
+[Chapter 3](03-pipelines.md#35-handling-model-changes) explains how these markers identify work to repeat.
 
 ## 2.3 System architecture
 
-memman groups its modules into seven layers:
+![CLI, worker, search, providers, and storage](../diagrams/02-system-architecture.drawio.png)
 
-```
-+---------------------------------------------------------------------+
-| Integration  hook scripts, guide.md, SKILL.md (setup/assets/claude) |
-|              setup/   (install, wizard, settings.json merge)        |
-+---------------------------------------------------------------------+
-| CLI          cli.py: remember, recall, replace, forget, insights,   |
-|              enrich, embed, store, migrate, scheduler, backup, log, |
-|              config, status, doctor, install, uninstall, prime      |
-|              (hooks only)                                           |
-+---------------------------------------------------------------------+
-| Write path   the drain loop in cli.py                               |
-|              queue.py (the write queue, SQLite)                     |
-|              drain_lock.py (one drain at a time)                    |
-|              setup/scheduler.py (systemd, launchd, or serve loop)   |
-|              pipeline/remember.py (enrich, embed, one transaction)  |
-|              pipeline/enrich.py (enrichment pass over pending rows) |
-|              maintenance.py (runs after each drain)                 |
-+---------------------------------------------------------------------+
-| Search       search/  (recall, keyword, quality)                    |
-+---------------------------------------------------------------------+
-| Providers    embed/   (voyage, openai_compat, openrouter, ollama,   |
-|                        registry, fingerprint, swap, vector)         |
-|              rerank/  (voyage)                                      |
-|              llm/     (client, shared, usage, openrouter_models)    |
-+---------------------------------------------------------------------+
-| Storage      store/   (backend, config, errors, factory, db,        |
-|                        node, oplog, model, sqlite, postgres)        |
-|              migrate/ (SQLite <-> Postgres)                         |
-|              backup/  (external backups)                            |
-+---------------------------------------------------------------------+
-| External     LLM endpoint (MEMMAN_LLM_ENDPOINT, MEMMAN_LLM_MODEL)   |
-|              embedding provider (voyage, openai, openrouter, ollama)|
-|              Voyage reranker                                        |
-|              Postgres + pgvector (optional backend)                 |
-+---------------------------------------------------------------------+
-```
+| Area        | Main modules                                                                                                                      | Responsibility                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Integration | `setup/`, `setup/assets/claude/`                                                                                                  | Installation, hooks, guide, and skill.                                                       |
+| Commands    | `cli.py`, `session.py`, `config.py`                                                                                               | CLI entry points, store sessions, and settings.                                              |
+| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
+| Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                           |
+| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                        |
+| Storage     | `store/`, `migrate/`, `backup/`                                                                                                   | Backend interface, SQLite and Postgres, migration, and snapshots.                            |
+| Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                              |
+| Scripts     | `scripts/enrich_stale.py`                                                                                                         | `enrich --stale-only` over many stores.                                                      |
 
-The code tree:
-
-```
-memman/
-+-- src/memman/
-|   +-- cli.py              # Click CLI: every command and the drain loop
-|   +-- config.py           # env file reader, INSTALL_DEFAULTS
-|   +-- session.py          # opens the active store for one command
-|   +-- queue.py            # the write queue in queue.db
-|   +-- drain_lock.py       # the lock file that serializes drains
-|   +-- maintenance.py      # queue cleanup, oplog trim, re-enrichment
-|   +-- doctor.py           # memman doctor checks
-|   +-- trace.py            # JSON-lines debug trace
-|   +-- extras.py           # detects optional install extras
-|   +-- exceptions.py       # domain errors
-|   +-- _http.py            # HTTP client pools and retry policy
-|   +-- pipeline/           # one queued write: enrich, embed, apply;
-|   |                       # enrichment pass over pending memories
-|   +-- store/              # Backend Protocol, SQLite and Postgres
-|   +-- search/             # recall, keyword search, quality warnings
-|   +-- embed/              # embedding providers, fingerprint, swap
-|   +-- rerank/             # Voyage cross-encoder client
-|   +-- llm/                # LLM client, JSON parsing, usage, model check
-|   +-- migrate/            # shared types for memman migrate
-|   +-- backup/             # memman backup and cron translation
-|   +-- setup/              # install, wizard, scheduler units, assets
-+-- scripts/
-|   +-- enrich_stale.py     # enrich --stale-only over many stores
-+-- tests/
-+-- pyproject.toml          # Poetry package, memman[postgres] extra
-+-- Makefile
-```
+The `Backend` protocol in [store/backend.py](../../src/memman/store/backend.py) separates pipelines from database details. The shared queue and scheduler coordinate writes across stores.
 
 ## 2.4 Data directory layout
 
@@ -262,21 +193,14 @@ A Postgres-backed store keeps its rows in its `store_<name>` schema. The write q
 
 ## 2.5 Store isolation
 
-A named store is an isolated set of memories. Memories and the oplog never cross stores. All stores in one data directory share one env file and one write queue, and each drain serves them all.
+A named store isolates memories and its operation log. Stores in one data directory share settings and a write queue; each drain can serve all of them. Each store can use its own backend and embedding model.
 
-Named stores isolate memories within one data directory. Changing `--data-dir` also changes the env file and queue, and every caller must pass the full path. A process can select a named store with a single setting. `MEMMAN_STORE=work` points one process at the `work` store, so two Claude Code sessions on one host can use different stores.
+Store selection follows this order:
 
-Resolution order, highest first:
-
-```
---store flag  >  MEMMAN_STORE env  >  <data dir>/active file  >  "default"
+```text
+--store flag > MEMMAN_STORE environment variable > active-store file > default
 ```
 
-| Mechanism          | Scenario                                                             |
-| ------------------ | -------------------------------------------------------------------- |
-| `--store` flag     | One-off override on a single command or script                       |
-| `MEMMAN_STORE` env | Per-process isolation: two sessions on one host use different stores |
-| `active` file      | Persistent choice, set with `memman store use work`                  |
-| `"default"`        | Fallback when none of the above is set                               |
+`memman store use work` changes the shared default. `MEMMAN_STORE=work` selects a store for one process and its children, which lets separate agent sessions use different stores.
 
-[USAGE](../USAGE.md#store-management) documents the store commands.
+Changing the data directory also changes the settings file and queue. A scheduler drains only its configured directory, so named stores separate projects within one installation. [Store management](../USAGE.md#store-management) covers the commands and directory-based selection.

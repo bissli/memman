@@ -1,102 +1,67 @@
 # 1. Background
 
-[< Back to Design Overview](../DESIGN.md)
+[Design overview](../DESIGN.md) | [Next: core concepts](02-concepts.md)
 
----
+## 1.1 The problem
 
-## 1.1 Context loss
+A coding agent cannot rely on its conversation window as a permanent record. New sessions lack the full history, and compaction condenses earlier work. Decisions, preferences, and project details may need to be explained again.
 
-Claude Code loses context in three ways:
-
-- **Compaction.** After Claude Code compacts a session, earlier decisions and context leave the active window.
-- **New sessions.** Each session starts with no memory of the last one.
-- **Long sessions.** Once the context window fills, early information drops out of the model's attention.
-
-The user must then repeat preferences, explain the project again, and work through earlier conclusions.
+memman gives the agent a separate store for knowledge worth keeping. It saves individual claims that the agent can search later, rather than archiving entire conversations.
 
 ## 1.2 Scope
 
-memman stores decisions, preferences, and project context across Claude Code sessions. The agent runs its command-line interface through Bash. Hooks remind the agent when to recall and when to store. memman supports Claude Code only.
+The included integration supports Claude Code. The agent uses memman's CLI through Bash, guided by lifecycle hooks and an installed skill. The same CLI is available for direct use and scripts.
 
----
+Memories are explicit: the agent chooses their text and category. memman does not decide which conversation details matter or automatically resolve contradictory claims. The agent uses `replace` to correct a memory and `forget` to remove it from recall.
 
-## 1.3 LLM-supervised pattern
+## 1.3 Responsibilities
 
-The agent supervises memory from outside the pipeline. It decides what to store, what to query, and what to retire. memman runs deterministic code, and one LLM (`MEMMAN_LLM_MODEL`) adds a summary that recall prints in place of the content. The work splits three ways:
+| Part                         | Responsibility                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| Coding agent                 | Decide what to remember, formulate queries, and judge which memories need correction. |
+| CLI and worker               | Validate and queue writes, maintain storage, and retrieve memories.                   |
+| Enrichment model             | Produce a short display summary of each memory.                                       |
+| Embedding model and reranker | Help rank stored memories against a query.                                            |
 
-| Part                                      | Role               | Work                                                                    |
-| ----------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
-| The agent (Claude Code)                   | Judgment           | Decides what to remember, when to recall, and what to replace or forget |
-| The memman CLI and background worker      | Deterministic code | Storage, the write queue, keyword search, vector math, rank fusion      |
-| The enrichment model (`MEMMAN_LLM_MODEL`) | Enrichment         | Adds a short summary to each memory                                     |
+This division is what **LLM-supervised memory** means here: the coding agent directs memory use. The enrichment model does not rewrite the original content, pick categories, merge claims, or decide what to keep.
 
-The agent writes the content of every memory. The enrichment model never rewrites, merges, or categorizes a memory. Its output is stored in the `summary` column.
+![Responsibilities of the agent, memman, and enrichment model](../diagrams/01-llm-supervised.drawio.png)
 
-![LLM-Supervised Design](../diagrams/01-llm-supervised.drawio.png)
+## 1.4 Design trade-offs
 
-![System Architecture](../diagrams/02-system-architecture.drawio.png)
+| Choice                                 | Benefit                                                                                 | Trade-off                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Process writes in the background       | `remember` does not wait for model requests.                                            | Recall sees it only after the worker stores it.                          |
+| Combine keywords, vectors, and recency | Find exact terms, related wording, and recent context.                                  | Recency may introduce unrelated results; the agent must judge relevance. |
+| Make corrections explicit              | Preserve the original claim and its replacement history.                                | The agent must identify duplicates and contradictions.                   |
+| Retain memories indefinitely           | A store grows more useful as it grows, and no cap deletes a true claim to make room.    | Outdated claims need review.                                             |
+| Soft delete                            | A forgotten successor keeps its row, so its predecessor's `replaced_by` still resolves. | Forgotten rows stay on disk.                                             |
 
-[Chapter 2](02-concepts.md#23-system-architecture) lists the layers in the second diagram.
+Recall follows these rules:
 
-## 1.4 Retrieval design
+| Aspect             | Rule                                                                                                 | Reason                                                                                                                      |
+| ------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Rank fusion        | Keyword, vector, and recency rankings contribute equally to RRF.                                     | No single channel decides the fused order.                                                                                  |
+| Candidate pool     | Union of up to 30 keyword, 100 vector, and 30 recent memories.                                       | The vector channel fills the reranker's 100-row shortlist.                                                                  |
+| Vector threshold   | Positive cosine similarity, with no fixed floor above zero.                                          | A fixed cosine means different things under different embedding models. The sign boundary means the same under every model. |
+| Recency            | Creation time, without interpreting dates in the query.                                              | Each recall line prints `created_at`, so the agent reads the dates itself.                                                  |
+| Result order       | Relevance order on scored recall, and nothing re-sorts after the limit. Newest first with `--basic`. | A date sort would make results read as a timeline, and a larger limit keeps earlier rows in place.                          |
+| Duplicate handling | Explicit replacement for repeated claims. A queue UUID guards retries of one write.                  | The agent holds the conversation, so it judges which claim a new one corrects.                                              |
+| Quality review     | Advisory patterns flag potentially temporary information and never block a write.                    | The agent judges what is durable.                                                                                           |
 
-Recall combines three ranked lists (keyword, vector, and recency) with Reciprocal Rank Fusion (RRF). Each list that contains a memory contributes `1/(k + rank)` to its combined score, with k=60 and ranks counted from 1. The combined lists form the candidate set. A weighted sum of keyword overlap, cosine similarity, and the normalized RRF score orders it. When reranking is on, the Voyage reranker rescores the top 100. [Pipelines](03-pipelines.md#34-read-pipeline-recall) documents the constants.
+[Chapter 3](03-pipelines.md#34-read-pipeline-recall) gives the scoring formula and reranking behavior.
 
-Each write adds one memory. A `replace <id>` write also replaces the memory it names.
+## 1.5 Storage choices
 
----
+| Backend  | Installation                      | Store layout                        | Vector search                      |
+| -------- | --------------------------------- | ----------------------------------- | ---------------------------------- |
+| SQLite   | Included by default               | One `memman.db` per store           | Matrix product over stored vectors |
+| Postgres | `pipx install 'memman[postgres]'` | One `store_<name>` schema per store | pgvector with HNSW candidate index |
 
-## 1.5 Design decisions and trade-offs
+SQLite requires no database server. Write-ahead logging allows recall to read while the worker commits. Both backends save each memory and any replacement link in one transaction and implement the same storage interface.
 
-### Why LLM-supervised
+A data directory can contain stores using either backend. `memman migrate` moves stores between them.
 
-- The agent holds the conversation, so it judges best what is worth storing and which stored claim a new one corrects. memman provides commands to act on that judgment.
-- No model decides what memman keeps. The write path makes one enrichment call per memory, and one more only when the reply does not parse as JSON.
-- One model, `MEMMAN_LLM_MODEL`, serves enrichment and the `doctor` connectivity probe. [Pipelines](03-pipelines.md#llm-routing) covers model routing and the daily model check.
-- memman needs network access. The background worker calls the LLM endpoint and the embedding provider. Recall calls the embedding provider, and the Voyage reranker when reranking is on.
+The write queue is always a local SQLite database that the stores in one data directory share. SQLite storage does not make the setup offline: the worker and recall still call the configured providers.
 
-### Why SQLite WAL for storage
-
-- **One file per store.** Each store is one `memman.db` file, easy to copy and back up.
-- **Transactions.** The worker commits each write in one transaction: the new memory, its enrichment, its vector, and any replacement link are saved together. If any part fails, none is saved.
-- **Concurrent reads.** Write-ahead logging (WAL) lets readers run while one writer commits. Recall reads a store while the background worker writes to it.
-- **No server.** SQLite ships with Python. A SQLite store needs no database server and no separate vector store.
-
-### Why soft delete
-
-`memman forget` sets `deleted_at` and keeps the row. memman never deletes a memory row. `memman store remove`, which removes a whole store, is the only exception.
-
-- **Current memories.** [Chapter 2](02-concepts.md#22-database-schema) defines a current memory and which commands read retired ones.
-- **Replacement retires a row and keeps it.** A corrected memory keeps its content and records its successor in `replaced_by`. It leaves the current view, just as a forgotten memory does.
-- **The replacement pointer stays valid.** Forgetting a successor keeps its row, so the predecessor's pointer still resolves.
-
-### Retrieval and storage decisions
-
-| Aspect               | memman design                                                                                                                                                                 |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| RRF weighting        | Unweighted. The keyword, vector, and recency lists each add `1/(k + rank)`.                                                                                                   |
-| Candidate limit      | No cap on the union of the three lists. Keyword and recency each take `ANCHOR_TOP_K` = 30. Vector takes `RERANK_SHORTLIST` = 100.                                             |
-| Similarity threshold | The vector list keeps every positive cosine and has no other floor. A fixed cosine means different things under different embedding models, while the sign boundary does not. |
-| Deduplication        | Not automatic. Only `replace <id>` retires a memory. A retried queued write stores one memory, keyed by its `queue_uuid`.                                                     |
-| Recency ranking      | No date parsing. The recency list ranks by `created_at`, whatever the query says.                                                                                             |
-| Result ordering      | Relevance order at every `--limit`. Nothing re-sorts after the cut, because a date sort would make the results read as a timeline.                                            |
-| Current facts        | Replaced and forgotten memories leave recall. `replace` stores the caller's text unchanged as the successor.                                                                |
-| Embeddings           | voyage, openai, openrouter, or ollama (ollama only through `memman config set`). `meta.embed_fingerprint` binds each store to one provider, model, and dimension.             |
-| Quality review       | `remember` and `replace` return pattern-based `quality_warnings` and store the text anyway. `memman insights review` runs the same patterns on stored memories.               |
-
----
-
-## 1.6 Storage backends
-
-The `Backend` Protocol in `src/memman/store/backend.py` defines every per-store storage operation. `store/sqlite.py` and `store/postgres.py` implement it, so recall and the write pipeline run unchanged over either backend. Each backend has one baseline schema and no in-place migration steps.
-
-| Backend  | Install                           | Layout                                                           | Vector column                                                             |
-| -------- | --------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| SQLite   | default                           | One `memman.db` file per store, under `<data dir>/data/<store>/` | `insights.embedding`: a BLOB of little-endian float64 values              |
-| Postgres | `pipx install 'memman[postgres]'` | One Postgres schema per store, named `store_<name>`              | `insights.embedding`: a pgvector `vector(N)` column (float32), HNSW index |
-
-The write queue is SQLite in both cases: one `queue.db` per data directory, whatever backend each store uses.
-
-Backend selection is per store. `MEMMAN_BACKEND_<store>` picks sqlite or postgres, with `MEMMAN_DEFAULT_BACKEND` as the fallback. `MEMMAN_POSTGRES_DSN_<store>` gives the connection string, with `MEMMAN_DEFAULT_POSTGRES_DSN` as the fallback. A `work` store on Postgres can share a data directory with a `default` store on SQLite. [USAGE](../USAGE.md#backend-selection) documents these settings.
-
-`memman migrate --store NAME --to postgres` moves a store to Postgres, and `--to sqlite` moves it back. [USAGE](../USAGE.md#migrating-between-sqlite-and-postgres) covers the workflow. [CONTRIBUTING](../../CONTRIBUTING.md#migrating-between-sqlite-and-postgres) covers the implementation.
+[Core concepts](02-concepts.md) describes the data model, and [the migration guide](../USAGE.md#migrating-between-sqlite-and-postgres) covers changing backends.

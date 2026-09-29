@@ -1,6 +1,22 @@
 # memman usage and reference
 
-This page lists every memman command and setting. [DESIGN.md](DESIGN.md) explains how the parts work.
+This guide covers setup, memory commands, and maintenance. The [README](../README.md) is the short introduction, and the [design guide](DESIGN.md) explains the implementation.
+
+## Find a task
+
+| Task                                    | Section                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------ |
+| Install or change providers             | [Installation](#install-and-uninstall), [provider setup](#provider-setup)      |
+| Save, find, correct, or forget a memory | [Memory commands](#memory-commands)                                            |
+| Inspect memory history or quality       | [Insights](#insights)                                                          |
+| Separate projects or change databases   | [Store management](#store-management)                                          |
+| Check health or investigate a failure   | [Status and logs](#status-and-logs), [troubleshooting](#troubleshooting)       |
+| Control the worker or retry writes      | [Scheduler](#scheduler), [queue](#queue)                                       |
+| Rebuild summaries or vectors            | [Re-enrichment](#re-enrichment), [embedding operations](#embedding-operations) |
+| Back up or restore stores               | [Backup](#backup)                                                              |
+| Read or change settings                 | [Configuration](#configuration)                                                |
+
+Examples use `<id>` and `<name>` as placeholders. Square brackets in a synopsis mark an optional argument.
 
 ## Global flags
 
@@ -20,7 +36,9 @@ Without `--verbose` or `--debug`, the stderr level is `MEMMAN_LOG_LEVEL` (defaul
 
 ## Install and uninstall
 
-`memman install` runs after `pipx install memman`. The [README](../README.md#install) covers the package install and provider keys.
+`pipx install memman` installs the package, and `memman install` configures it. `pipx install 'memman[postgres]'` adds Postgres support. memman needs Python 3.11+.
+
+The default setup uses OpenRouter for summaries and Voyage for embeddings and reranking, so the wizard asks for both keys. [Provider setup](#provider-setup) lists the alternatives.
 
 ```bash
 memman install                        # interactive wizard in a terminal
@@ -41,23 +59,27 @@ memman uninstall --claude-code
 | `--embed-provider NAME` | Embedding provider: `voyage`, `openai`, or `openrouter`. Skips the provider prompt.                                                                                       |
 | `--no-wizard`           | Skip all prompts, even in a terminal. Flags, the shell, and defaults supply every value.                                                                                  |
 
-**What install does, in order:**
+### Installed files and services
 
-1. Refuses a flag whose value differs from the env file, and prints the `memman config set` command that changes it.
-2. Runs the install wizard (below) and writes its answers to the env file.
-3. Checks the host and the required keys, and works out every missing setting (see [Configuration](#configuration)).
-4. When Claude Code is detected (a `claude` binary on `PATH` or a `~/.claude` directory), or with `--claude-code`:
-   - creates `~/.memman/logs/` at mode 0700,
-   - symlinks the skill to `~/.claude/skills/memman/SKILL.md` and the five hook scripts into `~/.claude/hooks/memman/`,
-   - registers the hooks in `~/.claude/settings.json`,
-   - adds a `permissions.allow` entry for each memman command the agent may call. In a terminal and without `--no-wizard`, install lists the entries and asks first,
-   - creates the `default` store when it is a SQLite store that does not exist yet.
-5. Writes those settings to the env file and installs the scheduler unit: a systemd timer on Linux or a launchd agent on macOS.
-6. On an OpenRouter endpoint, checks that a zero-data-retention endpoint on a vendor in `MEMMAN_LLM_PROVIDER_ONLY` serves `MEMMAN_LLM_MODEL`, and that OpenRouter lists no retirement date for it. The drain repeats the check once a day. A catalog outage prints an error, and the install still finishes.
+Installation writes settings, configures a worker, and adds the Claude Code integration when detected or requested.
 
-Without Claude Code and without `--claude-code`, install sets up the scheduler only. Install needs systemd or launchd. On a host with neither, `MEMMAN_SCHEDULER_KIND=serve` in the environment selects serve mode, where a `memman scheduler serve` process drains the queue.
+| Path                                                   | Purpose                                         |
+| ------------------------------------------------------ | ----------------------------------------------- |
+| `~/.memman/env`                                        | Settings and API keys, mode 0600.               |
+| `~/.claude/skills/memman/SKILL.md`                     | Symlink to the packaged agent manual.           |
+| `~/.claude/hooks/memman/*.sh`                          | Symlinks to five lifecycle hooks.               |
+| `~/.claude/settings.json`                              | Hook registrations and allowed memory commands. |
+| `~/.config/systemd/user/memman-enrich.{timer,service}` | Linux worker schedule.                          |
+| `~/Library/LaunchAgents/com.memman.enrich.plist`       | macOS worker schedule.                          |
+| `~/.memman/logs/`                                      | Worker output.                                  |
 
-A new Claude Code session picks up the hooks. [Chapter 5](design/05-integration.md) describes the hooks, the guide, and the skill. The SessionStart hook runs the hidden `memman prime`, which prints the status line, any model notice, a reminder to recall after a compaction, and the guide.
+Claude Code is detected by a `claude` binary on `PATH` or an existing `~/.claude` directory. Without either, installation configures only the scheduler unless `--claude-code` is passed. Start a new Claude Code session to load the hooks.
+
+On a host without systemd or launchd, set `MEMMAN_SCHEDULER_KIND=serve` in the process environment and run `memman scheduler serve` to process writes.
+
+Existing env-file values take precedence. Installation refuses conflicting flags and prints the `config set` command needed to change the value. It also checks prerequisites and, for OpenRouter, model availability. A catalog outage is reported but does not stop installation.
+
+Run `memman install` after a package upgrade to refresh hook registrations, scheduler units, and new default settings. The [integration chapter](design/05-integration.md) describes the installed hooks and permission entries.
 
 ### Install wizard
 
@@ -87,6 +109,76 @@ It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, 
 
 ---
 
+## Provider setup
+
+memman uses separate services for summaries, embeddings, and reranking. The defaults below are the models this version ships. The [README cost table](../README.md#cost) estimates their combined cost.
+
+### LLM providers
+
+The enrichment client uses the OpenAI-compatible `/chat/completions` protocol. Set the endpoint, API key, and model together; model IDs are specific to the endpoint.
+
+| Endpoint                | `MEMMAN_LLM_ENDPOINT`          | Model selection                                               |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------- |
+| OpenRouter              | `https://openrouter.ai/api/v1` | Defaults to `qwen/qwen3-235b-a22b-2507`.                      |
+| OpenAI                  | `https://api.openai.com/v1`    | Set a supported model explicitly.                             |
+| Ollama                  | `http://localhost:11434/v1`    | Set a locally available model; the wizard allows a blank key. |
+| Other compatible server | Its chat API base URL          | Set the model and authentication required by that server.     |
+
+```bash
+memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
+memman config set MEMMAN_LLM_API_KEY <api-key>
+memman config set MEMMAN_LLM_MODEL <model-id>
+```
+
+On OpenRouter, installation can copy `MEMMAN_OPENROUTER_API_KEY` into `MEMMAN_LLM_API_KEY` when the latter is unset. Requests use the configured provider restrictions and zero-data-retention setting. The [routing reference](design/03-pipelines.md#llm-routing) documents those defaults and the daily availability check.
+
+### Embedding providers
+
+| Provider     | Shipped model            | Key                           | Endpoint setting                                                      |
+| ------------ | ------------------------ | ----------------------------- | --------------------------------------------------------------------- |
+| `voyage`     | `voyage-3-lite`          | `MEMMAN_VOYAGE_API_KEY`       | Fixed Voyage endpoint.                                                |
+| `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` | `MEMMAN_OPENAI_EMBED_ENDPOINT`, default `https://api.openai.com`.     |
+| `openrouter` | `baai/bge-m3`            | `MEMMAN_OPENROUTER_API_KEY`   | `MEMMAN_OPENROUTER_ENDPOINT`, default `https://openrouter.ai/api/v1`. |
+| `ollama`     | `nomic-embed-text`       | None                          | `MEMMAN_OLLAMA_HOST`, default `http://localhost:11434`.               |
+
+The wizard offers the first three. Configure Ollama afterward with `memman config set MEMMAN_EMBED_PROVIDER ollama`. Each provider has a model setting: `MEMMAN_VOYAGE_EMBED_MODEL`, `MEMMAN_OPENAI_EMBED_MODEL`, `MEMMAN_OPENROUTER_EMBED_MODEL`, or `MEMMAN_OLLAMA_EMBED_MODEL`.
+
+Existing stores keep their recorded model until an explicit [swap or re-embed](#embedding-operations).
+
+### Reranker
+
+Voyage is the only reranker. It uses its own model setting and needs a Voyage key even when embeddings use another provider.
+
+| Setting                         | Default         | Purpose                     |
+| ------------------------------- | --------------- | --------------------------- |
+| `MEMMAN_RERANK_ENABLED`         | `true`          | Enable reranking globally.  |
+| `MEMMAN_RERANK_ENABLED_<store>` | Global value    | Override for one store.     |
+| `MEMMAN_VOYAGE_RERANK_MODEL`    | `rerank-3-lite` | Select the reranking model. |
+| `MEMMAN_VOYAGE_API_KEY`         | None            | Authenticate requests.      |
+
+```bash
+memman config set MEMMAN_RERANK_ENABLED false
+```
+
+### Where keys are needed
+
+At runtime, memman reads provider settings from `<data dir>/env` and ignores the shell. `config set` changes them. Installation can import keys from the shell ([configuration precedence](#configuration)).
+
+| Operation                                                                        | Credentials                                             | If unavailable                                                     |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| Queue `remember`                                                                 | No model key required.                                  | Model work waits for the worker.                                   |
+| Open a normal store session, including `replace`, `forget`, and `recall --basic` | Global embedding provider's key where required.         | The Voyage and OpenRouter clients stop the command.                |
+| Embed recall query                                                               | Store fingerprint's provider key.                       | Recall warns and falls back to keyword and recency ranking.        |
+| Embed a queued memory                                                            | Store fingerprint's provider key.                       | Missing bound credentials fail the write; inspect the queue error. |
+| Generate a summary                                                               | `MEMMAN_LLM_API_KEY`, unless the endpoint permits none. | A rejected request leaves the memory without a summary.            |
+| Rerank recall candidates                                                         | `MEMMAN_VOYAGE_API_KEY`.                                | Recall warns and preserves its pre-rerank order.                   |
+
+A normal store session builds the global embedding client as well as the store-bound one, so a command can need the key of a global provider that no store uses. Opening a new store, or one whose model's vector size is not built in, also sends a probe embedding.
+
+`remember` uses a separate related-memory lookup that calls no model. Diagnostics and operations such as `embed status`, `embed swap`, `migrate`, and `backup` bypass normal fingerprint initialization. The `openai` client starts without a key, and its first request fails instead. `doctor` checks provider configuration and connectivity.
+
+---
+
 ## Memory commands
 
 ```bash
@@ -104,17 +196,38 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 ### remember and replace
 
-`remember` adds the text to the write queue, then reads the store for the rows the text may correct. The background worker stores the write on its next drain, and recall finds it from then on. The reply is one line of JSON: `action` (`queued`), `id`, `queue_id`, `store`, `quality_warnings`, and `related`. `replace` prints the same fields less `related`, and adds `replaced_id`. The `id` is the id the stored memory takes once the drain lands it, so a caller holds it from the moment it writes. `memman insights show <id>` on a write still queued reports that it lands on the next drain.
+`remember` queues a new memory. The worker stores it on a later drain; only then can recall find it. Submission returns one line of JSON:
 
-`quality_warnings` lists phrasing that tends to go stale, such as an instance id or the word "currently". The warnings never block the write.
+| Field              | Meaning                                                                        |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `action`           | `queued`: submission succeeded, processing is still pending.                   |
+| `id`               | Persistent memory UUID, assigned now.                                          |
+| `queue_id`         | Temporary numeric queue entry ID, used by queue commands.                      |
+| `store`            | Destination store.                                                             |
+| `quality_warnings` | Advisory warnings about potentially temporary information.                     |
+| `related`          | Up to three current memories with overlapping wording. Present for `remember`. |
+| `related_error`    | Replaces `related` if that lookup failed. The write remains queued.            |
+| `replaced_id`      | Target memory ID. Present for `replace`.                                       |
 
-`related` lists up to three current memories of at most 1,000 bytes, each as `<id8> <content>`, ranked by the words each shares with the new text divided by the square root of its distinct word count, so a short memory on the same subject ranks above a long one that touches it. A memory over 1,000 bytes is never listed. A store with no database yet gives an empty list. When the store cannot be read, `related_error` names the failure in place of `related`, and the write stays queued. An unreachable Postgres host fails within 3 seconds unless `PGCONNECT_TIMEOUT` or the DSN's `connect_timeout` sets another limit.
+`insights show <id>` reports when a write is still queued. Use `scheduler queue show <queue_id>` to inspect its processing state.
 
-| Flag    | `remember` default | `replace` default  | Meaning                                                              |
-| ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |
-| `--cat` | `fact`             | the target's value | Category: `preference`, `decision`, `fact`, `insight`, or `context`. |
+`related` lists stored claims the new text may correct. The lookup favors focused word overlap, reads only memories within the 1,000-byte input limit, and calls no model. It can return an empty list, and its failure never undoes the submission.
 
-`replace <id>` queues a successor for a current memory, or for a write still queued for the same store. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending, so replacements land in the order they were queued. A target that fails or goes stale releases its replacement, which lands as a plain add, and the result names the target under `target_gone`. When the drain stores the successor, the target becomes replaced: it keeps its content and leaves recall and every listing. A forgotten or replaced target is refused, and the error for a replaced one names its successor. A target with a replacement still queued is refused as well, and the error quotes that replacement's id and text: a second replacement would retire the first on the drain, so the fix is a `replace` of the queued id with text that keeps both corrections. Each flag left off inherits the target's value. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` reads back the earlier text.
+| Flag    | `remember` default | `replace` default | Values                                                 |
+| ------- | ------------------ | ----------------- | ------------------------------------------------------ |
+| `--cat` | `fact`             | Target's category | `preference`, `decision`, `fact`, `insight`, `context` |
+
+`replace <id> "<text>"` checks its target in the store, queues a successor, and preserves the old memory's history. Unlike `remember`, it runs normal [store-opening checks](#where-keys-are-needed), which can require credentials or a probe embedding. Once the worker commits it, recall returns the new version and excludes the old one.
+
+| Target state                               | Behavior                                                                                                                                                           |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Current memory                             | Queue a replacement.                                                                                                                                               |
+| Write still queued in this store           | Queue the successor and wait for the target to finish processing.                                                                                                  |
+| Forgotten or already replaced              | Refuse; an already-replaced error names the successor.                                                                                                             |
+| Replacement already queued                 | Refuse and quote the queued replacement. The fix replaces that queued id with text that keeps both corrections, since a second replacement would retire the first. |
+| Target unavailable when the worker commits | Save the new memory without a replacement link; the worker result reports `target_gone`.                                                                           |
+
+Replacements are processed in queue order within a store. To correct a previous correction, replace its successor. `insights show <id> --history` displays the chain.
 
 ### What remember and replace refuse
 
@@ -148,9 +261,11 @@ Recall prints one line per memory, best first, and prints nothing for an empty r
 
 `id8` is the first 8 characters of the id, and `score` has two decimals. `author` is `-` when unset. `text` is the summary when the memory has one, and the start of the content otherwise. `memman insights show <id>` prints the whole memory.
 
-Compare scores only within the same result page. They have no fixed meaning across queries. Recency ranking always adds the newest memories to the candidates, so a full page does not by itself show a match. If none of the results are relevant, the query may use different wording from the stored memories. Try a query using words from the store. [Chapter 3](design/03-pipelines.md) describes the ranking.
+A score ranks a row against its siblings in one response and means nothing across queries. Recency can surface a memory with no keyword or semantic match, so each returned text needs its own relevance check. [Chapter 3](design/03-pipelines.md#34-read-pipeline-recall) explains the ranking.
 
-`--basic` keeps memories in which every query word appears in the content, and orders them by creation time, newest first.
+`--limit 0` means unlimited results on the scored path but no results with `--basic`. A scored limit over 100 may include both reranked and remaining candidates; their scores use different scales.
+
+`--basic` requires every query word to appear as a substring of the content and returns newest memories first. It skips query embedding and reranking. Store-opening checks still run, so it can require credentials or an embedding probe; see [where keys are needed](#where-keys-are-needed).
 
 **Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker is Voyage (model `MEMMAN_VOYAGE_RERANK_MODEL`, default `rerank-3-lite`), and it needs `MEMMAN_VOYAGE_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
 
@@ -160,9 +275,11 @@ memman config set MEMMAN_RERANK_ENABLED_work false
 
 ### forget
 
-- `forget <id>` soft-deletes a memory: it sets `deleted_at`, and the memory leaves recall and every listing. No command reverses a forget. A replaced memory can be forgotten. `forget` refuses a current memory that replaced one not yet forgotten, because that memory stays retired, and the error names `replace <id> "<new text>"`. It also refuses the id of a write still queued.
+`forget <id>` sets `deleted_at` and excludes the memory from recall. The row stays stored, and no command reverses the action.
 
-Nothing deletes a memory on its own. The store has no cap and no retention score, so a memory stays until an operator forgets it.
+A replaced memory can be forgotten. A current memory whose predecessor is not forgotten cannot, and the error names `replace`, which keeps the correction chain intact. Queued writes cannot be forgotten.
+
+Nothing expires on its own. `insights review` flags memories that may need updating or removal.
 
 ---
 
@@ -174,7 +291,7 @@ memman insights show <id> --history    # the replacement chain through <id>, old
 memman insights review [--limit N]     # memories with quality warnings
 ```
 
-- `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `replaced`, or `forgotten`. A forgotten entry omits the content. An id still in the write queue reports that it lands on the next drain.
+- `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `replaced`, or `forgotten`. A forgotten entry omits the content. An ID still in the write queue reports that processing is pending.
 - `review` checks current memories, newest first, against the same patterns as `quality_warnings`, and stops after `--limit` flagged memories (default 20).
 
 ---
@@ -184,14 +301,15 @@ memman insights review [--limit N]     # memories with quality warnings
 `memman enrich` re-runs enrichment (summary) and the embedding for current memories.
 
 ```bash
-memman enrich               # every current memory
-memman enrich --stale-only  # only stale memories: another prompt or model, or a failed call
-memman enrich --dry-run     # print the count and change nothing
+memman enrich --dry-run     # print the count and change nothing, scheduler running
+memman scheduler stop
+memman enrich --stale-only  # rebuild outdated or incomplete generated fields
+memman scheduler start
 ```
 
-- Both modes need a stopped scheduler (`memman scheduler stop`), except with `--dry-run`. Both run on SQLite and Postgres.
+- Without `--stale-only`, `enrich` processes every current memory. Both modes support SQLite and Postgres and require a stopped scheduler, except with `--dry-run`.
 - The command works in batches of 20 and prints `{processed, remaining}`. `remaining` counts memories still waiting for enrichment after the run.
-- `--stale-only` selects current memories whose `prompt_version` differs from the active one, plus stranded memories. The `prompt_version` is a hash of the enrichment prompt and `MEMMAN_LLM_MODEL`. A stranded memory carries `enrich_attempted_at` but no `enriched_at`: its enrichment call failed, as on a rate limit, and the drain's pending pass no longer takes it. An enriched memory with no `prompt_version` is skipped. `memman status` reports the same count as `stale_insights`.
+- `--stale-only` selects outdated prompt/model versions and incomplete enrichment. It skips an enriched memory with no version marker. `status` reports the same selection count as `stale_insights`.
 - `--progress-jsonl` writes one JSON progress line per memory to stderr.
 - A second rebuild on the same store is refused while one runs.
 
@@ -199,24 +317,32 @@ memman enrich --dry-run     # print the count and change nothing
 
 ## Embedding operations
 
-Each store keeps the embedding model it was created with, recorded as its fingerprint. Recall, the background worker, and `enrich` use the model recorded in the fingerprint. Every command that reads a store, except `doctor`, `embed status`, `embed swap`, `migrate`, and `backup`, also builds the `MEMMAN_EMBED_PROVIDER` client, so that provider's key must be in the env file. [Chapter 4](design/04-lifecycle.md#43-embedding-support) describes the fingerprint.
+Each store records its embedding provider, model, and vector dimension in a **fingerprint**. Recall and the worker use that recorded model. Changing `MEMMAN_EMBED_PROVIDER` alone does not convert existing vectors. [Credential requirements](#where-keys-are-needed) and the [embedding design](design/04-lifecycle.md#43-embedding-support) give the detail.
+
+| Command                                   | Scope                             | Purpose                                                              |
+| ----------------------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `embed status`                            | Selected store                    | Show fingerprint, credentials, and swap progress.                    |
+| `embed swap --to MODEL [--provider NAME]` | Selected SQLite or Postgres store | Change model while recall continues using old vectors until cutover. |
+| `embed swap --resume`                     | Selected store                    | Continue an interrupted swap.                                        |
+| `embed swap --abort`                      | Selected store                    | Discard pending vectors and swap state, before cutover only.         |
+| `embed reembed [--dry-run]`               | All SQLite stores                 | Rewrite vectors using global provider settings.                      |
+
+To change one store's model after configuring the target provider's credentials:
 
 ```bash
-memman embed status                                             # fingerprint, key check, swap progress
-memman embed swap --to voyage-3-large                           # this store, provider from MEMMAN_EMBED_PROVIDER
-memman embed swap --to text-embedding-3-small --provider openai
-memman embed swap --resume                                      # continue a swap
-memman embed swap --abort                                       # discard a swap before cutover
-memman embed reembed                                            # every SQLite store, MEMMAN_EMBED_PROVIDER
-memman embed reembed --dry-run                                  # count what would change
+memman scheduler stop
+memman --store work embed swap --to text-embedding-3-small --provider openai
+memman scheduler start
 ```
+
+After a failed swap, `embed status` shows its state, and `--resume` or `--abort` settles it before writes restart.
 
 **`embed swap`** moves one store (the store the global flags select) to a new model.
 
 - It needs a stopped scheduler, except with `--abort`. Recall keeps reading the old vectors while the swap writes new ones into the `embedding_pending` column in batches of `MEMMAN_EMBED_SWAP_BATCH_SIZE` (default 200).
 - On Postgres, the swap first builds an HNSW index on the new column.
 - The final switch, called cutover, replaces the old vectors in one transaction. Returning to the old model requires another full swap.
-- `--resume` continues an interrupted swap from its recorded cursor. `--abort` drops the new column and the swap state.
+- `--resume` continues an interrupted swap from its recorded cursor. `--abort` discards pending vectors and swap state. Once a swap reaches cutover, `--abort` refuses and `--resume` finishes it, because the cutover may already have committed.
 - `--provider` defaults to `MEMMAN_EMBED_PROVIDER`. The swap leaves `MEMMAN_EMBED_PROVIDER` unchanged.
 
 **`embed reembed`** moves every SQLite store under the data directory to the `MEMMAN_EMBED_PROVIDER` client.
@@ -269,7 +395,7 @@ memman store remove old-project [--yes]
 | Project `CLAUDE.md`     | A directive telling the agent to pass `--store work`     | Claude Code sessions only                                       |
 | `memman store use work` | Writes the global active-store file                      | Every caller on the host. The most recent `use` sets the store. |
 
-Use named stores for separate projects. The scheduler processes only the queue in its configured data directory. Setting a different `MEMMAN_DATA_DIR` for each project creates queues that the scheduler does not process.
+Named stores separate projects. The scheduler drains only the queue in its configured data directory, so a separate `MEMMAN_DATA_DIR` per project creates queues that no scheduler drains.
 
 ### Migrating between SQLite and Postgres
 
@@ -337,7 +463,17 @@ A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_co
 
 **`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
 
-**`log calls`** counts the calls of the agent verbs (`recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `status`, `doctor`) per UTC date and verb, as JSON. Each such call appends one line to `<data dir>/logs/calls.log`: `<UTC start>|<verb>|<store>|<exit code>|<ms>`. The line never holds the call's arguments, and a store name that is not a valid store name is written as `?`. A call that Click rejects while parsing writes no line, and hooks and the worker write none. `--since` takes the same window as `log list`. `meta.malformed` counts lines off that format, such as a write that a full disk cut short, and they count toward no verb. Nothing rotates or trims `calls.log`.
+### Agent call log
+
+`log calls` reports call counts by UTC date and command as JSON. It covers `recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `status`, and `doctor`. `--since` accepts the same time windows as `log list`.
+
+Each call appends a record to `<data dir>/logs/calls.log`:
+
+```text
+<UTC start>|<verb>|<store>|<exit code>|<ms>
+```
+
+Arguments and memory text are excluded. Invalid store names become `?`. Commands rejected during argument parsing, hooks, and worker activity produce no entry. Malformed lines are counted under `meta.malformed` and excluded from command totals. The file is not automatically rotated or trimmed.
 
 **`log worker`** prints the last 50 lines (`--lines N`) of a worker log:
 
@@ -371,12 +507,18 @@ memman scheduler debug on|off|status
 
 `scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `enrich`, `embed swap`, and `embed reembed`.
 
-- **`trigger`** asks systemd or launchd to start a drain and returns `dispatched` without waiting. `memman log worker` shows the outcome. In serve mode `trigger` refuses, and `memman scheduler serve --once` runs one drain.
-- **`interval`** prints the interval, or sets it with `--seconds N`. systemd and launchd need at least 60 seconds. In serve mode the command only records the value. The serve loop takes its interval from `--interval`, then `MEMMAN_INTERVAL`, so a new value applies only when `memman scheduler serve` restarts with `--interval N`. In serve mode an interval of 0 drains without pause.
-- **`install`** installs only the scheduler unit, with no Claude Code integration. It fills every missing setting in the env file the same way `memman install` does, and refuses a flag that conflicts with the file. `--interval` defaults to 60 and must be at least 60.
-- **`uninstall`** removes the scheduler unit, clears `scheduler.state` and `debug.state`, and strips the secret keys from the env file. It leaves the Claude Code integration in place.
-- **`serve`** runs drains in a loop as a long-lived process, such as a container's main process. Hosts without systemd or launchd set `MEMMAN_SCHEDULER_KIND=serve`. The interval comes from `--interval`, then `MEMMAN_INTERVAL` in the env file, then 60. `--once` runs one drain and exits. On SIGTERM or SIGINT the drain stops after the memory in hand, and the process exits 0.
-- **`debug on`** writes `~/.memman/debug.state`, and later drains write a trace to `~/.memman/logs/debug.log` at mode 0600. The trace holds raw LLM requests and responses, including memory content. `debug off` stops the trace and keeps the file. `MEMMAN_DEBUG` in the environment overrides the state file.
+| Command                       | Behavior                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trigger`                     | Ask systemd or launchd to start a drain; return `dispatched` immediately. Use `log worker` to inspect the result. In serve mode, use `serve --once` instead. |
+| `interval`                    | Show the interval, or set it with `--seconds N`. systemd and launchd require at least 60 seconds.                                                            |
+| `install`                     | Install only the scheduler, filling missing settings and refusing conflicting flags. `--interval` defaults to 60 and must be at least 60.                    |
+| `uninstall`                   | Remove the scheduler unit and state files, and strip secret settings. Keep the Claude Code integration.                                                      |
+| `serve`                       | Run drains in the foreground; `--once` processes one drain and exits.                                                                                        |
+| `debug on` / `off` / `status` | Control or inspect worker tracing.                                                                                                                           |
+
+**Serve mode.** Set `MEMMAN_SCHEDULER_KIND=serve` on hosts without systemd or launchd. The loop reads its interval from `--interval`, then the installed `MEMMAN_INTERVAL`, then 60. An interval of zero drains without pausing. In this mode `scheduler interval` only records the value, and a new interval takes effect when the loop restarts with `--interval N`. SIGTERM or SIGINT stops it after the current memory, with exit code zero.
+
+**Debug output.** `debug on` updates `~/.memman/debug.state`. Later drains write `~/.memman/logs/debug.log` at mode 0600, including raw model requests, responses, and memory content. `debug off` stops tracing and retains the file. The process-environment variable `MEMMAN_DEBUG` overrides the state file.
 
 ### Queue
 
@@ -392,18 +534,18 @@ memman scheduler queue purge --stale       # delete stale writes
 
 `memman scheduler queue` with no subcommand runs `queue list`. Each queued write has one status:
 
-| Status    | Meaning                                                                                                                                                                                |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pending` | Waiting for a drain, or claimed by one. A claim older than 600 seconds is taken over by the next drain.                                                                                |
-| `done`    | Stored. The worker deletes done writes about a minute after the drain.                                                                                                                 |
-| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it. |
-| `stale`   | A pending write never attempted and more than 7 days old when `scheduler start` runs or a `serve` process starts. After each drain, the worker returns every stale write to pending.   |
+| Status    | Meaning                                                                                                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending` | Waiting for a drain, or claimed by one. A claim older than 600 seconds is taken over by the next drain.                                                                                           |
+| `done`    | Stored. Later maintenance deletes completed entries older than 60 seconds.                                                                                                                        |
+| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it.            |
+| `stale`   | A pending write never attempted and more than 7 days old when `scheduler start` runs or a `serve` process starts. Drain maintenance returns stale entries to pending when its time budget allows. |
 
 ---
 
 ## Backup
 
-`memman backup` writes snapshots of every store to a directory outside `~/.memman`, such as a Dropbox folder, on a cron schedule. It rotates old bundles and rebuilds a working setup after the loss of `~/.memman`. The target belongs outside `~/.memman`, because losing the host could also lose that directory. memman does not check the target path. Snapshots run while the worker keeps draining: SQLite through the `sqlite3` online backup API and Postgres through `pg_dump -Fc`.
+`memman backup` snapshots all stores and the write queue, either on demand or on a schedule. A target belongs outside the source data directory, on storage that survives its loss. memman does not check the target location. Snapshots use SQLite's online backup API or Postgres `pg_dump -Fc` while the worker continues running.
 
 ```bash
 memman backup run [TARGET]                          # one bundle now (TARGET or MEMMAN_BACKUP_TARGET)
@@ -416,9 +558,19 @@ memman backup restore BUNDLE [--yes]                # rebuild stores and setting
 
 `memman backup` with no subcommand runs `backup status`.
 
-**Schedule.** The cron string has five fields (`min hour dom month dow`) in local time. `backup schedule` writes `MEMMAN_BACKUP_CRON`, `MEMMAN_BACKUP_TARGET`, and `MEMMAN_BACKUP_KEEP` (default 7) to the env file, creates the target directory, and installs a systemd timer (`OnCalendar=` with `Persistent=true`, so a run missed during sleep happens at wake) or a launchd agent (`StartCalendarInterval`). In serve mode the serve loop matches the cron itself. systemd treats a schedule that restricts both day of month and day of week as AND, where cron uses OR, and `backup schedule` warns about it. Each run keeps the newest `MEMMAN_BACKUP_KEEP` bundles.
+### Scheduling and bundles
 
-**Bundle.** Each bundle is one `.tar.gz` plus a `<bundle>.manifest.json` beside it, which `backup list` reads. A store whose snapshot fails is marked `failed` in the manifest, and the rest of the bundle completes. The bundle holds `queue.db`, copied before the stores, so a write still waiting for its drain survives and drains on the restored host. The manifest records the pending count as `queue_pending`. In serve mode the loop drains the queue before the snapshot.
+The cron expression has five fields (`min hour dom month dow`) and uses local time. `backup schedule` saves its settings, creates the target directory, and configures the host scheduler. Each run keeps the newest `MEMMAN_BACKUP_KEEP` bundles, default 7.
+
+| Scheduler  | Backup behavior                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| systemd    | Persistent timer catches runs missed while asleep. Restricting both day-of-month and day-of-week means AND, where cron means OR, and memman warns. |
+| launchd    | Uses `StartCalendarInterval`.                                                                                                                      |
+| Serve loop | Matches the cron expression itself and drains writes before taking a snapshot.                                                                     |
+
+A bundle consists of a `.tar.gz` archive and an adjacent manifest used by `backup list`. Store snapshot failures are listed in the manifest while other snapshots continue.
+
+The queue is copied before the stores, preserving pending writes for the restored installation. The manifest records their count as `queue_pending`. Queue UUIDs prevent restored writes from duplicating memories already captured in a store snapshot.
 
 **Excluded settings.** The bundle's `env.nonsecret` member leaves out the four API keys, `MEMMAN_DEFAULT_POSTGRES_DSN`, every `MEMMAN_POSTGRES_DSN_<store>`, and the host's own `MEMMAN_BACKUP_*` keys. It keeps per-store backend keys and model and provider settings.
 
@@ -444,7 +596,11 @@ memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz
 
 ## Configuration
 
-**The env file.** memman reads every installed setting from `<data dir>/env` (default `~/.memman/env`), a `KEY=VALUE` file at mode 0600. The `--data-dir` flag moves this file together with the stores, the queue, and `memman.log`. Blank lines and `#` comments are skipped, one pair of surrounding quotes is stripped, and `${VAR}` is not expanded. At run time memman ignores the shell for these keys, so a stale export cannot override the file. Each command reads the file when it starts, and a `serve` process reads it again before each drain.
+### Settings file
+
+Installed settings come from `<data dir>/env`, defaulting to `~/.memman/env`. Shell exports do not override those settings at runtime. Each command reads the file at startup; a serve process reloads it before each drain.
+
+The file uses `KEY=VALUE` entries and mode 0600. Blank lines and comments are ignored, surrounding quotes are stripped, and `${VAR}` is not expanded. `--data-dir` moves the settings file together with the stores, queue, and worker log.
 
 **Install precedence.** `memman install` sets each key from the first source that has a value:
 
@@ -453,7 +609,20 @@ memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz
 3. the shell: the `MEMMAN_` name, then the vendor name for three keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, and `OPENAI_API_KEY` for `MEMMAN_OPENAI_EMBED_API_KEY`),
 4. the included default (`INSTALL_DEFAULTS` in `src/memman/config.py`).
 
-**Process-control variables.** `MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_AUTHOR`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, and `MEMMAN_WORKER` are never written to the env file. The component that uses each one reads it from the process environment. `MEMMAN_AUTHOR` names who issues a write and falls back to the login name. memman records it on the queued write so the drain preserves the identity of the user who submitted it.
+### Process-control variables
+
+These come from the process environment and are not installed in the settings file:
+
+| Variable                | Purpose                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`       | Select the settings and data directory.                           |
+| `MEMMAN_STORE`          | Select a store for this process.                                  |
+| `MEMMAN_AUTHOR`         | Identify the caller submitting a memory; default to the OS login. |
+| `MEMMAN_DEBUG`          | Override the debug state file.                                    |
+| `MEMMAN_SCHEDULER_KIND` | Override scheduler detection, including serve mode.               |
+| `MEMMAN_WORKER`         | Mark a worker process for logging.                                |
+
+The queue preserves the author supplied at submission time.
 
 **Reading and changing settings.**
 
@@ -505,6 +674,16 @@ These variables are not installable. The component that uses each one reads it f
 
 ---
 
-## Architecture
+## Troubleshooting
 
-[Chapter 3](design/03-pipelines.md) describes the write and recall pipelines.
+| Symptom                                      | Check                                           | Next step                                                                               |
+| -------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| A new memory does not appear in recall       | `scheduler status`, then `scheduler queue list` | Wait for processing; inspect a failed entry and fix its reported error before retrying. |
+| Writes report that the scheduler is stopped  | `scheduler status`                              | Run `scheduler start` when maintenance is finished.                                     |
+| Recall warns about embedding or reranking    | `embed status`, then provider settings          | Restore the required key or endpoint; reranking can be disabled separately.             |
+| Even `recall --basic` fails on a missing key | Global embedding provider settings              | Supply the key required during store opening.                                           |
+| Doctor reports incomplete enrichment         | `doctor --text`                                 | Stop the scheduler, run `enrich --stale-only`, then restart it.                         |
+| A model swap was interrupted                 | `embed status`                                  | Resume or abort the swap.                                                               |
+| Claude Code has no memory reminders          | `doctor --text`                                 | Re-run `memman install` and start a new session.                                        |
+
+Commands in this table take the `memman` prefix. `doctor` makes live provider probes, and the queue and worker logs show processing without them.
