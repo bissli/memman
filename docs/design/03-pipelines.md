@@ -172,7 +172,7 @@ anchor  = (rrf - minimum rrf) / (maximum rrf - minimum rrf)
 score   = (0.25 * keyword + 0.45 * similarity + 0.15 * anchor) / 0.85
 ```
 
-The raw weights are `_RERANK_WEIGHTS_RAW`, divided by their sum so the used weights sum to 1.
+The raw weights are `_RERANK_WEIGHTS_RAW`, divided by their sum so the used weights sum to 1. The division rescales the printed score and changes no ranking. The raw values are hand-chosen defaults. No labeled evaluation set is large enough to fit or certify other values.
 
 With no query terms, the keyword term is zero. With equal RRF scores, the anchor term is zero. Missing vectors and nonpositive cosines contribute zero similarity. Candidates sort by the combined score.
 
@@ -186,8 +186,9 @@ The default model is `rerank-3-lite`. `MEMMAN_RERANK_ENABLED_<store>` overrides 
 
 Reranking changes what the blend weights decide:
 
+- With more than 100 candidates, the weights decide which ones reach the reranker. In a store holding at least 100 memories with a positive cosine to the query, the vector channel alone fills 100 slots, and keyword and recency hits outside it push the pool past 100.
 - With 100 or fewer candidates, the reranker rescores all of them, and the weights have no effect on the final order.
-- With more than 100, the weights decide which candidates reach the reranker.
+- When reranking does not run (a query of two or fewer words, reranking disabled for the store, or a failed request), the weights set the final order.
 
 A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
 
