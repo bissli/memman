@@ -27,7 +27,8 @@ from memman.queue import last_worker_run, queue_db
 from memman.queue import stats as queue_stats
 from memman.setup import scheduler as sch
 from memman.setup.deploy import is_asset_link
-from memman.setup.settings import add_claude_hooks_selective, read_json_file
+from memman.setup.settings import add_claude_hooks_selective
+from memman.setup.settings import memman_hook_triples, read_json_file
 from memman.store import factory
 from memman.store.backend import Backend
 
@@ -467,45 +468,6 @@ def check_env_permissions() -> dict[str, Any]:
     return {'name': 'env_permissions', 'status': status, 'detail': detail}
 
 
-def _memman_hook_pairs(data: dict[str, Any]) -> set[tuple[str, str, str]]:
-    """Collect one triple per memman-owned hook command.
-
-    Parameters
-    ----------
-    data : dict
-        Parsed Claude Code settings, or the dict
-        `add_claude_hooks_selective` has just filled.
-
-    Returns
-    -------
-    set[tuple[str, str, str]]
-        `(event, matcher, command)` per memman command, the matcher
-        empty where the event takes none.
-
-    Notes
-    -----
-    - Ownership is read off the command string alone: every memman
-      entry names a script under the memman hooks directory, and a
-      foreign entry in the same event must not be reported as drift.
-    """
-    pairs: set[tuple[str, str, str]] = set()
-    hooks = data.get('hooks')
-    if not isinstance(hooks, dict):
-        return pairs
-    for event, arr in hooks.items():
-        if not isinstance(arr, list):
-            continue
-        for entry in arr:
-            if not isinstance(entry, dict):
-                continue
-            matcher = str(entry.get('matcher', ''))
-            for hook in entry.get('hooks', []):
-                command = str(hook.get('command', ''))
-                if 'memman' in command:
-                    pairs.add((event, matcher, command))
-    return pairs
-
-
 def check_claude_hooks() -> dict[str, Any]:
     """Compare registered Claude Code hooks against what install writes.
 
@@ -534,8 +496,8 @@ def check_claude_hooks() -> dict[str, Any]:
     add_claude_hooks_selective(
         expected_data, str(config_dir / 'hooks' / 'memman'),
         remind=True, compact=True, task_recall=True, exit_plan=True)
-    expected = _memman_hook_pairs(expected_data)
-    live = _memman_hook_pairs(read_json_file(str(settings_path)))
+    expected = memman_hook_triples(expected_data)
+    live = memman_hook_triples(read_json_file(str(settings_path)))
     # An unrelated Claude installation is not missing memman hooks.
     # Derive expected script names from the installer, and retain drift
     # checks for partial installs even when settings.json is absent.

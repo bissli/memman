@@ -1,6 +1,7 @@
 """Tests for memman.setup - settings, markdown, detection.
 """
 
+import copy
 import html
 import inspect
 import json
@@ -263,7 +264,7 @@ class TestHookManagement:
         data = {
             'hooks': {
                 'SessionStart': [
-                    {'hooks': [{'type': 'command', 'command': '/path/to/memman/prime.sh'}]},
+                    {'hooks': [{'type': 'command', 'command': '/path/to/hooks/memman/prime.sh'}]},
                     {'hooks': [{'type': 'command', 'command': '/other/tool.sh'}]},
                 ],
             },
@@ -327,7 +328,7 @@ class TestHookManagement:
                 'PreToolUse': [
                     {
                         'hooks': [{'type': 'command',
-                                   'command': '/memman/task_recall.sh'}],
+                                   'command': '/hooks/memman/task_recall.sh'}],
                         'matcher': 'Task',
                         },
                     {
@@ -365,6 +366,121 @@ class TestHookManagement:
         entries = data['hooks']['PreToolUse']
         assert len(entries) == 1
         assert entries[0]['matcher'] == 'Bash'
+
+    def test_remove_claude_hooks_keeps_foreign_hook_in_shared_entry(self):
+        """Verify a foreign hook sharing an entry with memman survives.
+
+        Mutation: filtering whole entries, which deletes prompt-nudge.py
+            along with user_prompt.sh.
+        Oracle: the one-entry settings from the bug report, with only
+            prompt-nudge.py left in the entry.
+        """
+        data = {'hooks': {'UserPromptSubmit': [{'hooks': [
+            {'type': 'command', 'command': '~/.claude/hooks/prompt-nudge.py'},
+            {'type': 'command',
+             'command': '~/.claude/hooks/memman/user_prompt.sh'},
+            ]}]}}
+        remove_claude_hooks(data)
+        assert data == {'hooks': {'UserPromptSubmit': [{'hooks': [
+            {'type': 'command', 'command': '~/.claude/hooks/prompt-nudge.py'},
+            ]}]}}
+
+    def test_add_claude_hooks_rerun_keeps_entry_order(self):
+        """Verify a rerun of setup leaves settings unchanged.
+
+        Mutation: removing memman entries and appending them again,
+            which moves them behind the foreign entries on each run.
+        Oracle: a deep copy of the settings a first run produced, with
+            a foreign PreToolUse entry placed between memman entries.
+        """
+        data = {}
+        add_claude_hooks_selective(
+            data, '/hooks/memman', remind=True, compact=True,
+            task_recall=True, exit_plan=True)
+        data['hooks']['PreToolUse'].insert(1, {
+            'matcher': 'Bash',
+            'hooks': [{'type': 'command', 'command': '/other/enforce.py'}],
+            })
+        before = copy.deepcopy(data)
+        add_claude_hooks_selective(
+            data, '/hooks/memman', remind=True, compact=True,
+            task_recall=True, exit_plan=True)
+        assert data == before
+
+    def test_add_claude_hooks_keeps_foreign_hook_in_shared_entry(self):
+        """Verify setup keeps a foreign hook listed beside a memman hook.
+
+        Mutation: filtering whole entries before re-adding, which leaves
+            only user_prompt.sh as the bug report observed.
+        Oracle: the bug report's entry, unchanged by the run.
+        """
+        entry = {'hooks': [
+            {'type': 'command', 'command': '~/.claude/hooks/prompt-nudge.py'},
+            {'type': 'command', 'command': '/hooks/memman/user_prompt.sh'},
+            ]}
+        data = {'hooks': {'UserPromptSubmit': [copy.deepcopy(entry)]}}
+        add_claude_hooks_selective(data, '/hooks/memman', remind=True)
+        assert data['hooks']['UserPromptSubmit'] == [entry]
+
+    def test_add_claude_hooks_replaces_stale_matcher(self):
+        """Verify a rerun drops a memman hook registered under an old matcher.
+
+        Mutation: keeping every memman hook already present and only
+            appending missing ones, which leaves the old Task entry live
+            beside the new Agent|Task entry.
+        Oracle: the installer's own matcher, alone in PreToolUse.
+        """
+        data = {'hooks': {'PreToolUse': [{
+            'matcher': 'Task',
+            'hooks': [{'type': 'command',
+                       'command': '/hooks/memman/task_recall.sh'}],
+            }]}}
+        add_claude_hooks_selective(data, '/hooks/memman', task_recall=True)
+        assert [e['matcher'] for e in data['hooks']['PreToolUse']] \
+            == ['Agent|Task']
+
+    def test_remove_claude_hooks_drops_retired_stop_hook(self):
+        """Verify removal reaches an event memman no longer registers.
+
+        Mutation: walking only the events current installs write, so a
+            Stop hook from an older install survives install and
+            uninstall while doctor says install repairs it.
+        Oracle: a Stop entry naming stop.sh under the memman hooks dir.
+        """
+        data = {'hooks': {'Stop': [{'hooks': [
+            {'type': 'command', 'command': '~/.claude/hooks/memman/stop.sh'},
+            ]}]}}
+        remove_claude_hooks(data)
+        assert data == {}
+
+    def test_remove_claude_hooks_keeps_hook_under_memman_checkout(self):
+        """Verify a user hook whose path names memman is left alone.
+
+        Mutation: judging ownership by 'memman' anywhere in the command,
+            which deletes a user's hook under a memman source checkout.
+        Oracle: a hook under ~/code/memman/scripts, outside the memman
+            hooks directory.
+        """
+        data = {'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': '~/code/memman/scripts/lint.sh'},
+            ]}]}}
+        before = copy.deepcopy(data)
+        remove_claude_hooks(data)
+        assert data == before
+
+    def test_remove_claude_hooks_leaves_non_string_command(self):
+        """Verify a hand-edited non-string command is left, not a crash.
+
+        Mutation: judging ownership on str(command), which admits a list
+            and raises TypeError hashing it into the keep lookup.
+        Oracle: the settings unchanged, since a list is no memman command.
+        """
+        data = {'hooks': {'Stop': [{'hooks': [
+            {'type': 'command', 'command': ['/hooks/memman/x.sh']},
+            ]}]}}
+        before = copy.deepcopy(data)
+        remove_claude_hooks(data)
+        assert data == before
 
     def test_add_claude_hooks_appends_to_existing_pretooluse(self):
         """Verify task_recall appends to an existing PreToolUse list.

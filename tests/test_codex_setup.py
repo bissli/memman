@@ -64,16 +64,19 @@ def test_detect_codex_sources(monkeypatch, tmp_path, codex_env):
 def test_skill_lifecycle_preserves_other_files(codex_env):
     """Verify install and uninstall are repeatable and touch only the link.
 
-    Mutation: uninstall_codex removes the whole skills dir, install_codex
-    rewrites config.toml, or a repeated call raises because unlink lost
-    missing_ok.
-    Oracle: A config.toml and a sibling skill written before the act, and the
-    packaged SKILL.md read from the asset dir.
+    Mutation: uninstall_codex removes the whole skills or rules dir,
+    install_codex rewrites config.toml or another rules file, or a repeated
+    call raises because unlink lost missing_ok.
+    Oracle: A config.toml, a sibling rules file, and a sibling skill written
+    before the act, and the packaged SKILL.md read from the asset dir.
     """
     config = Path(codex_env['config_dir'])
     config.mkdir()
     settings = config / 'config.toml'
     settings.write_text('# user configuration\n')
+    user_rules = config / 'rules' / 'default.rules'
+    user_rules.parent.mkdir()
+    user_rules.write_text('prefix_rule(pattern=["git"], decision="allow")\n')
     skills = Path(codex_env['skills_dir'])
     other = skills / 'other' / 'SKILL.md'
     other.parent.mkdir(parents=True)
@@ -86,6 +89,8 @@ def test_skill_lifecycle_preserves_other_files(codex_env):
     assert link.is_symlink()
     assert (link / 'SKILL.md').read_text() == (asset / 'SKILL.md').read_text()
     assert settings.read_text() == '# user configuration\n'
+    assert user_rules.read_text() \
+        == 'prefix_rule(pattern=["git"], decision="allow")\n'
 
     uninstall_codex(codex_env)
     uninstall_codex(codex_env)
@@ -93,6 +98,8 @@ def test_skill_lifecycle_preserves_other_files(codex_env):
     assert (asset / 'SKILL.md').is_file()
     assert other.read_text() == 'another skill'
     assert settings.read_text() == '# user configuration\n'
+    assert user_rules.read_text() \
+        == 'prefix_rule(pattern=["git"], decision="allow")\n'
 
 
 def test_install_allows_agent_verbs_and_uninstall_revokes_them(codex_env):

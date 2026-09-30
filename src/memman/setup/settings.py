@@ -118,22 +118,92 @@ def _contains_memman(v: Any) -> bool:
     return False
 
 
-def remove_claude_hooks(data: dict) -> None:
-    """Remove all memman-related entries from Claude Code hooks.
+def _is_memman_hook(hook: Any) -> bool:
+    """True for a hook whose command runs a script in a memman hooks dir.
+    """
+    return isinstance(hook, dict) \
+        and isinstance(hook.get('command'), str) \
+        and '/hooks/memman/' in hook['command']
+
+
+def memman_hook_triples(data: dict) -> set[tuple[str, str, str]]:
+    """Collect one triple per memman-owned hook command.
+
+    Parameters
+    ----------
+    data : dict
+        Parsed Claude Code settings.
+
+    Returns
+    -------
+    set[tuple[str, str, str]]
+        `(event, matcher, command)` per memman command, the matcher
+        empty where the entry has none. A command is memman's when it
+        runs a script under a `hooks/memman/` directory; any other
+        command, even one whose path names memman, is foreign.
+    """
+    triples: set[tuple[str, str, str]] = set()
+    hooks = data.get('hooks')
+    if not isinstance(hooks, dict):
+        return triples
+    for event, arr in hooks.items():
+        if not isinstance(arr, list):
+            continue
+        for entry in arr:
+            if not isinstance(entry, dict) \
+                    or not isinstance(entry.get('hooks'), list):
+                continue
+            matcher = str(entry.get('matcher', ''))
+            triples.update(
+                (event, matcher, hook['command'])
+                for hook in entry['hooks'] if _is_memman_hook(hook))
+    return triples
+
+
+def remove_claude_hooks(
+        data: dict,
+        keep: frozenset[tuple[str, str, str]] = frozenset()) -> None:
+    """Remove memman hooks from Claude Code settings, one hook at a time.
+
+    Parameters
+    ----------
+    data : dict
+        Parsed settings, mutated in place. Every event is walked. A
+        foreign hook, and the order of entries and hooks, is kept. An
+        entry is dropped only when its last hook was memman's, and an
+        event or `hooks` only when emptied.
+    keep : frozenset[tuple[str, str, str]], default empty
+        `(event, matcher, command)` triples, as `memman_hook_triples`
+        gives them, to leave in place.
     """
     hooks = data.get('hooks')
     if not isinstance(hooks, dict):
         return
-    for key in ('UserPromptSubmit', 'SessionStart',
-                'PreCompact', 'PreToolUse'):
-        arr = hooks.get(key)
+    for event in list(hooks):
+        arr = hooks[event]
         if not isinstance(arr, list):
             continue
-        filtered = [entry for entry in arr if not _contains_memman(entry)]
-        if not filtered:
-            hooks.pop(key, None)
+        entries = []
+        for entry in arr:
+            if not isinstance(entry, dict) \
+                    or not isinstance(entry.get('hooks'), list):
+                entries.append(entry)
+                continue
+            matcher = str(entry.get('matcher', ''))
+            kept = [
+                hook for hook in entry['hooks']
+                if not _is_memman_hook(hook)
+                or (event, matcher, hook['command']) in keep
+                ]
+            if len(kept) == len(entry['hooks']):
+                entries.append(entry)
+            elif kept:
+                entry['hooks'] = kept
+                entries.append(entry)
+        if entries:
+            hooks[event] = entries
         else:
-            hooks[key] = filtered
+            hooks.pop(event)
     if not hooks:
         data.pop('hooks', None)
 
@@ -149,18 +219,18 @@ def add_claude_hooks_selective(
     Parameters
     ----------
     data : dict
-        Parsed settings, mutated in place. Existing memman hooks are
-        removed first.
+        Parsed settings, mutated in place. A memman hook already
+        registered as wanted stays where it is, a memman hook no
+        longer wanted is removed, and a missing one is appended as its
+        own entry. Foreign hooks and entry order are kept, so a rerun
+        leaves the settings unchanged.
     hooks_dir : str
         Directory holding the hook scripts.
     remind, compact, task_recall, exit_plan : bool
         Also register the user-prompt, pre-compact, task-recall, and
         exit-plan hooks. The session-start prime hook is always set.
     """
-    remove_claude_hooks(data)
-    hooks = data.setdefault('hooks', {})
     home = str(Path.home())
-
     registrations = [
         (True, 'SessionStart', 'prime.sh', None),
         (remind, 'UserPromptSubmit', 'user_prompt.sh', None),
@@ -168,12 +238,21 @@ def add_claude_hooks_selective(
         (task_recall, 'PreToolUse', 'task_recall.sh', 'Agent|Task'),
         (exit_plan, 'PreToolUse', 'exit_plan.sh', 'ExitPlanMode'),
         ]
+    wanted = []
     for enabled, event, script, matcher in registrations:
         if not enabled:
             continue
         command = os.path.join(hooks_dir, script)
         if command.startswith(home):
             command = '~' + command[len(home):]
+        wanted.append((event, matcher or '', command))
+
+    remove_claude_hooks(data, keep=frozenset(wanted))
+    present = memman_hook_triples(data)
+    hooks = data.setdefault('hooks', {})
+    for event, matcher, command in wanted:
+        if (event, matcher, command) in present:
+            continue
         entry = {
             'hooks': [
                 {

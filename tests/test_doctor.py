@@ -1355,3 +1355,22 @@ class TestClaudeHooksCheck:
         result = check_claude_hooks()
         assert result['status'] == 'warn'
         assert any('compact.sh' in m for m in result['detail']['missing'])
+
+    def test_foreign_hook_under_memman_checkout_passes(
+            self, tmp_path, monkeypatch):
+        """Verify a user hook whose path names memman is not drift.
+
+        Mutation: judging ownership by 'memman' anywhere in the command,
+            which reports a user's own hook under a memman source
+            checkout as extra, a drift install never repairs.
+        Oracle: a hook under ~/code/memman/scripts, outside the memman
+            hooks directory.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path)
+        settings = tmp_path / '.claude' / 'settings.json'
+        data = json.loads(settings.read_text())
+        data['hooks']['Stop'] = [{'hooks': [
+            {'type': 'command', 'command': '~/code/memman/scripts/lint.sh'}]}]
+        settings.write_text(json.dumps(data))
+        assert check_claude_hooks()['status'] == 'pass'
