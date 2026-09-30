@@ -92,7 +92,6 @@ norecursedirs = [
   "venv",
   "{arch}",
   "e2e",
-  "experiments",
 ]
 markers = [
   "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",

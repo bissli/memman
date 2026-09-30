@@ -159,8 +159,8 @@ def test_page_joins_whitespace_inside_an_author(mm_runner):
     r"""Verify an author holding whitespace stays one field on one line.
 
     Mutation: printing the author raw, so `MEMMAN_AUTHOR='Jane Doe'`
-        reads as author `Jane` and pushes `Doe` into the text, and a
-        line break in it splits the row across two lines.
+        prints a line off the page format, and a line break in it
+        splits the row across two lines.
     Oracle: hand-computed `Jane_Doe_Smith` from the seeded
         `'Jane Doe\nSmith'`, and the seeded content as the text.
     """
@@ -462,8 +462,9 @@ def test_live_mappers_read_every_trailing_field(backend):
 
     Mutation: a stale positional index in `node._scan_insight` or
         `postgres._row_to_insight` after a column drop, which reads a
-        neighbor's value into a field (summary into deleted_at,
-        queue_uuid into replaced_by) with no error.
+        neighbor's value into a field (created_at into updated_at,
+        summary into deleted_at, queue_uuid into replaced_by) with no
+        error.
     Oracle: a distinct hand-set value per column, read back through
         `get_include_deleted` on both backends.
     """
@@ -471,6 +472,8 @@ def test_live_mappers_read_every_trailing_field(backend):
         id='fidelity-row', content='fidelity row',
         queue_uuid='queue-f', author='carol'))
     stamps = {
+        'created_at': datetime(2026, 1, 2, 3, 4, 4, tzinfo=timezone.utc),
+        'updated_at': datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
         'summary': 'fidelity summary',
         'enrich_attempted_at': datetime(
             2026, 1, 2, 3, 4, 1, tzinfo=timezone.utc),
@@ -483,6 +486,8 @@ def test_live_mappers_read_every_trailing_field(backend):
     got = backend.nodes.get_include_deleted('fidelity-row')
 
     assert got.content == 'fidelity row'
+    assert got.created_at == stamps['created_at']
+    assert got.updated_at == stamps['updated_at']
     assert got.summary == 'fidelity summary'
     assert got.enrich_attempted_at == stamps['enrich_attempted_at']
     assert got.enriched_at == stamps['enriched_at']

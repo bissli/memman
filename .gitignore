@@ -35,10 +35,6 @@ dist/
 .testdata/
 M/
 
-# experiments/ stays local.
-experiments/*
-tests/experiments/
-
 # Local planning / scratch documents (not for git)
 /*.plan.md
 

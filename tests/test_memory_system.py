@@ -33,7 +33,7 @@ def runner(cross_backend_runner):
     return cross_backend_runner
 
 
-def remember(runner_tuple, content, **flags):
+def remember(runner_tuple, content):
     """Store an insight, return first fact dict from output.
 
     `remember` queues + auto-drains via the CliRunner wrapper, then
@@ -41,10 +41,7 @@ def remember(runner_tuple, content, **flags):
     `queue_uuid` so existing assertions like `data['id']` keep
     working.
     """
-    args = ['remember', content]
-    for k, v in flags.items():
-        args.extend([f'--{k}', str(v)])
-    result = invoke(runner_tuple, args)
+    result = invoke(runner_tuple, ['remember', content])
     assert result.exit_code == 0, result.output
     return parse_remember(result, runner_tuple)
 

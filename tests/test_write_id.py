@@ -137,7 +137,8 @@ def test_replace_refuses_a_write_queued_for_another_store(mm_runner):
 def test_show_of_a_queued_write_says_it_is_queued(mm_runner):
     """`insights show` on a write the drain has not stored names the queue.
 
-    Mutation: answering `not found` for a write still in the queue.
+    Mutation: answering `not found` for a write still in the queue, or
+        naming something other than the write's full id.
     Oracle: the refusal text, with the write known to be queued.
     """
     first = json.loads(invoke(
@@ -146,7 +147,7 @@ def test_show_of_a_queued_write_says_it_is_queued(mm_runner):
     r = invoke(mm_runner, ['insights', 'show', first['id']])
 
     assert r.exit_code != 0
-    assert 'still queued' in r.output
+    assert f"insight {first['id']} is still queued" in r.output
 
 
 @pytest.mark.no_auto_drain
@@ -155,7 +156,7 @@ def test_forget_of_a_queued_write_says_it_is_queued(mm_runner):
 
     Mutation: `forget` resolving only stored rows, so it answers `not
         found` for the id `remember` just printed and the write lands
-        anyway.
+        anyway, or naming something other than the write's full id.
     Oracle: the refusal text, with the write known to be queued.
     """
     first = json.loads(invoke(
@@ -164,7 +165,7 @@ def test_forget_of_a_queued_write_says_it_is_queued(mm_runner):
     r = invoke(mm_runner, ['forget', first['id']])
 
     assert r.exit_code != 0
-    assert 'still queued' in r.output
+    assert f"insight {first['id']} is still queued" in r.output
 
 
 def _share_prefix_with_a_stored_row(mm_runner):
@@ -219,3 +220,28 @@ def test_show_refuses_a_prefix_a_queued_and_a_stored_row_share(mm_runner):
     assert r.exit_code != 0
     assert f'prefix {prefix!r} matches a queued write and a stored row' \
         in r.output
+
+
+@pytest.mark.no_auto_drain
+def test_show_reads_a_write_stored_while_still_queued(mm_runner):
+    """`insights show` reads a write the drain stored but has not closed.
+
+    Mutation: comparing the stored id against anything but the queued
+        id whole (such as its first character), so one write matched in
+        both places is refused as a queued write and a stored row.
+    Oracle: the stored content, for an id pending and stored at once.
+    """
+    _, data_dir = mm_runner
+    first = json.loads(invoke(
+        mm_runner, ['remember', 'etcd compacts revisions']).output)
+    force_drain(data_dir)
+    with queue_db(data_dir) as conn:
+        reopened = conn.execute(
+            "update queue set status = 'pending' where queue_uuid = ?",
+            (first['id'],)).rowcount
+    assert reopened == 1
+
+    r = invoke(mm_runner, ['insights', 'show', first['id']])
+
+    assert r.exit_code == 0, r.output
+    assert 'etcd compacts revisions' in r.output

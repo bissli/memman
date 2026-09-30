@@ -58,10 +58,10 @@ A replacement always creates a new memory with its own content, author, timestam
 
 ### Failure and retry
 
-| Failure                                                                                                                | Outcome                                                                                                                       |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Store cannot open; required configuration or embedding credentials are missing; fingerprint changes; transaction fails | Retry the queued write.                                                                                                       |
-| LLM request or a handled embedding HTTP/runtime error persists after client retries                                    | Save the memory with incomplete generated fields.                                                                             |
+| Failure                                                                                                                | Outcome                                                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store cannot open; required configuration or embedding credentials are missing; fingerprint changes; transaction fails | Retry the queued write.                                                                                                                                                                              |
+| LLM request or a handled embedding HTTP/runtime error persists after client retries                                    | Save the memory with incomplete generated fields.                                                                                                                                                    |
 | Neither enrichment response contains a JSON object                                                                     | Save an empty summary. With a saved vector, this counts as completed enrichment, so later drains do not repeat the paid call. A summary at least 85% as long as the content is dropped the same way. |
 
 Queue retries wait 60, 120, 240, and 480 seconds. After five failed attempts, the entry stays `failed` until an explicit retry ([queue commands](../USAGE.md#queue)).
@@ -131,7 +131,7 @@ The drain reports totals in `llm_usage`. Debug events include per-entry usage in
 
 ![Keyword, vector, and recency retrieval followed by reranking](../diagrams/05-recall-pipeline.drawio.png)
 
-Recall considers current memories only. The [command reference](../USAGE.md#recall) describes its output, filters, and limits.
+Recall considers current memories only. The [command reference](../USAGE.md#recall) describes its output and limits.
 
 ### Basic matching
 
