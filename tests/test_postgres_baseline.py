@@ -357,7 +357,6 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         ins = Insight(
             id=f'hs-{i:02d}',
             content=f'document {i} alpha bravo charlie',
-            category='fact',
             created_at=None, updated_at=None,
             deleted_at=None)
         backend.nodes.insert(ins)

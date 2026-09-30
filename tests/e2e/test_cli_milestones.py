@@ -230,8 +230,7 @@ class TestM1CRUD:
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
-             f'User prefers Qdrant for vector DB recall-keyword-{unique}',
-             '--cat', 'preference'],
+             f'User prefers Qdrant for vector DB recall-keyword-{unique}'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
         out = run_cli(['recall', '--basic', f'recall-keyword-{unique}'],
@@ -256,8 +255,7 @@ class TestM1CRUD:
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
-             f'User prefers Redis for cache-probe-{unique}',
-             '--cat', 'preference'],
+             f'User prefers Redis for cache-probe-{unique}'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
 
@@ -268,7 +266,7 @@ class TestM1CRUD:
         assert lines, 'recency anchors must answer even a no-match query'
         for line in lines:
             fields = line.split(' | ', 1)[0].split(' ')
-            assert len(fields) == 5, f'line off the page format: {line!r}'
+            assert len(fields) == 4, f'line off the page format: {line!r}'
             float(fields[1])
 
     @pytest.mark.requires_live_keys
@@ -276,15 +274,12 @@ class TestM1CRUD:
                                live_keys):
         """Verify `status` counts the insights written earlier.
 
-        Mutation: counting zero insights, or dropping the
-            per-category breakdown.
-        Oracle: at least one insight, and one in `preference`,
-            written by the earlier recall tests.
+        Mutation: counting zero insights.
+        Oracle: at least one insight, written by the earlier recall
+            tests.
         """
         data = json_out(run_cli(['status'], home_dir, m1_dir))
         assert_jq_gte(data, 'total_insights', 1, 'total >= 1 after writes')
-        assert_jq_gte(data, 'by_category.preference', 1,
-                      'preference count >= 1')
 
     @pytest.mark.requires_live_keys
     def test_forget_soft_delete(self, home_dir: Path, m1_dir: Path,
@@ -299,8 +294,7 @@ class TestM1CRUD:
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
-             f'User prefers PostgreSQL for forget-test-{unique}',
-             '--cat', 'preference'],
+             f'User prefers PostgreSQL for forget-test-{unique}'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
         insight_id = find_insight_by_recall(
@@ -327,8 +321,7 @@ class TestM3Search:
         unique = uuid.uuid4().hex[:8]
         run_cli(
             ['remember',
-             f'Chose Qdrant because of Rust performance basic-{unique}',
-             '--cat', 'decision'],
+             f'Chose Qdrant because of Rust performance basic-{unique}'],
             home_dir, m3_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m3_dir)
         out = run_cli(['recall', '--basic', f'basic-{unique}'],

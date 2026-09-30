@@ -303,7 +303,6 @@ _BASELINE_SCHEMA = """
 create table if not exists insights (
     id          text primary key,
     content     text not null,
-    category    text default 'fact',
     summary     text,
     embedding   blob,
     embedding_pending blob,
@@ -319,7 +318,6 @@ create table if not exists insights (
     author      text
 );
 
-create index if not exists idx_insights_category on insights(category);
 create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);

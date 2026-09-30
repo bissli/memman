@@ -76,15 +76,16 @@ class TestInsightToDeltaDict:
     """
 
     def test_includes_content_and_metadata(self):
-        """The delta dict carries content and category.
+        """The delta dict carries content and summary.
 
-        Mutation: dropping the content or category key from the dict.
+        Mutation: dropping the content or summary key from the dict.
         Oracle: the two fields the insight was built with.
         """
-        ins = make_insight(id='d-1', content='hello', category='fact')
+        ins = make_insight(
+            id='d-1', content='hello', summary='greeting')
         d = insight_to_delta_dict(ins)
         assert d['content'] == 'hello'
-        assert d['category'] == 'fact'
+        assert d['summary'] == 'greeting'
 
     def test_round_trips_through_json(self):
         """The delta dict is JSON-serializable as written.

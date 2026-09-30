@@ -82,7 +82,6 @@ def test_stats_reports_current_replaced_and_deleted_separately(backend):
             stats.deleted_insights) == (3, 1, 2)
     assert (stats.total_insights + stats.replaced_insights
             + stats.deleted_insights) == backend.nodes.count_total()
-    assert sum(stats.by_category.values()) == 3
 
 
 def test_pending_enrich_count_matches_its_id_list_after_replacement(

@@ -60,7 +60,7 @@ from memman.store.errors import BackendError
 from memman.store.errors import ConfigError as StoreConfigError
 from memman.store.factory import known_backends, list_stores
 from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
-from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
+from memman.store.model import Insight, format_timestamp
 from memman.store.model import insight_to_delta_dict, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.node import count_active_insights, get_stats
@@ -881,9 +881,8 @@ def config_show(ctx: click.Context) -> None:
 @claude_callable
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
-@click.option('--cat', default='fact', help='Category')
 @click.pass_context
-def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
+def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     """Queue a new memory and list the current rows it may correct.
 
     \b
@@ -891,8 +890,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     ----------
     content : str
         The memory text, stored as one row exactly as typed.
-    cat : str
-        Category; `fact` when unflagged.
 
     \b
     Notes
@@ -910,7 +907,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     \b
     Examples
     --------
-    memman remember "the retry cap is five" --cat decision
+    memman remember "the retry cap is five"
     """  # noqa: D301, D410, D411
     _require_started('write')
     content_str = ' '.join(content)
@@ -918,11 +915,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     refusal = _content_refusal_message(content_str)
     if refusal:
         raise click.ClickException(refusal)
-
-    if cat not in VALID_CATEGORIES:
-        valid = ', '.join(sorted(VALID_CATEGORIES))
-        raise click.ClickException(
-            f'invalid category {cat!r}; valid: {valid}')
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -933,7 +925,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            category=cat,
             author=author)
     reply = {
         'action': 'queued',
@@ -1310,8 +1301,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 row_id=row.id,
                 store=row.store,
                 attempts=row.attempts,
-                content_len=len(row.content),
-                category=row.category)
+                content_len=len(row.content))
 
             store_ctx = store_contexts.get(row.store)
             if store_ctx is None:
@@ -1570,8 +1560,7 @@ def _process_queue_row(
         'process_row',
         row_id=row.id,
         store=row.store,
-        data_dir=ctx.data_dir,
-        category=row.category)
+        data_dir=ctx.data_dir)
 
     if backend.nodes.has_row_with_queue_uuid(row.queue_uuid):
         logger.info(
@@ -1610,7 +1599,6 @@ def _process_queue_row(
     # makes the idempotency check above a silent no-op.
     insight = Insight(
         id=row.queue_uuid, content=row.content,
-        category=row.category,
         created_at=now, updated_at=now,
         queue_uuid=row.queue_uuid, author=row.author)
 
@@ -1634,9 +1622,9 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
            basic: bool) -> None:
     """Print the insights matching a query, one line each, best first.
 
-    Each line is `<id8> <score> <created_at> <author> <category> |
-    <text>`: the first 8 characters of the id, the score to two
-    decimals, the author or `-`, then the summary or a content prefix.
+    Each line is `<id8> <score> <created_at> <author> | <text>`: the
+    first 8 characters of the id, the score to two decimals, the UTC
+    date, the author or `-`, then the summary or a content prefix.
     `--basic` prints the same line without a score. An empty page
     prints nothing.
 
@@ -1724,7 +1712,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
 
 def _resolve_queued_or_stored(
         backend: 'Backend', data_dir: str, store: str,
-        id: str) -> tuple['tuple[str, str | None] | None', 'Insight | None']:
+        id: str) -> tuple[str | None, 'Insight | None']:
     """Resolve an id or prefix across a store's queued writes and rows.
 
     Parameters
@@ -1741,8 +1729,8 @@ def _resolve_queued_or_stored(
     Returns
     -------
     tuple
-        `(queued, stored)`: the `(id, category)` of the pending write
-        that matches or None, and the stored row that matches, read
+        `(queued, stored)`: the full id of the pending write that
+        matches or None, and the stored row that matches, read
         through `get_include_deleted`, or None.
 
     Raises
@@ -1764,7 +1752,7 @@ def _resolve_queued_or_stored(
             backend.nodes.resolve_id(id))
     except ValueError as exc:
         raise click.ClickException(str(exc))
-    if queued is not None and stored is not None and stored.id != queued[0]:
+    if queued is not None and stored is not None and stored.id != queued:
         raise click.ClickException(
             f'prefix {id!r} matches a queued write and a stored row')
     return queued, stored
@@ -1836,7 +1824,7 @@ def forget(ctx: click.Context, id: str) -> None:
             backend, ctx.obj['data_dir'], name, id)
         if ins is None and queued is not None:
             raise click.ClickException(
-                f'insight {queued[0]} is still queued; it lands on'
+                f'insight {queued} is still queued; it lands on'
                 ' the next drain')
         if ins is not None:
             id = ins.id
@@ -1852,10 +1840,8 @@ def forget(ctx: click.Context, id: str) -> None:
 @cli.command()
 @click.argument('id')
 @click.argument('content', nargs=-1, required=True)
-@click.option('--cat', default='fact', help='Category')
 @click.pass_context
-def replace(ctx: click.Context, id: str, content: tuple[str, ...],
-            cat: str) -> None:
+def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
     """Correct a stale insight: store new text in its place via the queue.
 
     \b
@@ -1866,8 +1852,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         still queued, such as the `id` an earlier `remember` printed.
     content : str
         The corrected text, stored as one row exactly as typed.
-    cat : str
-        Category. Unflagged, it inherits the replaced insight's.
 
     \b
     Notes
@@ -1906,7 +1890,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         queued, old = _resolve_queued_or_stored(
             backend, data_dir_val, name, id)
     if queued is not None:
-        id, inherited_cat = queued
+        id = queued
     elif old is None:
         raise click.ClickException(f'insight {id} not found')
     elif old.deleted_at is not None:
@@ -1917,18 +1901,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f' replace {old.replaced_by}, or run'
             f' insights show {old.id} --history')
     else:
-        id, inherited_cat = old.id, old.category
-
-    if ctx.get_parameter_source('cat') != click.core.ParameterSource.COMMANDLINE:
-        cat = inherited_cat
-
-    # Validate what is actually ENQUEUED, not only what the caller
-    # typed: a caller-typed --cat reaches this same check, and an
-    # inherited category is unvalidated until here.
-    if cat not in VALID_CATEGORIES:
-        valid = ', '.join(sorted(VALID_CATEGORIES))
-        raise click.ClickException(
-            f'invalid category {cat!r}; valid: {valid}')
+        id = old.id
 
     with queue_db(data_dir_val) as conn:
         # The drain would chain this write behind the pending one and
@@ -1943,7 +1916,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
                 ' with text that keeps it and adds yours')
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            category=cat,
             replaced_id=id,
             author=author)
     _json_out({
@@ -2672,7 +2644,6 @@ def status(ctx: click.Context) -> None:
             'deleted_insights': node_stats.deleted_insights,
             'stale_insights': stale_insights,
             'oplog_count': node_stats.oplog_count,
-            'by_category': node_stats.by_category,
             'storage_path': backend.path,
             }
         _json_out(out)
@@ -3035,7 +3006,7 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
             backend, ctx.obj['data_dir'], name, id)
         if ins is None and queued is not None:
             raise click.ClickException(
-                f'insight {queued[0]} is still queued; it lands on'
+                f'insight {queued} is still queued; it lands on'
                 ' the next drain')
         if ins is None:
             raise click.ClickException(f'insight {id} not found')

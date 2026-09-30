@@ -112,7 +112,8 @@ def test_insight_baselines_name_no_dropped_column():
     dropped = (
         'content_hash', 'corroboration_count', 'model_id',
         'access_count', 'last_accessed_at', 'semantic_facts',
-        'importance', 'entities', 'keywords', 'idx_insights_source')
+        'importance', 'entities', 'keywords', 'idx_insights_source',
+        'category')
     for name, ddl in (
             ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA),
             ('sqlite fts', ''.join(_FTS_STATEMENTS))):
@@ -122,7 +123,7 @@ def test_insight_baselines_name_no_dropped_column():
 
 
 def test_the_queue_baseline_names_no_dropped_hint():
-    """Verify the queue DDL keeps `category` and names no dropped hint.
+    """Verify the queue DDL names no dropped hint.
 
     Mutation: a hint column left in the queue baseline, which recreates
         it on every new queue.db.
@@ -131,5 +132,5 @@ def test_the_queue_baseline_names_no_dropped_hint():
     found = [hint for hint in ('hint_imp', 'hint_source', 'hint_entities')
              if hint in _QUEUE_BASELINE_SCHEMA]
 
-    assert 'category' in _QUEUE_BASELINE_SCHEMA
+    assert 'category' not in _QUEUE_BASELINE_SCHEMA
     assert not found

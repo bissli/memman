@@ -1,7 +1,7 @@
 """The recall page: one plain-text line per row, and nothing else.
 
-`memman recall` prints `<id8> <score> <created_at> <author> <category> |
-<text>` per row in rank order, and `--basic` prints the same line
+`memman recall` prints `<id8> <score> <created_at> <author> | <text>`
+per row in rank order, and `--basic` prints the same line
 without a score. The intent router, the meta block, the per-row signals
 and the deleted flags stay off the page, and recall counts no
 accesses.
@@ -31,11 +31,11 @@ from tests.conftest import invoke, make_insight
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
     r' (?P<created>\d{4}-\d\d-\d\d)'
-    r' (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<author>\S+) \| (?P<text>.*)$')
 _BASIC_LINE = re.compile(
     r'^(?P<id>\S{8})'
     r' (?P<created>\d{4}-\d\d-\d\d)'
-    r' (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<author>\S+) \| (?P<text>.*)$')
 
 _LONG_CONTENT = 'zulu first line\nsecond line ' + 'y' * 300
 
@@ -63,19 +63,19 @@ def page_rows(mm_runner):
     _seed(data_dir, [
         (make_insight(
             id='aaaaaaaa-0001', content='zulu decision on the retry cap',
-            category='decision', author='alice'),
+            author='alice'),
          'The retry cap stays at three.'),
         (make_insight(
             id='bbbbbbbb-0002', content=_LONG_CONTENT,
-            category='fact', author='bob'),
+            author='bob'),
          ''),
         (make_insight(
             id='cccccccc-0003', content='zulu short note',
-            category='fact', author=None),
+            author=None),
          ''),
         (make_insight(
             id='dddddddd-0004', content='zulu row with a two-line summary',
-            category='fact', author='dave'),
+            author='dave'),
          'first half\nsecond half'),
         ])
     return mm_runner
@@ -159,21 +159,21 @@ def test_page_joins_whitespace_inside_an_author(mm_runner):
     r"""Verify an author holding whitespace stays one field on one line.
 
     Mutation: printing the author raw, so `MEMMAN_AUTHOR='Jane Doe'`
-        reads as author `Jane` and category `Doe`, and a line break in
-        it splits the row across two lines.
+        reads as author `Jane` and pushes `Doe` into the text, and a
+        line break in it splits the row across two lines.
     Oracle: hand-computed `Jane_Doe_Smith` from the seeded
-        `'Jane Doe\nSmith'`, and the seeded category `fact`.
+        `'Jane Doe\nSmith'`, and the seeded content as the text.
     """
     _, data_dir = mm_runner
     _seed(data_dir, [(make_insight(
         id='eeeeeeee-0005', content='zulu row by a spaced author',
-        category='fact', author='Jane Doe\nSmith'), '')])
+        author='Jane Doe\nSmith'), '')])
 
     result = invoke(mm_runner, ['recall', 'zulu'])
 
     rows = _parse(result.stdout, _SCORED_LINE)
     assert rows['eeeeeeee']['author'] == 'Jane_Doe_Smith'
-    assert rows['eeeeeeee']['category'] == 'fact'
+    assert rows['eeeeeeee']['text'] == 'zulu row by a spaced author'
 
 
 def test_page_prints_the_utc_date_alone(mm_runner):
@@ -226,14 +226,14 @@ def test_basic_page_prints_the_line_without_a_score(page_rows):
     Mutation: keeping the `{results, meta: {basic: true}}` envelope on
         the --basic branch, or printing a placeholder score.
     Oracle: the four seeded ids, each on a line matching the scoreless
-        regex, and the category of the one seeded decision row.
+        regex, and the author of the one row seeded by alice.
     """
     result = invoke(page_rows, ['recall', '--basic', 'zulu'])
 
     assert result.exit_code == 0, result.output
     rows = _parse(result.stdout, _BASIC_LINE)
     assert set(rows) == {'aaaaaaaa', 'bbbbbbbb', 'cccccccc', 'dddddddd'}
-    assert rows['aaaaaaaa']['category'] == 'decision'
+    assert rows['aaaaaaaa']['author'] == 'alice'
 
 
 def test_empty_page_prints_nothing(mm_runner):
@@ -468,7 +468,7 @@ def test_live_mappers_read_every_trailing_field(backend):
         `get_include_deleted` on both backends.
     """
     backend.nodes.insert(make_insight(
-        id='fidelity-row', content='fidelity row', category='decision',
+        id='fidelity-row', content='fidelity row',
         queue_uuid='queue-f', author='carol'))
     stamps = {
         'summary': 'fidelity summary',
@@ -482,7 +482,7 @@ def test_live_mappers_read_every_trailing_field(backend):
 
     got = backend.nodes.get_include_deleted('fidelity-row')
 
-    assert got.category == 'decision'
+    assert got.content == 'fidelity row'
     assert got.summary == 'fidelity summary'
     assert got.enrich_attempted_at == stamps['enrich_attempted_at']
     assert got.enriched_at == stamps['enriched_at']

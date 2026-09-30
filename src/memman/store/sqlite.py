@@ -127,8 +127,7 @@ class SqliteNodeStore(NodeStore):
             total_insights=d.get('total_insights', 0),
             replaced_insights=d.get('replaced_insights', 0),
             deleted_insights=d.get('deleted_insights', 0),
-            oplog_count=d.get('oplog_count', 0),
-            by_category=d.get('by_category', {}))
+            oplog_count=d.get('oplog_count', 0))
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
@@ -761,7 +760,7 @@ class SqliteMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             rows = conn.execute("""
-select id, content, category, summary, embedding,
+select id, content, summary, embedding,
        enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, replaced_by, author
@@ -770,24 +769,24 @@ order by id
 """).fetchall()
             insights: list[MigrateInsight] = []
             for r in rows:
-                emb = deserialize_vector(r[4]) if r[4] else None
+                emb = deserialize_vector(r[3]) if r[3] else None
                 insights.append(MigrateInsight(
-                    id=r[0], content=r[1], category=r[2],
-                    summary=r[3],
+                    id=r[0], content=r[1],
+                    summary=r[2],
                     embedding=emb,
                     enrich_attempted_at=(
-                        parse_timestamp(r[5]) if r[5] else None),
+                        parse_timestamp(r[4]) if r[4] else None),
                     enriched_at=(
-                        parse_timestamp(r[6]) if r[6] else None),
-                    created_at=parse_timestamp(r[7]),
-                    updated_at=parse_timestamp(r[8]),
+                        parse_timestamp(r[5]) if r[5] else None),
+                    created_at=parse_timestamp(r[6]),
+                    updated_at=parse_timestamp(r[7]),
                     deleted_at=(
-                        parse_timestamp(r[9]) if r[9] else None),
-                    prompt_version=r[10],
-                    embedding_model=r[11],
-                    queue_uuid=r[12],
-                    replaced_by=r[13],
-                    author=r[14]))
+                        parse_timestamp(r[8]) if r[8] else None),
+                    prompt_version=r[9],
+                    embedding_model=r[10],
+                    queue_uuid=r[11],
+                    replaced_by=r[12],
+                    author=r[13]))
 
             op_rows = conn.execute("""
 select id, operation, insight_id, detail, created_at,
@@ -829,7 +828,7 @@ order by id
                         serialize_vector(ins.embedding)
                         if ins.embedding is not None else None)
                     insight_rows.append((
-                        ins.id, ins.content, ins.category,
+                        ins.id, ins.content,
                         ins.summary,
                         emb_blob,
                         format_timestamp(ins.enrich_attempted_at)
@@ -848,14 +847,14 @@ order by id
                 if insight_rows:
                     conn.executemany(
                         'insert into insights ('
-                        ' id, content, category, summary,'
+                        ' id, content, summary,'
                         ' embedding,'
                         ' enrich_attempted_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
                         ' embedding_model,'
                         ' queue_uuid,'
                         ' replaced_by, author)'
-                        ' values (?, ?, ?, ?, ?,'
+                        ' values (?, ?, ?, ?,'
                         ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 

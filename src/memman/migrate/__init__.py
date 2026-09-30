@@ -43,7 +43,6 @@ class MigrateInsight:
 
     id: str
     content: str
-    category: str
     summary: str | None
     embedding: list[float] | None
     enrich_attempted_at: datetime | None

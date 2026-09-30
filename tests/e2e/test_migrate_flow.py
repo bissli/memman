@@ -32,7 +32,6 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
         ins = Insight(
             id='mig-cli-1',
             content='migrate cli round-trip insight',
-            category='fact',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None)
         insert_insight(db, ins)

@@ -36,7 +36,6 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
         ins = Insight(
             id=f'rb-{store}-1',
             content='reverse migrate test insight',
-            category='fact',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None)
         insert_insight(db, ins)
@@ -197,7 +196,6 @@ def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
 _FIDELITY_ROW = {
     'id': 'rb-fid-1',
     'content': 'field fidelity round-trip subject',
-    'category': 'decision',
     'summary': 'the summary text',
     'enrich_attempted_at': datetime(
         2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
@@ -222,14 +220,14 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
     try:
         db.conn.execute(
             'insert into insights ('
-            ' id, content, category, summary,'
+            ' id, content, summary,'
             ' enrich_attempted_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
             ' embedding_model, queue_uuid, replaced_by,'
             ' author)'
-            ' values (?, ?, ?, ?, ?, ?, ?,'
+            ' values (?, ?, ?, ?, ?, ?,'
             ' ?, ?, ?, ?, ?, ?, ?)',
-            (r['id'], r['content'], r['category'], r['summary'],
+            (r['id'], r['content'], r['summary'],
              format_timestamp(r['enrich_attempted_at']),
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
@@ -288,7 +286,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
         db = open_db(target)
         try:
             row = db.conn.execute(
-                'select category, summary,'
+                'select content, summary,'
                 ' enrich_attempted_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
                 ' embedding_model, queue_uuid, replaced_by,'
@@ -298,7 +296,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             db.close()
         r = _FIDELITY_ROW
         assert tuple(row) == (
-            r['category'],
+            r['content'],
             r['summary'],
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,

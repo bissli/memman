@@ -714,7 +714,6 @@ def make_insight(**overrides: Any) -> Insight:
     defaults = {
         'id': 'test-id',
         'content': 'test content',
-        'category': 'fact',
         'created_at': now,
         'updated_at': now,
         'deleted_at': None,
@@ -728,7 +727,7 @@ def insert_pending(db: Any, insight_id: str, content: str = 'test content',
     """Insert an insight with enrich_attempted_at = NULL.
 
     Helper for enrichment tests that need pending insights as fixtures.
-    Forwards extra kwargs to `make_insight` for content/category control.
+    Forwards extra kwargs to `make_insight`.
     """
     insert_insight(db, make_insight(id=insight_id, content=content, **kw))
     db._conn.execute(
@@ -886,7 +885,7 @@ def parse_remember(result: click.testing.Result,
         from memman.store.postgres import _store_schema
         schema = _store_schema(name)
         sql = f"""
-select id, content, category
+select id, content
 from {schema}.insights
 where queue_uuid = %s
   and deleted_at is null
@@ -900,7 +899,7 @@ order by created_at
         sdir = store_dir(data_dir, name)
         db = open_read_only(sdir)
         sql = """
-select id, content, category
+select id, content
 from insights
 where queue_uuid = ?
   and deleted_at is null
@@ -916,7 +915,6 @@ order by created_at
     fact = {
         'id': rows[0][0],
         'content': rows[0][1],
-        'category': rows[0][2],
         'action': action,
         'replaced_id': raw.get('replaced_id'),
         '_raw': raw,

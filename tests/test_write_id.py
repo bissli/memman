@@ -14,12 +14,12 @@ from tests.conftest import force_drain, invoke
 
 
 def _row(data_dir, id):
-    """Read `(content, category, replaced_by)` for one id by raw SQL.
+    """Read `(content, replaced_by)` for one id by raw SQL.
     """
     path = f"{store_dir(data_dir, 'default')}/memman.db"
     with sqlite3.connect(path) as conn:
         return conn.execute(
-            'select content, category, replaced_by from insights'
+            'select content, replaced_by from insights'
             ' where id = ?', (id,)).fetchone()
 
 
@@ -54,7 +54,7 @@ def test_replace_prints_the_id_of_the_replacement(mm_runner):
         'replace', first['id'], 'redis evicts lru keys first'])
     assert r.exit_code == 0, r.output
 
-    assert _row(data_dir, first['id'])[2] == json.loads(r.output)['id']
+    assert _row(data_dir, first['id'])[1] == json.loads(r.output)['id']
 
 
 def test_remember_and_replace_print_the_id_on_one_line(mm_runner):
@@ -92,25 +92,7 @@ def test_replace_of_a_queued_write_retires_it_once_it_lands(mm_runner):
     assert r.exit_code == 0, r.output
     force_drain(data_dir)
 
-    assert _row(data_dir, first['id'])[2] == json.loads(r.output)['id']
-
-
-@pytest.mark.no_auto_drain
-def test_replace_of_a_queued_write_inherits_its_category(mm_runner):
-    """An unflagged `--cat` takes the category the queued write carries.
-
-    Mutation: falling back to the `fact` default when the target has
-        not landed yet.
-    Oracle: the replacement's category read by raw SQL.
-    """
-    _, data_dir = mm_runner
-    first = json.loads(invoke(mm_runner, [
-        'remember', 'ship one model', '--cat', 'decision']).output)
-    second = json.loads(invoke(mm_runner, [
-        'replace', first['id'], 'ship one model, checked daily']).output)
-    force_drain(data_dir)
-
-    assert _row(data_dir, second['id'])[1] == 'decision'
+    assert _row(data_dir, first['id'])[1] == json.loads(r.output)['id']
 
 
 @pytest.mark.no_auto_drain
@@ -130,7 +112,7 @@ def test_replace_resolves_a_queued_write_by_prefix(mm_runner):
     assert r.exit_code == 0, r.output
     force_drain(data_dir)
 
-    assert _row(data_dir, first['id'])[2] == json.loads(r.output)['id']
+    assert _row(data_dir, first['id'])[1] == json.loads(r.output)['id']
 
 
 @pytest.mark.no_auto_drain

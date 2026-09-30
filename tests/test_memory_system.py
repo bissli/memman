@@ -15,10 +15,10 @@ from tests.conftest import invoke, make_insight, parse_remember
 
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
-    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<created>\S+) (?P<author>\S+) \| (?P<text>.*)$')
 _BASIC_LINE = re.compile(
     r'^(?P<id>\S{8})'
-    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<created>\S+) (?P<author>\S+) \| (?P<text>.*)$')
 
 
 @pytest.fixture
@@ -278,43 +278,6 @@ class TestReplaceAtomicity:
         hits_new = recall_basic(runner, 'FastAPI')
         assert any('FastAPI' in c for c in contents(hits_new))
 
-    def test_replace_inherits_metadata(self, runner):
-        """Verify a flag-less replace inherits the original's category.
-
-        Mutation: dropping the inherited category on a flag-less
-            replace, defaulting instead.
-        Oracle: `insights show` on the replacement id, compared
-            against the original's stored value.
-        """
-        data = remember(runner, 'chose event sourcing for audit trail', cat='decision')
-        result = invoke(runner, ['replace', data['id'],
-                                 'chose CQRS with event sourcing for audit'])
-        new = parse_remember(result, runner)
-        assert 'id' in new
-
-        shown = json.loads(
-            invoke(runner, ['insights', 'show', new['id']]).output)
-        assert shown['category'] == 'decision'
-
-    def test_replace_override_metadata(self, runner):
-        """Verify a replace with an explicit flag overrides the old metadata.
-
-        Mutation: keeping the original category despite an explicit
-            override on the replace command.
-        Oracle: `insights show` on the replacement id, compared
-            against the flag passed to `replace`.
-        """
-        data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets', cat='fact')
-        result = invoke(runner, ['replace', data['id'],
-                                 'Switched from Varnish to CloudFront CDN for global edge caching',
-                                 '--cat', 'decision'])
-        new = parse_remember(result, runner)
-        assert 'id' in new
-
-        shown = json.loads(
-            invoke(runner, ['insights', 'show', new['id']]).output)
-        assert shown['category'] == 'decision'
-
     def test_replace_nonexistent_id_errors(self, runner):
         """Verify replace of an unknown id exits non-zero.
 
@@ -446,15 +409,6 @@ class TestComposition:
 class TestInputValidation:
     """Bad input is rejected, not silently accepted.
     """
-
-    def test_invalid_category_rejected(self, runner):
-        """Verify an unknown category exits non-zero.
-
-        Mutation: the category check is dropped and the value stored as given.
-        Oracle: the exit code for `--cat bogus`.
-        """
-        result = invoke(runner, ['remember', 'test', '--cat', 'bogus'])
-        assert result.exit_code != 0
 
     def test_store_name_invalid_rejected(self, runner):
         """Verify store names with a leading dash, space, or dot fail.

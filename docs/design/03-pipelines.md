@@ -28,7 +28,7 @@ Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drai
 
 `remember` performs these steps before returning:
 
-1. Check that writes are enabled, then validate the text and category against the [input rules](../USAGE.md#rejected-input).
+1. Check that writes are enabled, then validate the text against the [input rules](../USAGE.md#rejected-input).
 2. Identify potentially temporary information and report it as advisory `quality_warnings`.
 3. Append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity.
 4. Look for up to three related current memories. This uses word overlap and calls no model.
@@ -38,7 +38,7 @@ Related memories must be at most 1,000 bytes. Their score is shared-word count d
 
 The UUID returned as `id` becomes the memory's persistent ID. The numeric `queue_id` identifies the queue entry, which maintenance can delete after processing.
 
-`replace` also queues a write, with a `replaced_id`, and inherits the target's category unless `--cat` is supplied. It accepts a current memory or a queued write in the same store. It rejects forgotten or replaced targets and targets with a replacement already queued. Its response includes `replaced_id` instead of `related`.
+`replace` also queues a write, with a `replaced_id`. It accepts a current memory or a queued write in the same store. It rejects forgotten or replaced targets and targets with a replacement already queued. Its response includes `replaced_id` instead of `related`.
 
 ### Write processing
 
@@ -54,7 +54,7 @@ Each drain processes up to 100 entries by default, stopping when it reaches its 
 6. **Commit one transaction.** Retire the replacement target by linking it to the new ID when it is still current, then insert the new memory, save generated fields and markers, and record operations.
 7. **Finish the queue entry.** Mark it done, or record an error for retry.
 
-A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. Only its omitted category comes from the target. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
+A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
 
 ### Failure and retry
 

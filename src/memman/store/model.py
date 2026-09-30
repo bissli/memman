@@ -20,11 +20,6 @@ logger = logging.getLogger('memman')
 
 Id = str
 
-VALID_CATEGORIES = {
-    'preference', 'decision', 'fact',
-    'insight', 'context',
-    }
-
 
 @dataclass
 class Insight:
@@ -33,7 +28,6 @@ class Insight:
 
     id: str = ''
     content: str = ''
-    category: str = 'fact'
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -77,12 +71,11 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        `content`, `category` and `summary`. The id and timestamps
+        `content` and `summary`. The id and timestamps
         are left out because the oplog row carries them.
     """
     return {
         'content': ins.content,
-        'category': ins.category,
         'summary': ins.summary,
         }
 
@@ -104,7 +97,7 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     Returns
     -------
     str
-        `<id8> <score> <created_at> <author> <category> | <text>`.
+        `<id8> <score> <created_at> <author> | <text>`.
         `id8` is the first 8 characters of the id. `created_at` is the
         UTC date, `YYYY-MM-DD`, with no time of day. `-` stands for an
         unset author, and `_` joins any whitespace inside one, so
@@ -124,8 +117,7 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
         fields.append(f'{score:.2f}')
     fields += [
         ins.created_at.astimezone(timezone.utc).strftime('%Y-%m-%d'),
-        '_'.join((ins.author or '').split()) or '-',
-        ins.category]
+        '_'.join((ins.author or '').split()) or '-']
     return f"{' '.join(fields)} | {text}"
 
 
@@ -140,7 +132,6 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     out: dict[str, Any] = {
         'id': ins.id,
         'content': ins.content,
-        'category': ins.category,
         'created_at': format_timestamp(ins.created_at),
         'updated_at': format_timestamp(ins.updated_at or ins.created_at),
         }
@@ -188,7 +179,6 @@ class NodeStats:
     replaced_insights: int = 0
     deleted_insights: int = 0
     oplog_count: int = 0
-    by_category: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

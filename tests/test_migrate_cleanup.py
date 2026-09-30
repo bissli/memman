@@ -36,10 +36,10 @@ def _seed_with_artifacts(store_dir: Path) -> None:
         now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         vec = [0.5] * 512
         conn.execute(
-            'insert into insights (id, content, category,'
+            'insert into insights (id, content,'
             ' embedding, created_at, updated_at)'
-            ' values (?, ?, ?, ?, ?, ?)',
-            (str(uuid.uuid4()), 'cleanup test', 'fact',
+            ' values (?, ?, ?, ?, ?)',
+            (str(uuid.uuid4()), 'cleanup test',
              struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
             'insert into meta (key, value) values (?, ?)',

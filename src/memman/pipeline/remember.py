@@ -84,8 +84,7 @@ def run_remember(
         The target store.
     insight : Insight
         The row to store, built by the caller: its `content` is
-        stored as written, no model judges it, rewords it, or picks
-        its category.
+        stored as written, and no model judges or rewords it.
     ec : EmbeddingProvider
         The store-bound embedder, from `bound_embedder`.
     replaced_id : str, default ''
@@ -171,8 +170,7 @@ def _apply_plan(
         if linked and before_target is not None:
             replaced = True
             # The predecessor keeps its content behind `replaced_by`,
-            # and the successor copies nothing from it: the CLI already
-            # seeded the target's category when `--cat` was omitted.
+            # and the successor copies nothing from it.
             backend.oplog.log(
                 operation='replace', insight_id=replaced_id,
                 detail=f'replaced by {insight.id}',
@@ -229,7 +227,6 @@ def _apply_plan(
     result: dict[str, Any] = {
         'id': insight.id,
         'content': insight.content,
-        'category': insight.category,
         'action': 'replace' if replaced else 'add',
         'created_at': (
             format_timestamp(insight.created_at)

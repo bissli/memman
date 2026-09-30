@@ -4,12 +4,11 @@
 
 ## 2.1 The memory record
 
-A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content and category; the worker adds a summary and embedding.
+A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content; the worker adds a summary and embedding.
 
 | Field        | Meaning                                                                                                                                        |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes.                                                                  |
-| `category`   | `preference`, `decision`, `fact`, `insight`, or `context`. Defaults to `fact`; a replacement inherits its target's category unless overridden. |
 | `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.                                                                         |
 | `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.                                                                     |
 | `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.                                                                      |
@@ -17,14 +16,6 @@ A memory is one saved claim. The CLI and database call it an **insight**. The ca
 | `created_at` | Time the worker stored the memory.                                                                                                             |
 
 Every command that takes an id accepts an unambiguous prefix, such as the eight-character prefix that recall prints. The numeric `queue_id` identifies the queue entry, which maintenance deletes shortly after the drain stores the memory. The `id` remains valid after the queue entry is gone.
-
-| Category     | Example                                                   |
-| ------------ | --------------------------------------------------------- |
-| `preference` | "The user prefers explicit SQL over an ORM."              |
-| `decision`   | "The cache uses SQLite to avoid running another service." |
-| `fact`       | "The billing API allows 100 requests per second."         |
-| `insight`    | "The flaky test fails only when the cache is cold."       |
-| `context`    | "The billing service deploys to AWS ECS."                 |
 
 [Input rules](../USAGE.md#rejected-input) lists the checks the text must pass.
 
@@ -47,7 +38,6 @@ The field reference below uses SQLite types. The executable schemas are listed u
 insights (
   id                text primary key,     -- UUID4
   content           text not null,
-  category          text default 'fact',
   summary           text,                 -- from enrichment
   embedding         blob,                 -- vector of content
   embedding_pending blob,                 -- target vector during embed swap
@@ -97,7 +87,7 @@ SQLite's FTS5 index covers all memory content and is maintained by triggers. Sea
 | Migration log IDs    | Native oplog ID                     | Additional unique `legacy_id`                  |
 | Store worker history | In the shared queue database        | Additional `worker_runs` table with heartbeats |
 
-Both backends index category, creation time, deletion time, queue UUID, and oplog time. Composite indexes support pending enrichment and current-memory listings. Postgres creates a missing HNSW index when opening a store for reading and writing.
+Both backends index creation time, deletion time, queue UUID, and oplog time. Composite indexes support pending enrichment and current-memory listings. Postgres creates a missing HNSW index when opening a store for reading and writing.
 
 `replaced_by` has no foreign key. The worker sets the pointer before it inserts the successor, and the migrators copy rows in id order, so a pointer may refer to a row that has not yet been inserted. `memman doctor` checks the chain through its `replacement_integrity` check.
 
@@ -113,7 +103,7 @@ There are no automatic in-place schema migrations. Maintainers apply schema chan
 
 ### Queue and generated-field markers
 
-`<data dir>/queue.db` is always SQLite and serves all stores in that directory. Each entry records the store, content, category, author, replacement target, UUID, attempt count, status, and timestamps. Its `worker_runs` table records drain outcomes. [Queue states](../USAGE.md#queue) and [write processing](03-pipelines.md#32-write-pipeline-remember) describe its use.
+`<data dir>/queue.db` is always SQLite and serves all stores in that directory. Each entry records the store, content, author, replacement target, UUID, attempt count, status, and timestamps. Its `worker_runs` table records drain outcomes. [Queue states](../USAGE.md#queue) and [write processing](03-pipelines.md#32-write-pipeline-remember) describe its use.
 
 The worker checks `queue_uuid` against all stored memories, including forgotten and replaced ones, before inserting a retried write.
 

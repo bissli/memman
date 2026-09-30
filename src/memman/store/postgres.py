@@ -115,7 +115,6 @@ PG_BASELINE_SCHEMA = """
 create table if not exists {schema}.insights (
     id          text primary key,
     content     text not null,
-    category    text default 'fact',
     summary     text,
     embedding   vector({dim}),
     enrich_attempted_at timestamptz,
@@ -155,8 +154,6 @@ create table if not exists {schema}.worker_runs (
     last_heartbeat_at timestamptz
 );
 
-create index if not exists idx_insights_category_{schema}
-    on {schema}.insights(category);
 create index if not exists idx_insights_created_{schema}
     on {schema}.insights(created_at);
 create index if not exists idx_insights_deleted_{schema}
@@ -286,26 +283,25 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     i = Insight()
     i.id = row[0]
     i.content = row[1]
-    i.category = row[2]
-    i.created_at = row[3]
-    i.updated_at = row[4]
-    i.deleted_at = row[5]
-    if row[6]:
-        i.summary = row[6]
-    i.enrich_attempted_at = row[7]
-    i.enriched_at = row[8]
+    i.created_at = row[2]
+    i.updated_at = row[3]
+    i.deleted_at = row[4]
+    if row[5]:
+        i.summary = row[5]
+    i.enrich_attempted_at = row[6]
+    i.enriched_at = row[7]
+    if row[8]:
+        i.queue_uuid = row[8]
     if row[9]:
-        i.queue_uuid = row[9]
+        i.replaced_by = row[9]
     if row[10]:
-        i.replaced_by = row[10]
-    if row[11]:
-        i.author = row[11]
+        i.author = row[10]
     return i
 
 
 # Must stay byte-identical to node.py's _INSIGHT_COLUMNS.
 _INSIGHT_COLS = (
-    'id, content, category, created_at, updated_at, deleted_at,'
+    'id, content, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, replaced_by,'
     ' author')
@@ -343,14 +339,14 @@ class PostgresNodeStore(NodeStore):
         now = format_timestamp(datetime.now(timezone.utc))
         sql = self._q("""
 insert into {s}.insights
-    (id, content, category, created_at, updated_at,
+    (id, content, created_at, updated_at,
      prompt_version, embedding_model,
      queue_uuid, kw_tokens, author)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
-                ins.id, ins.content, ins.category,
+                ins.id, ins.content,
                 now, now,
                 ins.prompt_version, ins.embedding_model,
                 ins.queue_uuid,
@@ -557,12 +553,6 @@ where deleted_at is null and replaced_by is not null
         deleted_sql = self._q("""
 select count(*) from {s}.insights where deleted_at is not null
 """)
-        cat_sql = self._q("""
-select category, count(*)
-from {s}.insights
-where deleted_at is null and replaced_by is null
-group by category
-""")
         with self._conn.cursor() as cur:
             cur.execute(active_sql)
             total = int(cur.fetchone()[0])
@@ -570,15 +560,12 @@ group by category
             replaced = int(cur.fetchone()[0])
             cur.execute(deleted_sql)
             deleted = int(cur.fetchone()[0])
-            cur.execute(cat_sql)
-            by_category = {r[0]: int(r[1]) for r in cur.fetchall()}
             cur.execute(self._q('select count(*) from {s}.oplog'))
             oplog = int(cur.fetchone()[0])
         return NodeStats(
             total_insights=total, replaced_insights=replaced,
             deleted_insights=deleted,
-            oplog_count=oplog,
-            by_category=by_category)
+            oplog_count=oplog)
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
@@ -1804,7 +1791,7 @@ class PostgresMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             cur.execute(f"""
-select id, content, category, summary, embedding,
+select id, content, summary, embedding,
        enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, replaced_by,
@@ -1815,21 +1802,21 @@ order by id
             insight_rows = cur.fetchall()
             insights: list[MigrateInsight] = []
             for r in insight_rows:
-                emb = list(r[4]) if r[4] is not None else None
+                emb = list(r[3]) if r[3] is not None else None
                 insights.append(MigrateInsight(
-                    id=r[0], content=r[1], category=r[2],
-                    summary=r[3],
+                    id=r[0], content=r[1],
+                    summary=r[2],
                     embedding=emb,
-                    enrich_attempted_at=r[5],
-                    enriched_at=r[6],
-                    created_at=r[7],
-                    updated_at=r[8],
-                    deleted_at=r[9],
-                    prompt_version=r[10],
-                    embedding_model=r[11],
-                    queue_uuid=r[12],
-                    replaced_by=r[13],
-                    author=r[14]))
+                    enrich_attempted_at=r[4],
+                    enriched_at=r[5],
+                    created_at=r[6],
+                    updated_at=r[7],
+                    deleted_at=r[8],
+                    prompt_version=r[9],
+                    embedding_model=r[10],
+                    queue_uuid=r[11],
+                    replaced_by=r[12],
+                    author=r[13]))
 
             cur.execute(f"""
 select coalesce(legacy_id, id) as sqlite_id,
@@ -1870,7 +1857,7 @@ order by sqlite_id
                             [float(x) for x in ins.embedding]
                             if ins.embedding is not None else None)
                         insight_rows.append((
-                            ins.id, ins.content, ins.category,
+                            ins.id, ins.content,
                             ins.summary,
                             emb,
                             ins.enrich_attempted_at, ins.enriched_at,
@@ -1886,7 +1873,7 @@ order by sqlite_id
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
-                            ' id, content, category, summary,'
+                            ' id, content, summary,'
                             ' embedding,'
                             ' enrich_attempted_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
@@ -1894,7 +1881,7 @@ order by sqlite_id
                             ' embedding_model,'
                             ' queue_uuid,'
                             ' kw_tokens, replaced_by, author)'
-                            ' values (%s, %s, %s, %s,'
+                            ' values (%s, %s, %s,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
                             ' %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',

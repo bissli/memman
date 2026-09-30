@@ -21,7 +21,7 @@ After responding, the agent stores a user preference or decision at
 once, and any conclusion that would stand if the exchange stopped
 here. It defers deliberation that has reached no conclusion.
 
-    memman remember "<self-contained text>" --cat <category>
+    memman remember "<self-contained text>"
 
 One thought per call, as one paragraph that opens on its subject and
 keeps its reasoning with it. The text names its subject outright,
@@ -52,5 +52,5 @@ memman refuses text over 1,000 bytes and says why. A behavioral rule
 ("always", "never") goes to the project CLAUDE.md `## Directives`
 section instead.
 
-The memman skill is the full manual: categories, what never to
-store, corrections, `related`, pipeline, scheduler.
+The memman skill is the full manual: what never to store,
+corrections, `related`, pipeline, scheduler.

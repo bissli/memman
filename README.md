@@ -29,7 +29,7 @@ The worker runs as a systemd timer on Linux or a launchd agent on macOS. On a ho
 The agent runs these commands through its shell tool. They behave the same in an interactive shell:
 
 ```bash
-memman remember "The billing service retries failed requests at most three times." --cat decision
+memman remember "The billing service retries failed requests at most three times."
 # The background worker stores the write on its next run, every 60 seconds by default.
 memman recall "billing service retry limit"
 ```
@@ -43,14 +43,6 @@ memman insights show <id> --history
 ```
 
 Each memory holds one self-contained claim, on one line, within 1,000 UTF-8 bytes.
-
-| Category         | Captures                           | Example                                                   |
-| ---------------- | ---------------------------------- | --------------------------------------------------------- |
-| `preference`     | User preferences and style         | "Prefers explicit SQL over an ORM."                       |
-| `decision`       | Choices and their reasons          | "The cache uses SQLite to avoid running another service." |
-| `fact` (default) | Knowledge about systems or domains | "The billing API allows 100 requests per second."         |
-| `insight`        | Conclusions drawn from evidence    | "The flaky test fails only when the cache is cold."       |
-| `context`        | Project or user background         | "The billing service deploys to AWS ECS."                 |
 
 [Memory commands](docs/USAGE.md#memory-commands) lists the input rules and output formats.
 

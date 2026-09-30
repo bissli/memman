@@ -61,7 +61,7 @@
         <mxCell id="s_calllog_note" value="Every recall also appends one line to the call log that memman log calls reads. With tracing on, it writes trace events too." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="1">
           <mxGeometry x="20" y="850" width="190" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="s_out" value="&lt;b&gt;Plain-text output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;&amp;lt;id8&amp;gt; &amp;lt;score&amp;gt; &amp;lt;created_at&amp;gt; &amp;lt;author&amp;gt; &amp;lt;category&amp;gt; | &amp;lt;text&amp;gt;&lt;/font&gt;&lt;br&gt;&amp;lt;text&amp;gt; is the summary, or a content prefix. --basic omits &amp;lt;score&amp;gt;. --basic: no match prints nothing. Scored: recency rows always appear." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_out" value="&lt;b&gt;Plain-text output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;&amp;lt;id8&amp;gt; &amp;lt;score&amp;gt; &amp;lt;created_at&amp;gt; &amp;lt;author&amp;gt; | &amp;lt;text&amp;gt;&lt;/font&gt;&lt;br&gt;&amp;lt;text&amp;gt; is the summary, or a content prefix. --basic omits &amp;lt;score&amp;gt;. --basic: no match prints nothing. Scored: recency rows always appear." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="200" y="935" width="500" height="75" as="geometry" />
         </mxCell>
 

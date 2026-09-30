@@ -211,8 +211,7 @@ A normal store session builds the global embedding client as well as the store-b
 ## Memory commands
 
 ```bash
-memman remember "The retry cap stays at three, since a fourth try only adds load." \
-  --cat decision
+memman remember "The retry cap stays at three, since a fourth try only adds load."
 memman recall "retry cap" --limit 10
 memman recall "auth" --basic
 memman replace <id> "The retry cap is four for batch jobs and three elsewhere."
@@ -242,10 +241,6 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 `related` lists stored claims the new text may correct. The lookup favors focused word overlap, reads only memories within the 1,000-byte input limit, and calls no model. It can return an empty list, and its failure never undoes the submission.
 
-| Flag    | `remember` default | `replace` default | Values                                                 |
-| ------- | ------------------ | ----------------- | ------------------------------------------------------ |
-| `--cat` | `fact`             | Target's category | `preference`, `decision`, `fact`, `insight`, `context` |
-
 `replace <id> "<text>"` checks its target in the store, queues a successor, and preserves the old memory's history. Unlike `remember`, it runs normal [store-opening checks](#credential-requirements), which can require credentials or a probe embedding. Once the worker commits it, recall returns the new version and excludes the old one.
 
 | Target state                               | Behavior                                                                                                                                                                     |
@@ -273,8 +268,6 @@ Both commands check the text in this order and report the first problem:
 4. **Line break.** Text that spans several lines.
 5. **Leading label.** Text that opens with at most three words, a colon, and a space: `Fix:`, `AWS gotcha:`, `User decision 2026-09-17:`. A longer phrase before the colon is allowed because it may be part of a sentence, such as "The rule is simple:". A quote or backtick ends the match, so text may start with a quoted error.
 
-They also refuse an unknown category. `replace` checks an inherited category the same way.
-
 ### recall
 
 | Flag      | Default | Description                                                |
@@ -285,10 +278,10 @@ They also refuse an unknown category. `replace` checks an inherited category the
 Recall prints one line per memory, best first, and prints nothing for an empty result:
 
 ```text
-<id8> <score> <created_at> <author> <category> | <text>
+<id8> <score> <created_at> <author> | <text>
 ```
 
-`id8` is the first 8 characters of the id, and `score` has two decimals. `author` is `-` when unset. `text` is the summary when the memory has one, and the start of the content otherwise. `memman insights show <id>` prints the whole memory.
+`id8` is the first 8 characters of the id, `score` has two decimals, and `created_at` is the UTC date `YYYY-MM-DD`. `author` is `-` when unset. `text` is the summary when the memory has one, and the start of the content otherwise. `memman insights show <id>` prints the whole memory.
 
 A score ranks a row against its siblings in one response and means nothing across queries. Recency can return a memory with no keyword or semantic match, so each returned text needs its own relevance check. [Chapter 3](design/03-pipelines.md#34-read-pipeline-recall) explains the ranking.
 
@@ -476,7 +469,7 @@ memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
 
-**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, counts by category, and the storage path.
+**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, and the storage path.
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
 

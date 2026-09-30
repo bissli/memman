@@ -13,10 +13,10 @@ from memman.search.recall import ANCHOR_TOP_K, run_recall
 from tests.conftest import make_insight
 
 
-def _seed(backend, count=8, category='fact'):
+def _seed(backend, count=8, prefix='fact'):
     for i in range(count):
         backend.nodes.insert(make_insight(
-            id=f'tr-{category}-{i}', category=category,
+            id=f'tr-{prefix}-{i}',
             content=f'alpha shared topic row {i}'))
 
 
@@ -98,7 +98,7 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
         event must carry vector_hits == 6 with anchor_k ==
         ANCHOR_TOP_K.
     """
-    _seed(tmp_backend, count=10, category='preference')
+    _seed(tmp_backend, count=10, prefix='preference')
     for i in range(6):
         tmp_backend.nodes.update_embedding(
             f'tr-preference-{i}', _vec512(0.3 + 0.01 * i),

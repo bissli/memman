@@ -27,13 +27,13 @@ def insert_insight(db: 'DB', i: Insight) -> None:
     now = format_timestamp(datetime.now(timezone.utc))
     sql = """
 insert into insights
-    (id, content, category, created_at, updated_at,
+    (id, content, created_at, updated_at,
      prompt_version, embedding_model,
      queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
-        i.id, i.content, i.category,
+        i.id, i.content,
         now, now,
         i.prompt_version, i.embedding_model,
         i.queue_uuid, i.author))
@@ -41,7 +41,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 # Must stay byte-identical to postgres.py's _INSIGHT_COLS.
 _INSIGHT_COLUMNS = (
-    'id, content, category, created_at, updated_at, deleted_at,'
+    'id, content, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, replaced_by,'
     ' author')
@@ -355,7 +355,7 @@ def get_stats(db: 'DB') -> dict[str, Any]:
     `replaced_insights` the replaced rows not deleted, and
     `deleted_insights` every deleted row, replaced or not.
     """
-    stats: dict[str, Any] = {'by_category': {}}
+    stats: dict[str, Any] = {}
 
     row = db._query(
         'select count(*) from insights'
@@ -373,16 +373,6 @@ def get_stats(db: 'DB') -> dict[str, Any]:
         'select count(*) from insights where deleted_at is not null'
         ).fetchone()
     stats['deleted_insights'] = row[0]
-
-    cat_sql = """
-select category, count(*)
-from insights
-where deleted_at is null and replaced_by is null
-group by category
-"""
-    rows = db._query(cat_sql).fetchall()
-    for cat, count in rows:
-        stats['by_category'][cat] = count
 
     row = db._query('select count(*) from oplog').fetchone()
     stats['oplog_count'] = row[0]
@@ -634,21 +624,20 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     i = Insight()
     i.id = row[0]
     i.content = row[1]
-    i.category = row[2]
-    i.created_at = parse_timestamp(row[3])
-    i.updated_at = parse_timestamp(row[4])
+    i.created_at = parse_timestamp(row[2])
+    i.updated_at = parse_timestamp(row[3])
+    if row[4]:
+        i.deleted_at = parse_timestamp(row[4])
     if row[5]:
-        i.deleted_at = parse_timestamp(row[5])
+        i.summary = row[5]
     if row[6]:
-        i.summary = row[6]
+        i.enrich_attempted_at = parse_timestamp(row[6])
     if row[7]:
-        i.enrich_attempted_at = parse_timestamp(row[7])
+        i.enriched_at = parse_timestamp(row[7])
     if row[8]:
-        i.enriched_at = parse_timestamp(row[8])
+        i.queue_uuid = row[8]
     if row[9]:
-        i.queue_uuid = row[9]
+        i.replaced_by = row[9]
     if row[10]:
-        i.replaced_by = row[10]
-    if row[11]:
-        i.author = row[11]
+        i.author = row[10]
     return i

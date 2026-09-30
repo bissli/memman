@@ -6,9 +6,9 @@ description: Persistent memory CLI for LLM agents. Store facts, recall past know
 # memman
 
 `memman` is a CLI on PATH. Invoke commands directly through the
-shell. Memory is typed insights. A write goes to a queue. A background
-worker stores and enriches it on its next drain, one worker run that
-processes the queued writes.
+shell. A memory is one stored insight. A write goes to a queue. A
+background worker stores and enriches it on its next drain, one
+worker run that processes the queued writes.
 
 ## Codex
 
@@ -42,13 +42,9 @@ one thought is not padded to look substantial. When unsure, write the
 smaller memory. A too-small memory stays retrievable and replaces
 cleanly. A too-large one forces a rewrite and drops clauses.
 
-Pick the most accurate `--cat`.
-
 ```bash
-memman remember "<thought>" --cat <category>
+memman remember "<thought>"
 ```
-
-Categories: `preference`, `decision`, `fact`, `insight`, `context`.
 
 ### When to write
 
@@ -82,15 +78,6 @@ Store unless trivial:
 - background context about the user's projects, tools, or setup
 
 None of the above: stop.
-
-Category mapping for `--cat`:
-
-- a user-stated preference: `preference`
-- an architectural or design decision with rationale: `decision`
-- a discovered fact about a system, tool, or domain: `fact`
-- a reasoning conclusion synthesized from several sources: `insight`
-- background context (project setup, user role, environment):
-  `context`
 
 Never stored, at any tier. The recoverability test: can this fact be
 recovered from the project's code, config, IaC state, or cloud
@@ -221,18 +208,16 @@ memman replace <id> "<new content>"
 
 `<id>` is a current stored row's id or an unambiguous prefix of one,
 or the `id` of a write still queued for the same store, so the agent
-can replace its own write before the drain runs. `replace` inherits
-the target's category, a queued target's included, unless `--cat`
-overrides it. It refuses a forgotten target. It refuses a target
-already replaced, and the message names its successor, which is the
-row to replace instead. It refuses a target, stored or queued, that
-a queued `replace` in the same store already names, and the message
-quotes that replace's id and full text, so an agent in another
-session or past a compaction sees the first correction. The fix is
-to `replace` the queued replace's id with text that keeps its
-correction and adds the second: on the drain, a second replace of
-the same target retires the first, and any claim only the first text
-held is lost.
+can replace its own write before the drain runs. `replace` refuses a
+forgotten target. It refuses a target already replaced, and the
+message names its successor, which is the row to replace instead. It
+refuses a target, stored or queued, that a queued `replace` in the
+same store already names, and the message quotes that replace's id
+and full text, so an agent in another session or past a compaction
+sees the first correction. The fix is to `replace` the queued
+replace's id with text that keeps its correction and adds the second:
+on the drain, a second replace of the same target retires the first,
+and any claim only the first text held is lost.
 
 On the drain the replacement is stored under the `id` that `replace`
 printed, and the old row is replaced: it keeps its content behind
@@ -273,7 +258,7 @@ The page is one plain-text line per row, best first, and nothing
 else:
 
 ```
-<id8> <score> <created_at> <author> <category> | <text>
+<id8> <score> <created_at> <author> | <text>
 ```
 
 - `id8`: the first eight characters of the id. Every id-taking
@@ -313,15 +298,15 @@ when no row bears on the query. If a paraphrase returns nothing that
 bears on the query, re-ask in the store's own words before concluding
 it is empty.
 
-Rows assert; AGENTS.md directs. A `decision` row is history with its
-rationale, not an instruction to follow now. A row that names a file
-path or a symbol is a claim about the code at the row's `created_at`.
-Before acting on it, check the path's history since that date with
-`git log --since=<created_at> -- <path>` from the project directory.
-An empty result means the path did not change OR the path is not in
-this repo, since a store can hold rows from several repos; `git log -1
--- <path>` confirms the path exists here before an empty result is
-taken to mean the row is current.
+Rows assert; AGENTS.md directs. A row recording a decision is history
+with its rationale, and a rule to follow goes in AGENTS.md. A row that
+names a file path or a symbol is a claim about the code at the row's
+`created_at`. Before acting on it, check the path's history since
+that date with `git log --since=<created_at> -- <path>` from the
+project directory. An empty result means the path did not change OR
+the path is not in this repo, since a store can hold rows from
+several repos; `git log -1 -- <path>` confirms the path exists here
+before an empty result is taken to mean the row is current.
 
 For a fast token-only lookup that skips vector search and reranking
 (cheap: no query embed and no rerank; rows come back newest first):

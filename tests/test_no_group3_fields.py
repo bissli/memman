@@ -1,8 +1,9 @@
-"""A stored insight carries no entities, keywords, importance or source.
+"""A stored insight carries no category, entities, keywords, importance
+or source.
 
 Recall filters by neither category nor source, enrichment returns a
-summary alone, and no ranking breaks a tie on importance. The category
-stays: `remember` and `replace` still take `--cat`.
+summary alone, and no ranking breaks a tie on importance. No command
+takes `--cat`.
 """
 
 import inspect
@@ -23,7 +24,7 @@ from memman.store.postgres import PostgresNodeStore, PostgresRecallSession
 from memman.store.sqlite import SqliteNodeStore, SqliteRecallSession
 from tests.conftest import invoke, make_insight, parse_remember
 
-DROPPED_COLUMNS = {'importance', 'entities', 'source', 'keywords'}
+DROPPED_COLUMNS = {'category', 'importance', 'entities', 'source', 'keywords'}
 DROPPED_HINTS = {'hint_imp', 'hint_source', 'hint_entities'}
 
 
@@ -58,23 +59,25 @@ def _index_definitions(backend):
 
 
 def test_a_fresh_store_has_no_group3_columns(backend):
-    """Verify the insights table drops importance, entities, source, keywords.
+    """Verify the insights table drops every column in `DROPPED_COLUMNS`.
 
-    Mutation: leaving any of the four columns in either baseline
+    Mutation: leaving any of the five columns in either baseline
         schema, so a fresh store keeps a column nothing reads.
-    Oracle: the catalog's column list, beside `category`, which stays.
+    Oracle: the catalog's column list, beside `content`, which proves
+        the read sees the table.
     """
     columns = _insight_columns(backend)
 
-    assert 'category' in columns
+    assert 'content' in columns
     assert columns.isdisjoint(DROPPED_COLUMNS)
 
 
 def test_no_index_names_a_group3_column(backend):
-    """Verify no insights index names importance or source.
+    """Verify no insights index names category, importance or source.
 
-    Mutation: leaving `idx_insights_importance` or
-        `idx_insights_source` in a baseline, which makes the release
+    Mutation: leaving `idx_insights_category`,
+        `idx_insights_importance` or `idx_insights_source` in a
+        baseline, which makes the release
         refuse every store the hand DDL has run on; or keeping
         `importance` in the `--basic` listing index.
     Oracle: the catalog's index definitions, beside the listing index,
@@ -87,7 +90,7 @@ def test_no_index_names_a_group3_column(backend):
     assert 'created_at' in listing
     assert not any(column in d
                    for d in definitions.values()
-                   for column in ('importance', 'source'))
+                   for column in ('category', 'importance', 'source'))
 
 
 def test_the_sqlite_keyword_index_holds_content_alone(tmp_path):
@@ -115,11 +118,11 @@ def test_the_sqlite_keyword_index_holds_content_alone(tmp_path):
 
 
 def test_a_fresh_queue_has_no_dropped_hints(tmp_path):
-    """Verify the queue carries `category` and `replaced_id` and no hints.
+    """Verify the queue carries `replaced_id` and no category or hints.
 
-    Mutation: leaving `hint_imp`, `hint_source` or `hint_entities` in
-        the queue DDL, or keeping `hint_cat` or `hint_replaced_id`
-        beside the columns that replaced them.
+    Mutation: leaving `category`, `hint_imp`, `hint_source` or
+        `hint_entities` in the queue DDL, or keeping `hint_cat` or
+        `hint_replaced_id`.
     Oracle: `pragma table_info(queue)` on a fresh queue.db.
     """
     conn = open_queue_db(str(tmp_path))
@@ -128,14 +131,17 @@ def test_a_fresh_queue_has_no_dropped_hints(tmp_path):
     finally:
         conn.close()
 
-    assert {'category', 'replaced_id'} <= columns
-    assert columns.isdisjoint(DROPPED_HINTS | {'hint_cat', 'hint_replaced_id'})
+    assert 'replaced_id' in columns
+    assert columns.isdisjoint(
+        DROPPED_HINTS | {'category', 'hint_cat', 'hint_replaced_id'})
 
 
 @pytest.mark.parametrize('args', [
+    ['remember', '--cat', 'decision', 'a row'],
     ['remember', '--imp', '3', 'a row'],
     ['remember', '--source', 'agent', 'a row'],
     ['remember', '--entity', 'Kombu', 'a row'],
+    ['replace', 'deadbeef', '--cat', 'decision', 'a row'],
     ['replace', 'deadbeef', '--imp', '3', 'a row'],
     ['replace', 'deadbeef', '--source', 'agent', 'a row'],
     ['replace', 'deadbeef', '--entity', 'Kombu', 'a row'],
@@ -146,29 +152,15 @@ def test_a_fresh_queue_has_no_dropped_hints(tmp_path):
 def test_no_command_takes_a_group3_flag(mm_runner, args):
     """Verify the write verbs and recall reject every deleted flag.
 
-    Mutation: keeping any of `--imp`, `--source` or `--entity` on
-        `remember` or `replace`, or `--cat` or `--source` on `recall`.
+    Mutation: keeping any of `--cat`, `--imp`, `--source` or
+        `--entity` on `remember` or `replace`, or `--cat` or
+        `--source` on `recall`.
     Oracle: Click's usage error, exit status 2.
     """
     res = invoke(mm_runner, args)
 
     assert res.exit_code == 2
     assert 'No such option' in res.output
-
-
-def test_remember_still_stores_its_category(mm_runner):
-    """Verify `remember --cat` keeps reaching the stored category.
-
-    Mutation: deleting `category` with the other hints, which drops
-        every typed category to the `fact` default.
-    Oracle: `insights show` on the stored row.
-    """
-    res = invoke(mm_runner, ['remember', '--cat', 'decision', 'a decision'])
-    row_id = parse_remember(res, mm_runner)['id']
-
-    shown = json.loads(invoke(mm_runner, ['insights', 'show', row_id]).output)
-
-    assert shown['category'] == 'decision'
 
 
 def test_the_enrichment_prompt_asks_for_a_summary_alone():
@@ -215,32 +207,34 @@ def test_enrichment_coverage_grades_embedding_and_summary(backend):
 
 
 def test_status_reports_no_top_entities(mm_runner):
-    """Verify `status` counts categories and lists no entities.
+    """Verify `status` counts no categories and lists no entities.
 
-    Mutation: keeping `top_entities` on `NodeStats` and in the output.
-    Oracle: the output keys, beside `by_category`.
+    Mutation: keeping `by_category` or `top_entities` on `NodeStats`
+        and in the output.
+    Oracle: the output keys, beside `total_insights`.
     """
     invoke(mm_runner, ['remember', 'a status row'])
 
     out = json.loads(invoke(mm_runner, ['status']).output)
 
-    assert 'by_category' in out
+    assert 'total_insights' in out
+    assert 'by_category' not in out
     assert 'top_entities' not in out
 
 
 def test_insights_show_prints_no_group3_field(mm_runner):
-    """Verify `insights show` prints the category and none of the four.
+    """Verify `insights show` prints none of the dropped columns.
 
-    Mutation: keeping `importance`, `entities` or `source` in
-        `insight_to_full_dict`.
-    Oracle: the printed keys, beside `category`.
+    Mutation: keeping `category`, `importance`, `entities` or
+        `source` in `insight_to_full_dict`.
+    Oracle: the printed keys, beside `content`.
     """
     res = invoke(mm_runner, ['remember', 'a shown row'])
     row_id = parse_remember(res, mm_runner)['id']
 
     shown = json.loads(invoke(mm_runner, ['insights', 'show', row_id]).output)
 
-    assert 'category' in shown
+    assert 'content' in shown
     assert set(shown).isdisjoint(DROPPED_COLUMNS)
 
 
@@ -307,7 +301,7 @@ def test_recall_takes_no_category_or_source_filter(target):
 
 
 def test_no_record_type_carries_a_group3_field():
-    """Verify the insight, the migration row and the queue row drop the four.
+    """Verify the insight, migration and queue rows drop every column.
 
     Mutation: leaving a field on `Insight`, `MigrateInsight` or
         `QueueRow`.
@@ -317,10 +311,10 @@ def test_no_record_type_carries_a_group3_field():
     migrate_fields = {f.name for f in fields(MigrateInsight)}
     queue_fields = {f.name for f in fields(QueueRow)}
 
-    assert 'category' in insight_fields
+    assert 'content' in insight_fields
     assert insight_fields.isdisjoint(DROPPED_COLUMNS)
     assert migrate_fields.isdisjoint(DROPPED_COLUMNS)
-    assert queue_fields.isdisjoint(DROPPED_HINTS)
+    assert queue_fields.isdisjoint(DROPPED_HINTS | {'category'})
 
 
 def test_the_node_store_offers_no_entity_verb():

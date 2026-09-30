@@ -32,10 +32,10 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
         for i in range(n_rows):
             vec = rng.uniform(-1.0, 1.0, dim).astype(np.float64).tolist()
             conn.execute(
-                'insert into insights (id, content, category,'
+                'insert into insights (id, content,'
                 ' embedding, created_at, updated_at)'
-                ' values (?, ?, ?, ?, ?, ?)',
-                (str(uuid.uuid4()), f'row-{i}', 'fact',
+                ' values (?, ?, ?, ?, ?)',
+                (str(uuid.uuid4()), f'row-{i}',
                  struct.pack(f'<{dim}d', *vec), now, now))
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
@@ -110,10 +110,10 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
         bad = [0.2] * 256
         for i, vec in enumerate([good, bad]):
             conn.execute(
-                'insert into insights (id, content, category,'
+                'insert into insights (id, content,'
                 ' embedding, created_at, updated_at)'
-                ' values (?, ?, ?, ?, ?, ?)',
-                (str(uuid.uuid4()), f'row-{i}', 'fact',
+                ' values (?, ?, ?, ?, ?)',
+                (str(uuid.uuid4()), f'row-{i}',
                  struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
             'insert into meta (key, value) values (?, ?)',

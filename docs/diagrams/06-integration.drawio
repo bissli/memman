@@ -52,7 +52,7 @@
         <mxCell id="i_skill_box" value="&lt;b&gt;Skill&lt;/b&gt;  ~/.claude/skills/memman/SKILL.md, loaded on demand" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
           <mxGeometry x="40" y="725" width="1020" height="150" as="geometry" />
         </mxCell>
-        <mxCell id="i_s1" value="&lt;b&gt;Storing memories&lt;/b&gt;&lt;br&gt;Categories, when to write, corrections, the related list, the text, the write pipeline" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="i_s1" value="&lt;b&gt;Storing memories&lt;/b&gt;&lt;br&gt;When to write, corrections, the related list, the text, the write pipeline" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="755" width="235" height="100" as="geometry" />
         </mxCell>
         <mxCell id="i_s2" value="&lt;b&gt;Recall&lt;/b&gt;&lt;br&gt;Writing the query, reading the page, opening a row with memman insights show" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
@@ -72,7 +72,7 @@
         <mxCell id="i_direct_box" value="&lt;b&gt;Direct Bash call&lt;/b&gt;  in the same turn, never through a sub-agent" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="975" width="1020" height="150" as="geometry" />
         </mxCell>
-        <mxCell id="i_d_host" value="&lt;b&gt;Claude Code, this turn&lt;/b&gt;&lt;br&gt;Holds the context. Picks --cat. Replaces every &quot;this&quot; and &quot;it&quot; with its subject." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="i_d_host" value="&lt;b&gt;Claude Code, this turn&lt;/b&gt;&lt;br&gt;Holds the context. Replaces every &quot;this&quot; and &quot;it&quot; with its subject." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="1010" width="250" height="100" as="geometry" />
         </mxCell>
         <mxCell id="i_d_bash" value="&lt;b&gt;memman remember&lt;/b&gt;&lt;br&gt;Refuses while the scheduler is stopped. Otherwise appends to the queue, lists the related rows it may correct, and prints action: queued, id, queue_id, store, quality_warnings, related. If the related read fails, the reply carries related_error in place of related, still exit 0. The worker stores the row later under that id." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">

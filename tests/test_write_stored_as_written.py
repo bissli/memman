@@ -1,7 +1,7 @@
 """What a write consults a model for, and what it never does.
 
 No model reads a write before it is stored: nothing judges it
-non-durable, rewords it, or picks its category. And nothing a model
+non-durable, or rewords it. And nothing a model
 might say retires an existing row -- only `replace <id>` does that.
 """
 
@@ -24,7 +24,7 @@ def test_a_write_makes_exactly_one_llm_call_on_enrichment(
         prompt text -- a screen, a verdict, a merge, or a second
         enrichment pass.
     Oracle: the stage each spied call names, against the stored row's
-        content and category.
+        content.
     """
     stages: list[str] = []
 
@@ -36,14 +36,13 @@ def test_a_write_makes_exactly_one_llm_call_on_enrichment(
         'memman.llm.client.MemmanLLMClient.complete', spy_complete)
     ec = bound_embedder(tmp_backend)
     content = 'Stored rows in goog and demo-v3 carry bissli.'
-    parent = make_insight(id='one-call-1', content=content, category='fact')
+    parent = make_insight(id='one-call-1', content=content)
 
     res = run_remember(tmp_backend, parent, ec=ec)
 
     assert stages == [llm_usage.STAGE_ENRICHMENT]
     stored = tmp_backend.nodes.get(res['id'])
     assert stored.content == content
-    assert stored.category == 'fact'
 
 
 def _retire_everything(self, system, user, **kwargs):
@@ -85,7 +84,7 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
     content = 'The message broker is redis, not kombu'
     now = datetime.now(timezone.utc)
     parent = Insight(
-        id=str(uuid.uuid4()), content=content, category='fact',
+        id=str(uuid.uuid4()), content=content,
         created_at=now, updated_at=now)
 
     res = run_remember(tmp_backend, parent, ec=bound_embedder(tmp_backend))
@@ -109,7 +108,7 @@ def test_an_identical_write_adds_a_second_row(tmp_backend):
     tmp_backend.nodes.insert(make_insight(id='stored', content=content))
     now = datetime.now(timezone.utc)
     parent = Insight(
-        id=str(uuid.uuid4()), content=content, category='fact',
+        id=str(uuid.uuid4()), content=content,
         created_at=now, updated_at=now)
 
     res = run_remember(tmp_backend, parent, ec=bound_embedder(tmp_backend))

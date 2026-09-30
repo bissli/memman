@@ -82,16 +82,15 @@ class TestQueryInsightsFilters:
     def test_keyword_filter(self, tmp_db):
         """The keyword filter matches insight content.
 
-        Mutation: query_insights ignoring keyword, or matching category instead
-            of content.
+        Mutation: query_insights ignoring keyword.
         Oracle: two of three inserted insights contain "Go".
         """
         insert_insight(tmp_db, make_insight(
-            id='q-1', content='Go language features', category='fact'))
+            id='q-1', content='Go language features'))
         insert_insight(tmp_db, make_insight(
-            id='q-2', content='Python web framework', category='decision'))
+            id='q-2', content='Python web framework'))
         insert_insight(tmp_db, make_insight(
-            id='q-3', content='Go concurrency patterns', category='fact'))
+            id='q-3', content='Go concurrency patterns'))
 
         results = query_insights(tmp_db, keyword='Go')
         assert len(results) == 2

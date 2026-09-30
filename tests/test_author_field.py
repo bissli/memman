@@ -144,7 +144,6 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
     try:
         insert_insight(db, Insight(
             id='author-migrate-1', content='author migrate test',
-            category='fact',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
             author='alice'))
@@ -199,7 +198,7 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
 
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
-    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<created>\S+) (?P<author>\S+) \| (?P<text>.*)$')
 
 
 def test_recall_page_carries_author(mm_runner, monkeypatch):

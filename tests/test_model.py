@@ -3,30 +3,7 @@
 
 from datetime import datetime, timezone
 
-from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
-from memman.store.model import parse_timestamp
-
-
-def test_valid_categories():
-    """The five categories are accepted; `general` and unknowns are not.
-
-    Mutation: the `general` literal returning to `VALID_CATEGORIES`.
-    Oracle: the five-member set, with `general` and `bogus` outside it.
-    """
-    assert VALID_CATEGORIES == {'preference', 'decision', 'fact',
-                                'insight', 'context'}
-    assert 'general' not in VALID_CATEGORIES
-    assert 'bogus' not in VALID_CATEGORIES
-
-
-def test_semantic_default_values():
-    """Pin the semantically-meaningful `category` dataclass default.
-
-    Mutation: the `general` literal returning as the `Insight` default.
-    Oracle: the dataclass default.
-    """
-    ins = Insight()
-    assert ins.category == 'fact'
+from memman.store.model import format_timestamp, parse_timestamp
 
 
 def test_format_timestamp():

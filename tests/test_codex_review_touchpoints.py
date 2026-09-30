@@ -30,7 +30,6 @@ def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
     source = (skills / 'memman/SKILL.md').read_text()
     fill = {
         '<thought>': 'The billing retry cap stays at three.',
-        '<category>': 'decision',
         '<new content>': 'The billing retry cap is now four.',
         '<query>': 'billing retry decisions',
         # Basic recall is a literal text match, so use a phrase in the
@@ -49,7 +48,7 @@ def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
     assert initial.exit_code == 0, initial.output
     assert initial.stdout == ''
     remembered = invoke(
-        mm_runner, examples['memman remember "<thought>" --cat <category>'])
+        mm_runner, examples['memman remember "<thought>"'])
     assert remembered.exit_code == 0, remembered.output
     old_id = json.loads(remembered.output)['id']
     corrected = invoke(mm_runner, [
@@ -61,10 +60,10 @@ def test_installed_skill_examples_correct_a_queued_memory(mm_runner):
     _, data_dir = mm_runner
     with queue_db(data_dir) as conn:
         queued = conn.execute(
-            'select queue_uuid, category, replaced_id from queue order by id'
+            'select queue_uuid, replaced_id from queue order by id'
         ).fetchall()
     assert [tuple(row) for row in queued] == [
-        (old_id, 'decision', None), (new_id, 'decision', old_id)]
+        (old_id, None), (new_id, old_id)]
     force_drain(data_dir)
 
     history = invoke(mm_runner, [

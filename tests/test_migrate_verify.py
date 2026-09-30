@@ -34,10 +34,10 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
         for i in range(n_rows):
             vec = [0.1 * (i + 1)] * 512
             conn.execute(
-                'insert into insights (id, content, category,'
+                'insert into insights (id, content,'
                 ' embedding, created_at, updated_at)'
-                ' values (?, ?, ?, ?, ?, ?)',
-                (str(uuid.uuid4()), f'row-{i}', 'fact',
+                ' values (?, ?, ?, ?, ?)',
+                (str(uuid.uuid4()), f'row-{i}',
                  struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
             'insert into meta (key, value) values (?, ?)',

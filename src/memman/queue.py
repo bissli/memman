@@ -37,7 +37,6 @@ class QueueRow:
     id: int
     store: str
     content: str
-    category: str | None
     replaced_id: str | None
     attempts: int
     queue_uuid: str
@@ -120,7 +119,6 @@ create table if not exists queue (
     id            integer primary key autoincrement,
     store         text not null,
     content       text not null,
-    category      text,
     replaced_id   text,
     queue_uuid    text not null unique,
     queued_at     integer not null,
@@ -174,7 +172,6 @@ def enqueue(
         conn: sqlite3.Connection,
         store: str,
         content: str,
-        category: str | None = None,
         replaced_id: str | None = None,
         author: str | None = None,
         ) -> tuple[int, str]:
@@ -188,8 +185,6 @@ def enqueue(
         Store the drain writes the row into.
     content : str
         The memory text, stored as written.
-    category : str or None, default None
-        Category the drain stamps on the insight.
     replaced_id : str or None, default None
         Id of the insight this write replaces when the worker
         commits it; set by the `replace` command. It may name a write
@@ -219,13 +214,13 @@ def enqueue(
     queue_uuid = str(uuid.uuid4())
     sql = """
 insert into queue (
-    store, content, category, replaced_id,
+    store, content, replaced_id,
     queue_uuid, queued_at, author
 )
-values (?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
-        store, content, category, replaced_id,
+        store, content, replaced_id,
         queue_uuid, now, author))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
@@ -236,7 +231,7 @@ def find_pending(
         conn: sqlite3.Connection,
         store: str,
         id_or_prefix: str,
-        ) -> tuple[str, str | None] | None:
+        ) -> str | None:
     """Resolve an id or unambiguous prefix to a write still in the queue.
 
     A write the drain is storing right now still matches, since it
@@ -254,9 +249,9 @@ def find_pending(
 
     Returns
     -------
-    tuple[str, str | None] or None
-        `(id, category)` of the one pending write that matches; None
-        when none does.
+    str or None
+        Full id of the one pending write that matches; None when none
+        does.
 
     Raises
     ------
@@ -264,7 +259,7 @@ def find_pending(
         When the prefix matches more than one pending write.
     """
     sql = """
-select queue_uuid, category from queue
+select queue_uuid from queue
 where store = ? and status = 'pending'
   and substr(queue_uuid, 1, length(?)) = ?
 """
@@ -273,7 +268,7 @@ where store = ? and status = 'pending'
     if len(rows) > 1:
         raise ValueError(
             f'prefix {id_or_prefix!r} matches {len(rows)} queued writes')
-    return (rows[0][0], rows[0][1]) if rows else None
+    return rows[0][0] if rows else None
 
 
 def find_pending_replace(
@@ -371,7 +366,7 @@ where id = (
     order by queued_at asc
     limit 1
 )
-returning id, store, content, category, replaced_id,
+returning id, store, content, replaced_id,
           attempts, queue_uuid, author
 """
     params = [now, worker_pid, now, STALE_CLAIM_SECONDS, *store_params]
@@ -380,8 +375,8 @@ returning id, store, content, category, replaced_id,
         return None
     return QueueRow(
         id=row[0], store=row[1], content=row[2],
-        category=row[3], replaced_id=row[4],
-        attempts=row[5], queue_uuid=row[6], author=row[7])
+        replaced_id=row[3],
+        attempts=row[4], queue_uuid=row[5], author=row[6])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -550,7 +545,7 @@ def get_row(
     """Return full row (including content) as a dict.
     """
     sql = """
-select id, store, content, category, queued_at, claimed_at,
+select id, store, content, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
        queue_uuid, author
 from queue
@@ -561,12 +556,11 @@ where id = ?
         return None
     return {
         'id': row[0], 'store': row[1], 'content': row[2],
-        'category': row[3],
-        'queued_at': row[4],
-        'claimed_at': row[5], 'worker_pid': row[6],
-        'attempts': row[7], 'status': row[8],
-        'last_error': row[9], 'processed_at': row[10],
-        'queue_uuid': row[11], 'author': row[12],
+        'queued_at': row[3],
+        'claimed_at': row[4], 'worker_pid': row[5],
+        'attempts': row[6], 'status': row[7],
+        'last_error': row[8], 'processed_at': row[9],
+        'queue_uuid': row[10], 'author': row[11],
         }
 
 

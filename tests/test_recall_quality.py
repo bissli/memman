@@ -155,7 +155,6 @@ def _populate_recall(backend, topic_centers: list) -> None:
             ins = Insight(
                 id=ins_id,
                 content=f'topic {t_idx} insight {k}',
-                category='fact',
                 created_at=None,
                 updated_at=None,
                 deleted_at=None)

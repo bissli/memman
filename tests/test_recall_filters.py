@@ -20,12 +20,12 @@ from tests.conftest import make_insight, set_created_at
 NOW = datetime.now(timezone.utc)
 
 
-def _seed(backend, count, category, content_fmt):
+def _seed(backend, count, prefix, content_fmt):
     ids = []
     for i in range(count):
-        iid = f'{category}-{i}'
+        iid = f'{prefix}-{i}'
         backend.nodes.insert(make_insight(
-            id=iid, category=category, content=content_fmt.format(i=i)))
+            id=iid, content=content_fmt.format(i=i)))
         set_created_at(backend, iid, NOW - timedelta(minutes=i))
         ids.append(iid)
     return ids

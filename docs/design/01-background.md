@@ -12,7 +12,7 @@ memman gives the agent a separate store for knowledge worth keeping. It saves in
 
 The included integration supports Claude Code. The agent uses memman's CLI through Bash, guided by lifecycle hooks and an installed skill. The same CLI is available for direct use and scripts.
 
-Memories are explicit: the agent chooses their text and category. memman does not decide which conversation details matter or automatically resolve contradictory claims. The agent uses `replace` to correct a memory and `forget` to remove it from recall.
+Memories are explicit: the agent chooses their text. memman does not decide which conversation details matter or automatically resolve contradictory claims. The agent uses `replace` to correct a memory and `forget` to remove it from recall.
 
 ## 1.3 Responsibilities
 
@@ -23,7 +23,7 @@ Memories are explicit: the agent chooses their text and category. memman does no
 | Enrichment model             | Produce a short display summary of each memory.                                       |
 | Embedding model and reranker | Help rank stored memories against a query.                                            |
 
-This division is what **LLM-supervised memory** means here: the coding agent directs memory use. The enrichment model does not rewrite the original content, pick categories, merge claims, or decide what to keep.
+This division is what **LLM-supervised memory** means here: the coding agent directs memory use. The enrichment model does not rewrite the original content, merge claims, or decide what to keep.
 
 ![Responsibilities of the agent, memman, and enrichment model](../diagrams/01-llm-supervised.drawio.png)
 

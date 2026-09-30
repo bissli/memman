@@ -45,7 +45,7 @@ def test_node_insert_roundtrip(backend):
     the wrong row.
     Oracle: the hand-supplied `hello` read back by id.
     """
-    ins = Insight(id='abc', content='hello', category='fact')
+    ins = Insight(id='abc', content='hello')
     backend.nodes.insert(ins)
     fetched = backend.nodes.get('abc')
     assert fetched is not None

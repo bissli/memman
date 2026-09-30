@@ -74,7 +74,7 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         for text in ('the broker is redis now', 'the broker is rabbitmq now'):
             enqueue(
                 conn, store='default', content=text,
-                category='fact', replaced_id=first)
+                replaced_id=first)
     res = invoke(mm_runner, ['scheduler', 'drain'])
     assert res.exit_code == 0, res.output
     assert '"redirected_from"' in res.output

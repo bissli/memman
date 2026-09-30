@@ -30,10 +30,10 @@ from tests.conftest import invoke, make_insight, parse_remember
 
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
-    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<created>\S+) (?P<author>\S+) \| (?P<text>.*)$')
 _BASIC_LINE = re.compile(
     r'^(?P<id>\S{8})'
-    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+    r' (?P<created>\S+) (?P<author>\S+) \| (?P<text>.*)$')
 
 
 def _parse_recall_lines(output: str, basic: bool = False) -> list[dict]:
@@ -84,47 +84,6 @@ class TestRemember:
         data = parse_remember(result, runner)
         assert data['action'] in {'add', 'added', 'update', 'updated'}
         assert 'sqlite' in data['content'].lower()
-
-    def test_remember_with_flags(self, runner):
-        """Store with an explicit category.
-
-        Mutation: dropping the `--cat` value on the way to storage, so
-            the stored row keeps the default.
-        Oracle: `insights show` on the stored id, compared against the
-            flag passed to `remember`.
-        """
-        result = invoke(runner, [
-            'remember', 'Chose Docker for container orchestration in production',
-            '--cat', 'decision'])
-        assert result.exit_code == 0
-        data = parse_remember(result, runner)
-        assert 'id' in data
-
-        shown = json.loads(
-            invoke(runner, ['insights', 'show', data['id']]).output)
-        assert shown['category'] == 'decision'
-
-    def test_remember_invalid_category(self, runner):
-        """Verify an unknown --cat value is rejected.
-
-        Mutation: dropping the category validation so `bogus` is stored.
-        Oracle: non-zero exit for a category outside the valid set.
-        """
-        result = invoke(runner, [
-            'remember', 'Go uses SQLite for storage', '--cat', 'bogus'])
-        assert result.exit_code != 0
-
-    def test_remember_rejects_general(self, runner):
-        """Verify `--cat general` exits non-zero and names the valid set.
-
-        Mutation: `general` accepted as a category.
-        Oracle: the exit code and the message listing the valid categories.
-        """
-        result = invoke(runner, [
-            'remember', 'Go uses SQLite for storage', '--cat', 'general'])
-        assert result.exit_code != 0
-        assert 'valid:' in result.output
-        assert 'fact' in result.output
 
     def test_remember_does_not_enrich_old_pending_insights(
             self, runner, monkeypatch):
@@ -426,7 +385,7 @@ class TestRecall:
             folded the same way the page line folds it.
         """
         invoke(runner, [
-            'remember', 'Q', '--cat', 'fact'])
+            'remember', 'Q'])
         result = invoke(runner, ['recall', '--basic', 'Q'])
         assert result.exit_code == 0
         rows = _parse_recall_lines(result.output, basic=True)
@@ -833,7 +792,7 @@ class TestReplace:
         Oracle: the id returned by the first `remember`.
         """
         result = invoke(runner, [
-            'remember', 'Redis cache configured with 512MB memory limit', '--cat', 'fact'])
+            'remember', 'Redis cache configured with 512MB memory limit'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -844,54 +803,6 @@ class TestReplace:
         assert data['action'] == 'replace'
         assert data['replaced_id'] == old_id
         assert 'redis' in data['content'].lower()
-
-    def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits category from original.
-
-        Mutation: dropping the inherited category on a flag-less
-            replace, defaulting instead.
-        Oracle: `insights show` on the replacement id, compared
-            against the original's stored value.
-        """
-        result = invoke(runner, [
-            'remember', 'Chose PostgreSQL over MySQL for JSONB support',
-            '--cat', 'decision'])
-        old_id = parse_remember(result, runner)['id']
-
-        result = invoke(runner, [
-            'replace', old_id,
-            'Chose PostgreSQL over MySQL for JSONB and CTE support'])
-        assert result.exit_code == 0
-        data = parse_remember(result, runner)
-        assert 'id' in data
-
-        shown = json.loads(
-            invoke(runner, ['insights', 'show', data['id']]).output)
-        assert shown['category'] == 'decision'
-
-    def test_replace_overrides_metadata(self, runner):
-        """Replace with an explicit flag uses the new value.
-
-        Mutation: keeping the original category despite an explicit
-            override on the replace command.
-        Oracle: `insights show` on the replacement id, compared
-            against the flag passed to `replace`.
-        """
-        result = invoke(runner, [
-            'remember', 'Nginx configured as reverse proxy for API gateway', '--cat', 'fact'])
-        old_id = parse_remember(result, runner)['id']
-
-        result = invoke(runner, [
-            'replace', old_id,
-            'Switched from Nginx to Envoy for service mesh integration',
-            '--cat', 'decision'])
-        assert result.exit_code == 0
-        data = parse_remember(result, runner)
-        assert 'id' in data
-
-        shown = json.loads(
-            invoke(runner, ['insights', 'show', data['id']]).output)
-        assert shown['category'] == 'decision'
 
     def test_replace_nonexistent_id(self, runner):
         """Verify replacing an unknown id fails with a not-found message.
