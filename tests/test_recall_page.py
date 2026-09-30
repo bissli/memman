@@ -15,6 +15,7 @@ import subprocess
 from datetime import datetime, timezone
 from importlib.resources import files as pkg_files
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from click.testing import CliRunner
@@ -22,18 +23,18 @@ from memman.cli import cli
 from memman.search.recall import run_recall
 from memman.store.backend import Backend
 from memman.store.db import open_db
-from memman.store.model import format_timestamp
+from memman.store.model import format_timestamp, insight_to_recall_line
 from memman.store.node import insert_insight
 from memman.store.sqlite import SqliteBackend
 from tests.conftest import invoke, make_insight
 
 _SCORED_LINE = re.compile(
     r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
-    r' (?P<created>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)'
+    r' (?P<created>\d{4}-\d\d-\d\d)'
     r' (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
 _BASIC_LINE = re.compile(
     r'^(?P<id>\S{8})'
-    r' (?P<created>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)'
+    r' (?P<created>\d{4}-\d\d-\d\d)'
     r' (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
 
 _LONG_CONTENT = 'zulu first line\nsecond line ' + 'y' * 300
@@ -173,6 +174,50 @@ def test_page_joins_whitespace_inside_an_author(mm_runner):
     rows = _parse(result.stdout, _SCORED_LINE)
     assert rows['eeeeeeee']['author'] == 'Jane_Doe_Smith'
     assert rows['eeeeeeee']['category'] == 'fact'
+
+
+def test_page_prints_the_utc_date_alone(mm_runner):
+    """Verify the created field is the row's UTC date with no time of day.
+
+    Mutation: printing the full ISO timestamp, or converting to local
+        time, which moves a row stamped just after UTC midnight to the
+        day before west of UTC.
+    Oracle: hand-read `2024-01-16` from the seeded
+        `2024-01-16T02:30:00Z`, on the scored and `--basic` pages.
+    """
+    _, data_dir = mm_runner
+    _seed(data_dir, [(make_insight(
+        id='ffffffff-0006', content='zulu row stamped after midnight'), '')])
+    db = open_db(str(pathlib.Path(data_dir) / 'data' / 'default'))
+    try:
+        db._conn.execute(
+            'update insights set created_at = ? where id = ?',
+            ('2024-01-16T02:30:00Z', 'ffffffff-0006'))
+    finally:
+        db.close()
+
+    scored = invoke(mm_runner, ['recall', 'zulu'])
+    basic = invoke(mm_runner, ['recall', 'zulu', '--basic'])
+
+    assert scored.stdout.split()[2] == '2024-01-16'
+    assert basic.stdout.split()[1] == '2024-01-16'
+
+
+def test_page_date_is_utc_for_a_zoned_timestamp():
+    """Verify a created_at read in a non-UTC zone prints its UTC date.
+
+    Mutation: formatting `created_at` without converting to UTC, so a
+        Postgres session whose TimeZone sits west of UTC prints the
+        day before for a row stamped just after UTC midnight.
+    Oracle: `2024-01-16T02:30Z` held as `2024-01-15 21:30-05:00`, the
+        aware value psycopg returns under America/New_York.
+    """
+    stamped = datetime(2024, 1, 16, 2, 30, tzinfo=timezone.utc)
+    ins = make_insight(
+        id='gggggggg-0007', content='zulu zoned row',
+        created_at=stamped.astimezone(ZoneInfo('America/New_York')))
+
+    assert insight_to_recall_line(ins, None).split()[1] == '2024-01-16'
 
 
 def test_basic_page_prints_the_line_without_a_score(page_rows):

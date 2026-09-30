@@ -13,7 +13,7 @@ backends fill them in on insert and reads return them populated.
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger('memman')
@@ -105,7 +105,8 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     -------
     str
         `<id8> <score> <created_at> <author> <category> | <text>`.
-        `id8` is the first 8 characters of the id. `-` stands for an
+        `id8` is the first 8 characters of the id. `created_at` is the
+        UTC date, `YYYY-MM-DD`, with no time of day. `-` stands for an
         unset author, and `_` joins any whitespace inside one, so
         every field before `|` is one space-free token. `text` is the
         summary, else the first `BRIEF_CONTENT_CHARS` characters of
@@ -122,7 +123,7 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     if score is not None:
         fields.append(f'{score:.2f}')
     fields += [
-        format_timestamp(ins.created_at),
+        ins.created_at.astimezone(timezone.utc).strftime('%Y-%m-%d'),
         '_'.join((ins.author or '').split()) or '-',
         ins.category]
     return f"{' '.join(fields)} | {text}"

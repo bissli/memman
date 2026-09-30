@@ -282,9 +282,10 @@ else:
 - `score`: two decimals. Compare it only against the other scores on
   the same page, never against a fixed number and never across
   pages: the scale belongs to whichever reranker is configured.
-- `created_at`: ISO UTC to the second. A timeline question sorts on
-  this field rather than reading row order, which is relevance
-  order.
+- `created_at`: the UTC date, `YYYY-MM-DD`, with no time of day. A
+  timeline question sorts on this field rather than on row order,
+  which is relevance order. Rows from one day tie. `memman insights
+  show <id8>` carries the full timestamp when same-day order matters.
 - `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
   `.envrc`, else the OS username - or `-` when unset.
 - `text`: the stored summary, else the first 200 characters of the
