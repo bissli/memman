@@ -482,6 +482,26 @@ class TestHookManagement:
         remove_claude_hooks(data)
         assert data == before
 
+    def test_add_claude_hooks_keeps_path_beside_home_absolute(
+            self, monkeypatch):
+        """Verify a hooks dir that only shares home's prefix stays absolute.
+
+        Mutation: a bare startswith(home), which turns /home/ubuntux into
+            the ~x form, a different user's home in the shell.
+        Oracle: home /home/ubuntu against hooks dir /home/ubuntux/...,
+            and /home/ubuntu/... for the ~ form.
+        """
+        monkeypatch.setattr(pathlib.Path, 'home',
+                            lambda: pathlib.Path('/home/ubuntu'))
+        beside = {}
+        add_claude_hooks_selective(beside, '/home/ubuntux/.claude/hooks/memman')
+        under = {}
+        add_claude_hooks_selective(under, '/home/ubuntu/.claude/hooks/memman')
+        assert beside['hooks']['SessionStart'][0]['hooks'][0]['command'] \
+            == '/home/ubuntux/.claude/hooks/memman/prime.sh'
+        assert under['hooks']['SessionStart'][0]['hooks'][0]['command'] \
+            == '~/.claude/hooks/memman/prime.sh'
+
     def test_add_claude_hooks_appends_to_existing_pretooluse(self):
         """Verify task_recall appends to an existing PreToolUse list.
 
@@ -656,6 +676,23 @@ class TestPermissions:
             }
         remove_memman_permission(data)
         assert data['permissions'] == {'deny': ['Bash(rm:*)']}
+
+    def test_remove_memman_permission_keeps_rules_naming_memman_paths(self):
+        """Verify removal keeps a rule that only names a memman path.
+
+        Mutation: judging ownership by 'memman' anywhere in the rule,
+            which deletes a user's rules for a memman source checkout.
+        Oracle: rules for a checkout at ~/code/memman, none of which
+            runs the memman CLI, beside one that does.
+        """
+        foreign = [
+            'Read(~/code/memman/**)',
+            'Bash(cd ~/code/memman && make test)',
+            'Bash(memmanager:*)',
+            ]
+        data = {'permissions': {'allow': [*foreign, 'Bash(memman:*)']}}
+        remove_memman_permission(data)
+        assert data['permissions']['allow'] == foreign
 
     def test_remove_memman_permission_drops_empty_permissions(self):
         """Verify an emptied permissions dict is removed.

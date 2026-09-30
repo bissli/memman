@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -243,7 +244,7 @@ def add_claude_hooks_selective(
         if not enabled:
             continue
         command = os.path.join(hooks_dir, script)
-        if command.startswith(home):
+        if command.startswith(home + os.sep):
             command = '~' + command[len(home):]
         wanted.append((event, matcher or '', command))
 
@@ -291,12 +292,15 @@ def add_memman_permission(data: dict, entries: list[str]) -> None:
 
 
 def remove_memman_permission(data: dict) -> None:
-    """Drop every string mentioning memman from permissions allow/deny/ask.
+    """Drop every rule that runs the memman CLI from allow/deny/ask.
 
     Parameters
     ----------
     data : dict
-        Parsed settings, mutated in place. An emptied list, and an
+        Parsed settings, mutated in place. A rule is memman's when it
+        matches `Bash(memman` followed by a space, `:`, or `)`, hand-added
+        rules included. A rule that only names a memman path, such as
+        `Read(~/code/memman/**)`, is kept. An emptied list, and an
         emptied `permissions`, are removed.
     """
     perms = data.get('permissions')
@@ -308,7 +312,8 @@ def remove_memman_permission(data: dict) -> None:
             continue
         filtered = [
             item for item in arr
-            if not (isinstance(item, str) and 'memman' in item)
+            if not (isinstance(item, str)
+                    and re.match(r'Bash\(memman[ :)]', item))
             ]
         if not filtered:
             perms.pop(key, None)
