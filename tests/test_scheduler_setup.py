@@ -1149,6 +1149,37 @@ class TestBackupScheduler:
         assert any('enable memman-backup.timer' in a for a in argvs)
         assert any('restart memman-backup.timer' in a for a in argvs)
 
+    def test_install_backup_systemd_carries_install_path(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify the systemd backup service runs with the install-time PATH.
+
+        Mutation: the service inheriting systemd's minimal PATH, so a
+            pg_dump in a user directory is never found and every Postgres
+            store's backup fails.
+        Oracle: the PATH value set before install, written verbatim.
+        """
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+        monkeypatch.setenv('PATH', '/opt/pg/bin:/usr/bin')
+        _record_subprocess(monkeypatch)
+        result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
+        service = Path(result['service_path']).read_text()
+        assert 'Environment="PATH=/opt/pg/bin:/usr/bin"\n' in service
+
+    def test_install_backup_launchd_carries_install_path(
+            self, fake_home, fake_binary, monkeypatch):
+        """Verify the launchd backup wrapper exports the install-time PATH.
+
+        Mutation: the wrapper inheriting launchd's minimal PATH, so a
+            pg_dump in a user directory is never found.
+        Oracle: the PATH value set before install, written verbatim.
+        """
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+        monkeypatch.setenv('PATH', '/opt/pg/bin:/usr/bin')
+        _record_subprocess(monkeypatch)
+        result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
+        wrapper = Path(result['wrapper_path']).read_text()
+        assert 'export PATH=/opt/pg/bin:/usr/bin\n' in wrapper
+
     def test_install_backup_launchd_writes_calendar_plist(
             self, fake_home, fake_binary, monkeypatch):
         """Verify a multi-value cron gives a launchd interval array.

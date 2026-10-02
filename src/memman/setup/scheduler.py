@@ -954,12 +954,15 @@ def _install_systemd_backup(binary: str, data_dir: str,
 
     env_file = config.env_file_path(data_dir)
     logs_dir = Path.home() / '.memman' / 'logs'
+    # pg_dump may sit in a user directory that systemd's PATH lacks.
+    install_path = os.environ.get('PATH', os.defpath)
     service_contents = (
         '[Unit]\n'
         'Description=MemMan backup worker\n\n'
         '[Service]\n'
         'Type=oneshot\n'
         f'Environment="MEMMAN_DATA_DIR={data_dir}"\n'
+        f'Environment="PATH={install_path}"\n'
         'Environment=MEMMAN_WORKER=1\n'
         f'EnvironmentFile={env_file}\n'
         f'ExecStartPre=/bin/mkdir -p {logs_dir}\n'
@@ -1048,6 +1051,8 @@ def _install_launchd_backup(
     env_file_q = shlex.quote(str(config.env_file_path(data_dir)))
     data_dir_q = shlex.quote(data_dir)
     binary_q = shlex.quote(binary)
+    # pg_dump may sit in a user directory that launchd's PATH lacks.
+    path_q = shlex.quote(os.environ.get('PATH', os.defpath))
     logs_dir = Path.home() / '.memman' / 'logs'
     logs_dir_q = shlex.quote(str(logs_dir))
     wrapper_contents = (
@@ -1055,6 +1060,7 @@ def _install_launchd_backup(
         f'mkdir -p {logs_dir_q}\n'
         f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
+        f'export PATH={path_q}\n'
         'export MEMMAN_WORKER=1\n'
         f'exec {binary_q} backup worker\n')
 
