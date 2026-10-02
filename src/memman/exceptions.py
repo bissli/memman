@@ -23,7 +23,7 @@ class EmbedFingerprintError(Exception):
     The stored fingerprint lives in the DB's `meta` table. Means the
     operator changed `MEMMAN_EMBED_MODEL` (or related env vars)
     without re-embedding existing data, or the DB has never been
-    initialized. Caller must run `memman embed reembed`.
+    initialized. Caller must run `memman embed swap --to <model>`.
     """
 
 

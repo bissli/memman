@@ -18,7 +18,11 @@ from memman.embed.fingerprint import Fingerprint
 from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 
-pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.e2e_container,
+    pytest.mark.usefixtures('fixed_embed_dim'),
+    ]
 
 
 def test_stored_fingerprint_round_trips_through_backend_meta(

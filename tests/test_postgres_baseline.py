@@ -300,7 +300,7 @@ def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
     """
     store_name = 'pg_remnant'
     schema = _store_schema(store_name)
-    _ensure_baseline_schema(pg_dsn, store_name)
+    _ensure_baseline_schema(pg_dsn, store_name, dim=512)
     index_name = f'idx_insights_hnsw_{schema}'
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -489,7 +489,7 @@ def test_memman_reindex_timeout_caps_hnsw_build(
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
-    _ensure_baseline_schema(pg_dsn, store_name)
+    _ensure_baseline_schema(pg_dsn, store_name, dim=512)
 
     monkeypatch.setenv('MEMMAN_REINDEX_TIMEOUT', '7')
     captured: list[str] = []

@@ -82,6 +82,18 @@ def seed_fingerprint(db_path: Path) -> None:
 
 
 @pytest.fixture
+def fixed_embed_dim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Size a fresh Postgres schema without an embed probe.
+
+    A fresh schema takes its `vector(N)` width from the configured
+    embed model, and a keyless host cannot probe it.
+    """
+    monkeypatch.setattr(
+        'memman.store.postgres.seed_default_fingerprint',
+        lambda: Fingerprint(config.INSTALL_DEFAULTS[config.EMBED_MODEL], 1024))
+
+
+@pytest.fixture
 def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
                 ) -> tuple[Path, Path]:
     """Per-test isolated HOME with scheduler state pre-written.

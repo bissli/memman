@@ -1448,8 +1448,9 @@ class _StoreContext:
         stored = fingerprint.stored_fingerprint(self.backend)
         if stored is None:
             raise EmbedFingerprintError(
-                f"store {store_name!r} has no embed fingerprint and"
-                " contains data; run 'memman embed reembed' to converge.")
+                f'store {store_name!r} has no embed fingerprint and'
+                f' contains data; run `{fingerprint.swap_command(store_name)}`'
+                ' to re-embed it.')
         self.ec = fingerprint.bound_embedder(self.backend)
         self._stored_fp = stored
         self._run_id: int | None = None
@@ -3892,6 +3893,7 @@ def embed_status(ctx: click.Context) -> None:
     """
     from memman.embed.swap import read_progress
 
+    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     with _active_backend(ctx, unchecked=True) as backend:
         stored = fingerprint.stored_fingerprint(backend)
         progress = read_progress(backend)
@@ -3906,10 +3908,13 @@ def embed_status(ctx: click.Context) -> None:
         ec = _ec_registry.get_for(stored.model)
         out['credentials_available'] = ec.available()
         if not ec.available():
-            out['hint'] = ec.unavailable_message()
+            out['hint'] = (
+                f'{ec.unavailable_message()}; or re-embed onto a served'
+                f' model with `{fingerprint.swap_command(name)}`')
     else:
         out['hint'] = (
-            "DB not initialized. Run 'memman embed reembed'.")
+            'store has no embed fingerprint; run'
+            f' `{fingerprint.swap_command(name)}` to record one.')
     if progress.state:
         out['swap'] = {
             'state': progress.state,

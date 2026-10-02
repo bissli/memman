@@ -24,7 +24,11 @@ from memman.store.postgres import open_postgres_backend
 from memman.store.sqlite import open_sqlite_backend
 from tests.e2e.conftest import _safe
 
-pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.e2e_container,
+    pytest.mark.usefixtures('fixed_embed_dim'),
+    ]
 
 
 def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):

@@ -66,6 +66,22 @@ class Fingerprint:
             dim=int(client.dim))
 
 
+def swap_command(store: str) -> str:
+    """Command that re-embeds `store` and records its fingerprint.
+
+    Parameters
+    ----------
+    store : str
+        Store name, or a `<store>` placeholder where the caller has none.
+
+    Returns
+    -------
+    str
+        A command line that runs on SQLite and Postgres alike.
+    """
+    return f'memman --store {store} embed swap --to <model>'
+
+
 def seed_default_fingerprint() -> Fingerprint:
     """Env-active client's fingerprint, for seeding a fresh store.
 
@@ -148,5 +164,5 @@ def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
     if fp is None:
         raise EmbedFingerprintError(
             'store has no embed fingerprint;'
-            " run 'memman embed reembed' to initialize.")
+            f' run `{swap_command("<store>")}` to re-embed it.')
     return _ec_registry.get_for(fp.model, fp.dim)

@@ -16,8 +16,9 @@ from memman.embed.fingerprint import write_fingerprint
 from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, run_swap
 from memman.store.errors import BackendError
 from memman.store.model import Insight
-from memman.store.postgres import EMBEDDING_DIM, _assert_vector_dim_matches
-from memman.store.postgres import _store_schema, open_postgres_backend
+from memman.store.postgres import _assert_vector_dim_matches, _store_schema
+from memman.store.postgres import open_postgres_backend
+from tests.conftest import EMBEDDING_DIM
 
 pytestmark = pytest.mark.postgres
 

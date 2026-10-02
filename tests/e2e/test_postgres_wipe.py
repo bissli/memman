@@ -18,7 +18,11 @@ from memman.store.postgres import _store_schema, drop_postgres_store
 from memman.store.postgres import open_postgres_backend
 from tests.e2e.conftest import _safe
 
-pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.e2e_container,
+    pytest.mark.usefixtures('fixed_embed_dim'),
+    ]
 
 
 def test_drop_store_removes_schema(pg_dsn, request):

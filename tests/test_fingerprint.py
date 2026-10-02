@@ -120,12 +120,12 @@ class TestFingerprintConsistency:
         """Verify bound_embedder on an unseeded store raises with a fix hint.
 
         Mutation: bound_embedder falling back to the env-active client for an
-            unseeded store, or losing the `embed reembed` hint.
-        Oracle: The hint text the operator is told to run.
+            unseeded store, or naming the SQLite-only `embed reembed`.
+        Oracle: The `embed swap --to` command, which runs on both backends.
         """
         with pytest.raises(EmbedFingerprintError) as excinfo:
             bound_embedder(SqliteBackend(tmp_db))
-        assert 'embed reembed' in str(excinfo.value)
+        assert 'embed swap --to' in str(excinfo.value)
 
     def test_init_default_store_seeds_fingerprint(self, tmp_path):
         """Verify _init_default_store writes the fingerprint at creation.
@@ -363,7 +363,7 @@ class TestReembed:
 
         Mutation: _StoreContext seeding or ignoring a missing fingerprint when
             insights exist.
-        Oracle: Non-zero exit and the `embed reembed` hint in the output.
+        Oracle: Non-zero exit and the `embed swap --to` hint in the output.
         """
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
@@ -376,7 +376,7 @@ class TestReembed:
         result = _invoke([
             '--data-dir', data_dir, 'recall', 'anything'])
         assert result.exit_code != 0
-        assert 'embed reembed' in result.output
+        assert 'embed swap --to' in result.output
 
     def test_converges_after_model_swap(
             self, tmp_path, _scheduler_stopped, monkeypatch, env_file):
@@ -487,7 +487,7 @@ class TestReembed:
         """Verify embed status on an unseeded store reports stored=None.
 
         Mutation: embed_status inventing a stored value or dropping the hint.
-        Oracle: stored is None and the hint names `embed reembed`.
+        Oracle: stored is None and the hint names `embed swap --to`.
         """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
@@ -498,7 +498,7 @@ class TestReembed:
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
         assert out['stored'] is None
-        assert 'embed reembed' in out['hint']
+        assert 'memman --store default embed swap --to' in out['hint']
 
     def test_doctor_reports_fingerprint_pass(self, tmp_path):
         """Verify the doctor check passes with a fingerprint and creds.
@@ -544,7 +544,7 @@ class TestReembed:
 
         Mutation: The check passing when count_active is above zero and the
             fingerprint is missing.
-        Oracle: Status fail and the `embed reembed` fix in detail.error.
+        Oracle: Status fail and the `embed swap --to` fix in detail.error.
         """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
@@ -554,7 +554,51 @@ class TestReembed:
         finally:
             db.close()
         assert result['status'] == 'fail'
-        assert 'embed reembed' in result['detail']['error']
+        assert 'embed swap --to' in result['detail']['error']
+
+    def test_doctor_fingerprint_fail_names_swap_when_model_unreachable(
+            self, tmp_path, monkeypatch):
+        """Verify an unreachable stored model points doctor at `embed swap`.
+
+        Mutation: The failure text naming only the key and endpoint, so an
+            operator whose endpoint dropped the model has no next step.
+        Oracle: The client's `is not reachable` text plus `embed swap --to`.
+        """
+        monkeypatch.setattr(
+            'memman.embed.client.Client.available', lambda self: False)
+        sdir = store_dir(str(tmp_path), 'default')
+        db = open_db(sdir)
+        try:
+            _seed_voyage(db)
+            result = check_embed_fingerprint(SqliteBackend(db))
+        finally:
+            db.close()
+        assert result['status'] == 'fail'
+        assert 'is not reachable' in result['detail']['error']
+        assert 'embed swap --to' in result['detail']['error']
+
+    def test_embed_status_unreachable_hint_names_swap(
+            self, tmp_path, monkeypatch):
+        """Verify embed status names `embed swap` for an unreachable model.
+
+        Mutation: The hint naming only the key and endpoint.
+        Oracle: The `memman --store default embed swap --to` command.
+        """
+        monkeypatch.setattr(
+            'memman.embed.client.Client.available', lambda self: False)
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
+        db = open_db(sdir)
+        try:
+            _seed_voyage(db)
+        finally:
+            db.close()
+
+        result = _invoke([
+            '--data-dir', data_dir, 'embed', 'status'])
+        assert result.exit_code == 0, result.output
+        out = json.loads(result.output)
+        assert 'memman --store default embed swap --to' in out['hint']
 
     def test_idempotent_on_repeat(self, tmp_path, _scheduler_stopped):
         """Verify a second reembed with the same model re-embeds nothing.

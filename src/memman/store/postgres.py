@@ -6,7 +6,7 @@ holding the per-store tables (insights, oplog, meta, worker_runs).
 
 Vector storage:
 - `embedding vector(N)` (pgvector), `N` sized to the active embed
-  model's dim (default 512 via `EMBEDDING_DIM`); pgvector adapter binds
+  model's dim; pgvector adapter binds
   `list[float]` directly with no per-call serialization.
 - HNSW index built `create index concurrently ... vector_cosine_ops
   where deleted_at is null and replaced_by is null`. Built outside
@@ -54,8 +54,6 @@ if TYPE_CHECKING:
     import psycopg
 
 logger = logging.getLogger('memman')
-
-EMBEDDING_DIM = 512
 
 # Postgres NAMEDATALEN is 64; an identifier is truncated to 63
 # bytes, silently.
@@ -1261,20 +1259,28 @@ def _resolve_active_dim(expected_dim: int | None) -> int:
     Returns
     -------
     int
-        `expected_dim`, else the active fingerprint's dim, else
-        `EMBEDDING_DIM`.
+        `expected_dim`, else the active fingerprint's dim.
+
+    Raises
+    ------
+    BackendError
+        When neither is positive: a column built at a guessed width
+        would refuse every vector the configured model writes.
     """
     if expected_dim is not None and expected_dim > 0:
         return int(expected_dim)
     try:
         active = seed_default_fingerprint()
-        if active.dim > 0:
-            return int(active.dim)
     except (RuntimeConfigError, ImportError) as exc:
-        logger.warning(
-            f'active fingerprint resolution failed; '
-            f'using {EMBEDDING_DIM}-dim default: {exc}')
-    return EMBEDDING_DIM
+        raise BackendError(
+            f'cannot size the store vector column: {exc}'
+            ) from exc
+    if active.dim <= 0:
+        raise BackendError(
+            f'cannot size the store vector column: embed model'
+            f' {active.model!r} is not reachable; check {config.API_KEY}'
+            f' and {config.ENDPOINT}')
+    return int(active.dim)
 
 
 def _read_stored_dim(dsn: str, store: str) -> int | None:
@@ -1397,7 +1403,7 @@ def apply_baseline_schema(
 
 
 def _ensure_baseline_schema(
-        dsn: str, store: str, *, dim: int = EMBEDDING_DIM) -> None:
+        dsn: str, store: str, *, dim: int) -> None:
     """Create the schema and apply baseline DDL idempotently.
 
     Parameters
@@ -1479,8 +1485,7 @@ def _check_pg_version(dsn: str) -> None:
 
     `embed swap` relies on `ADD COLUMN vector(N)` being metadata-only
     (PG 11+) and on `CREATE INDEX CONCURRENTLY` semantics that PG 12
-    cleaned up. Operators on older versions are pointed at the offline
-    `memman embed reembed` fallback.
+    cleaned up.
     """
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute('show server_version_num')
@@ -1491,8 +1496,7 @@ def _check_pg_version(dsn: str) -> None:
     if version_num < 120000:
         raise BackendError(
             f'Postgres {version_num // 10000} is below the swap'
-            ' minimum (12). Use `memman embed reembed` for offline'
-            ' rebuild instead.')
+            ' minimum (12).')
 
 
 def _swap_index_timeout_s() -> int:

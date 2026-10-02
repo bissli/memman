@@ -18,7 +18,7 @@ from typing import Any
 from memman import config, extras
 from memman.embed import get_client
 from memman.embed import registry as _ec_registry
-from memman.embed.fingerprint import stored_fingerprint
+from memman.embed.fingerprint import stored_fingerprint, swap_command
 from memman.exceptions import ConfigError
 from memman.llm import client as llm_client
 from memman.llm import usage as llm_usage
@@ -858,8 +858,8 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
                 'name': 'embed_fingerprint', 'status': 'pass',
                 'detail': detail}
         detail['error'] = (
-            "Store has insights but no stored fingerprint."
-            " Run 'memman embed reembed' to seed it.")
+            'Store has insights but no stored fingerprint.'
+            f' Run `{swap_command("<store>")}` to re-embed it.')
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
@@ -868,7 +868,9 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
     ec = _ec_registry.get_for(stored.model)
     detail['credentials_available'] = ec.available()
     if not detail['credentials_available']:
-        detail['error'] = ec.unavailable_message()
+        detail['error'] = (
+            f'{ec.unavailable_message()}; or re-embed onto a served'
+            f' model with `{swap_command("<store>")}`')
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
