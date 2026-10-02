@@ -200,6 +200,30 @@ class TestEmbedClient:
         assert len(vec) == EMBEDDING_DIM
         assert vec == expected_vec
 
+    def test_embed_batch_returns_floats_when_the_api_sends_a_bare_zero(
+            self, monkeypatch):
+        """Verify a JSON integer in an embedding comes back as a float.
+
+        Mutation: the embedding passed through as parsed, so a bare `0`
+            stays an int and Postgres recall fails with "cannot dump lists
+            of mixed types; got: float, int".
+        Oracle: a hand-built response holding `0` among floats, as
+            OpenRouter's Voyage embeddings do.
+        """
+        def mock_post(url, headers=None, json=None, timeout=None):
+            """Return one vector with a bare integer zero.
+            """
+            class Resp:
+                status_code = 200
+
+                def json(self_inner):
+                    return {'data': [{'embedding': [0.25, 0, -0.5]}]}
+            return Resp()
+
+        _stub_session(monkeypatch, mock_post)
+        vectors = Client(MODEL).embed_batch(['test text'])
+        assert [type(x) for x in vectors[0]] == [float, float, float]
+
     def test_embed_records_dim(self, monkeypatch):
         """Verify embed() records the response width as dim.
 

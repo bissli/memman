@@ -129,6 +129,9 @@ class Client:
         vectors = [item.get('embedding') for item in items]
         if any(v is None for v in vectors):
             raise RuntimeError('embed request returned a row with no embedding')
+        # A component can arrive as a bare JSON int, and psycopg refuses
+        # a list that mixes int and float.
+        vectors = [[float(x) for x in vec] for vec in vectors]
         if self.dim == 0:
             self.dim = len(vectors[0])
         trace.event(
