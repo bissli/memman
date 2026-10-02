@@ -29,9 +29,7 @@ def _strip_default_secrets(monkeypatch, data_dir):
     """
     path = config.env_file_path(str(data_dir))
     parsed = config.parse_env_file(path)
-    for key in (config.OPENROUTER_API_KEY, config.VOYAGE_API_KEY,
-                config.LLM_API_KEY):
-        parsed.pop(key, None)
+    parsed.pop(config.API_KEY, None)
     contents = '\n'.join(f'{k}={v}' for k, v in parsed.items()) + '\n'
     path.write_text(contents)
     config.reset_file_cache()
@@ -84,43 +82,38 @@ class TestWizardFlow:
 
 
 class TestSecretPrompts:
-    """Secret-prompt logic for OPENROUTER_API_KEY / VOYAGE_API_KEY.
+    """Secret-prompt logic for MEMMAN_API_KEY.
     """
 
     def test_secrets_prompt_fires_when_missing_in_tty(
             self, tty, tmp_path, monkeypatch):
-        """Verify missing secrets are prompted for in a TTY and returned.
+        """Verify a missing API key is prompted for in a TTY and returned.
 
-        Mutation: the prompt is skipped, or the answer is dropped or swapped.
-        Oracle: scripted prompt answers compared to the returned rows.
+        Mutation: the prompt is skipped, or the answer is dropped.
+        Oracle: the scripted prompt answer compared to the returned row.
         """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-        monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
-        monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
-        monkeypatch.delenv(config.LLM_API_KEY, raising=False)
+        monkeypatch.delenv(config.API_KEY, raising=False)
 
-        inputs = iter(['fresh-vy-key', 'fresh-llm-key'])
+        inputs = iter(['fresh-key'])
         monkeypatch.setattr(
             'memman.setup.wizard.click.prompt',
             lambda *a, **kw: next(inputs))
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert out[config.VOYAGE_API_KEY] == 'fresh-vy-key'
-        assert out[config.LLM_API_KEY] == 'fresh-llm-key'
+        assert out[config.API_KEY] == 'fresh-key'
 
     def test_secrets_prompt_skipped_when_present_in_file(
             self, tty, tmp_path):
-        """Verify no secret prompt fires when the env file already holds them.
+        """Verify no secret prompt fires when the env file already holds it.
 
-        Mutation: the file-layer check is dropped, so secrets are asked for
+        Mutation: the file-layer check is dropped, so the key is asked for
             again.
-        Oracle: the seeded secret keys are absent from the returned dict.
+        Oracle: the seeded secret key is absent from the returned dict.
         """
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert config.OPENROUTER_API_KEY not in out
-        assert config.VOYAGE_API_KEY not in out
-        assert config.LLM_API_KEY not in out
+        assert config.API_KEY not in out
 
     def test_secrets_prompt_skipped_when_shell_has_them(
             self, tmp_path, monkeypatch):
@@ -132,9 +125,7 @@ class TestSecretPrompts:
         monkeypatch.setattr('sys.stdin.isatty', lambda: True)
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-        monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or')
-        monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy')
-        monkeypatch.setenv(config.LLM_API_KEY, 'shell-llm')
+        monkeypatch.setenv(config.API_KEY, 'shell-key')
 
         def _should_not_be_called(*a, **kw):
             raise AssertionError('wizard prompted when shell already had values')
@@ -142,16 +133,14 @@ class TestSecretPrompts:
         monkeypatch.setattr(
             'memman.setup.wizard.click.prompt', _should_not_be_called)
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert config.OPENROUTER_API_KEY not in out
-        assert config.VOYAGE_API_KEY not in out
-        assert config.LLM_API_KEY not in out
+        assert config.API_KEY not in out
 
 
 class TestNativeKeyDetection:
-    """A native vendor env var (VOYAGE_API_KEY) triggers announce-then-prompt.
+    """A native OPENROUTER_API_KEY triggers announce-then-prompt.
     """
 
-    def test_native_voyage_key_announces_and_prompts_with_default(
+    def test_native_openrouter_key_announces_and_prompts_with_default(
             self, tty, tmp_path, monkeypatch, capsys):
         """Verify a native vendor key is announced as a masked default.
 
@@ -161,10 +150,7 @@ class TestNativeKeyDetection:
         """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-        monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
-        monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
-        monkeypatch.delenv(config.LLM_API_KEY, raising=False)
-        monkeypatch.setenv('VOYAGE_API_KEY', 'native-vy-value')
+        monkeypatch.delenv(config.API_KEY, raising=False)
         monkeypatch.setenv('OPENROUTER_API_KEY', 'native-or-value')
 
         captured: list[dict] = []
@@ -176,15 +162,13 @@ class TestNativeKeyDetection:
         monkeypatch.setattr('memman.setup.wizard.click.prompt', fake_prompt)
         out = wizard.run_wizard(str(tmp_path / 'memman'))
         stdout = capsys.readouterr().out
-        assert 'detected VOYAGE_API_KEY in shell' in stdout
         assert 'detected OPENROUTER_API_KEY in shell' in stdout
-        assert out[config.VOYAGE_API_KEY] == 'native-vy-value'
-        assert out[config.LLM_API_KEY] == 'native-or-value'
-        voyage_call = next(
-            c for c in captured if c['_arg'].strip() == config.VOYAGE_API_KEY)
-        assert voyage_call['default'] == 'native-vy-value'
-        assert voyage_call['hide_input'] is True
-        assert voyage_call['show_default'] is False
+        assert out[config.API_KEY] == 'native-or-value'
+        key_call = next(
+            c for c in captured if c['_arg'].strip() == config.API_KEY)
+        assert key_call['default'] == 'native-or-value'
+        assert key_call['hide_input'] is True
+        assert key_call['show_default'] is False
 
     def test_memman_prefixed_still_silent_skips(
             self, tty, tmp_path, monkeypatch, capsys):
@@ -196,9 +180,8 @@ class TestNativeKeyDetection:
         """
         _strip_default_secrets(monkeypatch, tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-        monkeypatch.setenv(config.VOYAGE_API_KEY, 'memman-vy')
-        monkeypatch.setenv(config.OPENROUTER_API_KEY, 'memman-or')
-        monkeypatch.setenv(config.LLM_API_KEY, 'memman-llm')
+        monkeypatch.setenv(config.API_KEY, 'memman-key')
+        monkeypatch.setenv('OPENROUTER_API_KEY', 'native-or-value')
 
         def _should_not_be_called(*a, **kw):
             raise AssertionError('wizard prompted despite MEMMAN- key present')
@@ -278,8 +261,7 @@ def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / config.ENV_FILENAME).write_text(
         f'{config.DEFAULT_BACKEND}=sqlite\n'
-        f'{config.OPENROUTER_API_KEY}=k\n'
-        f'{config.VOYAGE_API_KEY}=v\n')
+        f'{config.API_KEY}=k\n')
     config.reset_file_cache()
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(
@@ -369,3 +351,45 @@ class TestModelDefault:
         monkeypatch.setattr('memman.setup.wizard.click.prompt', _no_prompt)
         out = wizard.run_wizard(data_dir)
         assert config.LLM_MODEL not in out
+
+
+class TestModelPrompts:
+    """A non-OpenRouter endpoint prompts for the three model ids.
+    """
+
+    def test_non_openrouter_endpoint_prompts_for_missing_models(
+            self, tty, tmp_path, monkeypatch):
+        """Verify a custom endpoint prompts for the LLM, embed and rerank ids.
+
+        Mutation: the wizard leaves the models to INSTALL_DEFAULTS, which
+            hold OpenRouter ids the custom endpoint rejects.
+        Oracle: scripted answers for the key and three models, compared to
+            the returned rows by key.
+        """
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        config.env_file_path(str(data_dir)).write_text('')
+        config.reset_file_cache()
+        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+        monkeypatch.delenv(config.API_KEY, raising=False)
+        answers = {
+            f'  {config.API_KEY}': 'custom-key',
+            f'  {config.LLM_MODEL}': 'llm-id',
+            f'  {config.EMBED_MODEL}': 'embed-id',
+            f'  {config.RERANK_MODEL}': 'rerank-id',
+            }
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt',
+            lambda text, **kw: answers[text])
+        out = wizard.run_wizard(
+            str(data_dir), backend='sqlite',
+            endpoint='https://api.example.com/v1')
+        assert out == {
+            config.DEFAULT_BACKEND: 'sqlite',
+            config.BACKEND_FOR('default'): 'sqlite',
+            config.ENDPOINT: 'https://api.example.com/v1',
+            config.API_KEY: 'custom-key',
+            config.LLM_MODEL: 'llm-id',
+            config.EMBED_MODEL: 'embed-id',
+            config.RERANK_MODEL: 'rerank-id',
+            }

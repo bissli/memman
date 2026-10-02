@@ -1,16 +1,18 @@
-"""Shared HTTP utilities for memman provider clients.
+"""Shared HTTP utilities for the LLM, embed, and rerank clients.
 
-Per-subsystem `httpx.Client` pools (`get_session`) so each provider gets
+Per-subsystem `httpx.Client` pools (`get_session`) so each client gets
 its own connection pool; debug tracing keys events by subsystem name
-and one provider's 429 should not wedge another. `post_with_retry`
-implements the canonical retry policy used by both the LLM client and
-the embed clients (Voyage, OpenAI-compat, OpenRouter-embed, Ollama).
+and one client's 429 should not wedge another. `post_with_retry`
+implements the retry policy the embed and rerank clients use.
+`api_headers` and `privacy_routing` build what every request to the
+shared endpoint carries.
 """
 
 import logging
 import time
 
 import httpx
+from memman import config
 
 logger = logging.getLogger('memman')
 
@@ -21,6 +23,62 @@ WORKER_TIMEOUT = 60.0
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 529})
 RETRY_BACKOFF = (1.0, 2.0, 4.0)
 MAX_RETRIES = 3
+
+
+OPENROUTER_ATTRIBUTION_HEADERS = {
+    'HTTP-Referer': 'https://github.com/bissli/memman',
+    'X-Title': 'memman',
+    }
+
+
+def api_headers(endpoint: str, api_key: str) -> dict[str, str]:
+    """Headers for a JSON request to the shared endpoint.
+
+    Parameters
+    ----------
+    endpoint : str
+        The URL the request goes to; an OpenRouter URL adds memman's
+        attribution headers.
+    api_key : str
+        Bearer token; '' sends no `Authorization` header.
+
+    Returns
+    -------
+    dict[str, str]
+        A fresh dict the caller may extend.
+    """
+    headers = {'Content-Type': 'application/json'}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+    if config.is_openrouter_endpoint(endpoint):
+        headers.update(OPENROUTER_ATTRIBUTION_HEADERS)
+    return headers
+
+
+def privacy_routing(endpoint: str) -> dict:
+    """OpenRouter `provider` fields every request carries.
+
+    Parameters
+    ----------
+    endpoint : str
+        The URL the request goes to; any other host gets `{}`.
+
+    Returns
+    -------
+    dict
+        `zdr` from `MEMMAN_ZDR` and `data_collection` from
+        `MEMMAN_DATA_COLLECTION`, each only when set. The LLM adds its
+        vendor pin on top.
+    """
+    if not config.is_openrouter_endpoint(endpoint):
+        return {}
+    routing: dict = {}
+    collection = (config.get(config.DATA_COLLECTION) or '').strip()
+    if collection:
+        routing['data_collection'] = collection.lower()
+    if (config.get(config.ZDR) or '').strip().lower() in config.TRUTHY:
+        routing['zdr'] = True
+    return routing
 
 
 def get_session(name: str) -> httpx.Client:

@@ -30,7 +30,7 @@ class TestHeartbeat:
         db = open_db(sdir)
         try:
             write_fingerprint(SqliteBackend(db), Fingerprint(
-                provider='voyage', model='voyage-3-lite', dim=512))
+                model='voyage-3-lite', dim=512))
         finally:
             db.close()
 
@@ -52,7 +52,7 @@ class TestHeartbeat:
         db = open_db(sdir)
         try:
             write_fingerprint(SqliteBackend(db), Fingerprint(
-                provider='voyage', model='voyage-3-lite', dim=512))
+                model='voyage-3-lite', dim=512))
         finally:
             db.close()
 
@@ -61,7 +61,6 @@ class TestHeartbeat:
             db = open_db(sdir)
             try:
                 write_fingerprint(SqliteBackend(db), Fingerprint(
-                    provider='openai',
                     model='text-embedding-3-small',
                     dim=1536))
             finally:

@@ -72,10 +72,10 @@ def test_rerank_event_reports_moved_by_id_not_score(
         lambda name, **fields: events.append((name, fields)))
 
     class _IdentityRerank:
-        def rerank(self, query, docs, top_k=None):
+        def rerank(self, query, docs, top_n=None):
             return [(i, 0.9 - 0.001 * i) for i in range(len(docs))]
 
-    monkeypatch.setattr('memman.rerank.voyage.Client', _IdentityRerank)
+    monkeypatch.setattr('memman.search.recall.RerankClient', _IdentityRerank)
     resp = run_recall(
         tmp_backend, 'alpha shared topic', None, 5,
         rerank=True)

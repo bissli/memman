@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli
-from memman.embed import PROVIDERS
+from memman.embed import registry
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.setup import scheduler as sched_mod
@@ -20,11 +20,9 @@ from memman.store.sqlite import SqliteBackend
 class _FakeTargetProvider:
     """Embedder factory used by the CLI swap test.
 
-    Registered via `monkeypatch.setitem(PROVIDERS, ...)` so the
-    CLI's `registry.get_for(provider, model)` returns this instance.
+    Seeded into the registry cache so the CLI's
+    `registry.get_for(model)` returns this instance.
     """
-
-    name = 'fake-target'
 
     def __init__(self) -> None:
         self.model = 'fake-target-d384'
@@ -83,22 +81,24 @@ def cli_env(
     backend = SqliteBackend(db)
     write_fingerprint(
         backend,
-        Fingerprint(provider='voyage', model='voyage-3-lite', dim=512))
+        Fingerprint(model='voyage-3-lite', dim=512))
     _seed(backend, 4)
     db.close()
-    monkeypatch.setitem(PROVIDERS, 'fake-target', _FakeTargetProvider)
+    target = _FakeTargetProvider()
+    target.prepare()
+    monkeypatch.setitem(
+        registry._GET_FOR_CACHE, 'fake-target-d384', target)
     (data_dir / 'env').write_text(
         f'{config.DEFAULT_BACKEND}=sqlite\n'
-        f'{config.BACKEND_FOR("main")}=sqlite\n'
-        f'{config.EMBED_PROVIDER}=voyage\n')
+        f'{config.BACKEND_FOR("main")}=sqlite\n')
     return str(data_dir)
 
 
 def test_swap_command_completes(cli_env):
-    """`embed swap --to MODEL --provider PROV` switches the fingerprint.
+    """`embed swap --to MODEL` switches the fingerprint.
 
-    Mutation: the command dropping `--provider` or not writing the
-        target fingerprint, leaving the store on voyage.
+    Mutation: the command not writing the target fingerprint, leaving
+        the store on voyage.
     Oracle: the JSON body's `state` and the target's hand-set model and
         384 dimension.
     """
@@ -107,13 +107,11 @@ def test_swap_command_completes(cli_env):
         cli,
         ['--data-dir', cli_env, '--store', 'main',
          'embed', 'swap',
-         '--to', 'fake-target-d384',
-         '--provider', 'fake-target'])
+         '--to', 'fake-target-d384'])
     assert result.exit_code == 0, result.output
     body = json.loads(result.output)
     assert body['state'] == 'done'
     assert body['fingerprint'] == {
-        'provider': 'fake-target',
         'model': 'fake-target-d384',
         'dim': 384,
         }
@@ -130,7 +128,6 @@ def test_swap_abort_clears_inflight(cli_env):
     backend = SqliteBackend(db)
     backend.swap_prepare(384)
     backend.meta.set('embed_swap_state', 'backfilling')
-    backend.meta.set('embed_swap_target_provider', 'fake-target')
     backend.meta.set('embed_swap_target_model', 'fake-target-d384')
     backend.meta.set('embed_swap_target_dim', '384')
     db.close()

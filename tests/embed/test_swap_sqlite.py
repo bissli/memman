@@ -1,7 +1,7 @@
 """SQLite shadow-column swap workflow.
 
 `run_swap` walks all rows, populates `embedding_pending`, and cuts over
-to a new (provider, model, dim) fingerprint. The cutover transaction
+to a new (model, dim) fingerprint. The cutover transaction
 does not rebuild HNSW or recall snapshots.
 """
 
@@ -19,14 +19,12 @@ from tests.conftest import _mock_embed
 
 
 class _StubEmbedder:
-    """Second embedder bound to a different (provider, model, dim).
+    """Second embedder bound to a different (model, dim).
 
     Mirrors the EmbeddingProvider Protocol surface used by `swap.py`.
     `embed_batch` returns deterministic dim-N vectors derived from
     text content via the conftest-shared `_mock_embed`.
     """
-
-    name = 'stub-target'
 
     def __init__(self, dim: int = 768) -> None:
         self.model = f'stub-target-d{dim}'
@@ -90,7 +88,6 @@ def test_swap_completes_full_workflow(swap_backend, monkeypatch):
     _seed_insights(swap_backend, 5)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
 
@@ -116,7 +113,6 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
     _seed_insights(swap_backend, 3)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
 
@@ -125,7 +121,6 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
 
     fp = stored_fingerprint(swap_backend)
     assert fp == Fingerprint(
-        provider='stub-target',
         model='stub-target-d768',
         dim=768)
 
@@ -141,7 +136,6 @@ def test_swap_clears_meta_after_done(swap_backend):
     _seed_insights(swap_backend, 2)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
 
@@ -172,13 +166,10 @@ def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
         swap_backend.meta.set('embed_swap_state', 'backfilling')
         swap_backend.meta.set('embed_swap_cursor', ids[2])
         swap_backend.meta.set(
-            'embed_swap_target_provider', 'stub-target')
-        swap_backend.meta.set(
             'embed_swap_target_model', 'stub-target-d768')
         swap_backend.meta.set('embed_swap_target_dim', '768')
 
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
     monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '2')
@@ -233,13 +224,10 @@ def test_swap_target_mismatch_in_flight_raises(swap_backend):
     with swap_backend.transaction():
         swap_backend.meta.set('embed_swap_state', 'backfilling')
         swap_backend.meta.set(
-            'embed_swap_target_provider', 'stub-target')
-        swap_backend.meta.set(
             'embed_swap_target_model', 'stub-target-d768')
         swap_backend.meta.set('embed_swap_target_dim', '768')
 
     plan_diff = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d1024',
         target_dim=1024)
 
@@ -260,10 +248,9 @@ def test_swap_abort_refuses_once_the_cutover_state_is_recorded(
         after the refused abort, so --resume can finish the swap.
     """
     _seed_insights(swap_backend, 3)
-    old_fp = Fingerprint(provider='voyage', model='voyage-3-lite', dim=512)
+    old_fp = Fingerprint(model='voyage-3-lite', dim=512)
     write_fingerprint(swap_backend, old_fp)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
 

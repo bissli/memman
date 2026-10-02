@@ -13,8 +13,8 @@ per-store routing model requires the per-store suffixed form
 (`MEMMAN_DEFAULT_POSTGRES_DSN`). The canonical list survives only
 as the difflib candidate set used to build the suggestion.
 
-Cross-backend keys (`MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`, etc.) belong
+Cross-backend keys (`MEMMAN_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
+`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_MODEL`, etc.) belong
 to no namespace and are never scanned. They remain governed by the
 flat `INSTALLABLE_KEYS` membership check at `config set`.
 """

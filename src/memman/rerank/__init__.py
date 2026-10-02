@@ -1,5 +1,5 @@
-"""Rerank clients.
+"""Rerank client.
 
-`memman.rerank.voyage` holds the one shipped client, and callers build
-it directly: `from memman.rerank import voyage; voyage.Client()`.
+`memman.rerank.client.Client` is the one client; callers build it
+directly.
 """

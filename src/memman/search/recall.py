@@ -19,7 +19,7 @@ from collections import Counter
 from typing import Any
 
 from memman import trace
-from memman.rerank import voyage
+from memman.rerank.client import Client as RerankClient
 from memman.search.keyword import keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
@@ -67,7 +67,7 @@ def run_recall(
     rerank : bool, default False
         When True and the query has more than `MIN_RERANK_TOKENS`
         tokens, the top `RERANK_SHORTLIST` candidates are re-scored by
-        the configured Voyage reranker. On reranker failure the
+        the configured reranker. On reranker failure the
         baseline ordering is kept.
 
     Returns
@@ -231,12 +231,12 @@ def run_recall(
         shortlist_size = min(RERANK_SHORTLIST, len(results))
         if shortlist_size >= 2:
             try:
-                rerank_client = voyage.Client()
+                rerank_client = RerankClient()
                 shortlist = results[:shortlist_size]
                 docs = [r['insight'].content for r in shortlist]
                 before_ids = [r['insight'].id for r in shortlist]
                 scored = rerank_client.rerank(
-                    query, docs, top_k=shortlist_size)
+                    query, docs, top_n=shortlist_size)
                 reordered = []
                 for orig_idx, score in scored:
                     r = shortlist[orig_idx]

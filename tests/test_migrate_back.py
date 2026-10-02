@@ -40,7 +40,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             deleted_at=None)
         insert_insight(db, ins)
         set_meta(db, 'embed_fingerprint',
-                 '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
+                 '{"model":"voyage-3-lite","dim":512}')
     finally:
         db.close()
     return Path(sdir)
@@ -237,7 +237,7 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              r['author']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
-                 '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
+                 '{"model":"voyage-3-lite","dim":512}')
     finally:
         db.close()
     return Path(sdir)

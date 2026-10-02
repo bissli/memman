@@ -25,9 +25,9 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """One HOME for the whole module.
 
     Writes scheduler-state + an env file so memman's runtime config
-    resolver finds providers, endpoints, and (when present) real API
+    resolver finds the endpoint, models, and (when present) real API
     keys. Without the env file, every store open raises
-    `MEMMAN_EMBED_PROVIDER is not set`.
+    `MEMMAN_EMBED_MODEL is not set`.
     """
     home = tmp_path_factory.mktemp('e2e_home')
     dot = home / '.memman'
@@ -43,7 +43,7 @@ def _data_dir(home: Path, name: str, seed: bool = True) -> Path:
     """Per-test data dir with its env file, optionally pre-seeded.
 
     Pre-seeding lets `seed_if_fresh` short-circuit on the existing
-    fingerprint, avoiding the Voyage availability probe on every
+    fingerprint, avoiding the embed availability probe on every
     store open. Tests that explicitly need an empty store list
     (M0 `test_store_list_empty`) pass `seed=False`.
     """

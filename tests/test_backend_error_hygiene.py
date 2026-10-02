@@ -54,7 +54,7 @@ def _seed_store(data_dir, name, dim=512):
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             ('{"provider":"voyage","model":"voyage-3-lite","dim":'
+             ('{"model":"voyage-3-lite","dim":'
               f'{dim}}}')))
         conn.execute(
             'insert into insights (id, content,'
@@ -338,7 +338,7 @@ def test_swap_reports_a_post_cutover_failure_as_completed(
         swap_mod, 'run_swap',
         lambda *a, **kw: swap_mod.SwapProgress(
             state=swap_mod.STATE_DONE, cursor='',
-            target_provider='stub', target_model='stub-target',
+            target_model='stub-target',
             target_dim=768))
     for raised in (
             BackendError('postgres query failed: connection reset'),

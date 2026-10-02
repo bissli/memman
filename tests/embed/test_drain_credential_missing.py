@@ -1,6 +1,6 @@
 """Drain row-level visibility of missing embedder credentials.
 
-When a store is fingerprinted to a provider whose creds are absent,
+When a store is fingerprinted to a model whose creds are absent,
 `_StoreContext` does not crash. Queue rows fail visibly with
 `EmbedCredentialError` and the drain emits a structured trace event
 `embedder_credential_missing` so the operator can detect the
@@ -9,7 +9,6 @@ condition without scraping queue failure counts.
 
 import pytest
 from click.testing import CliRunner
-from memman import embed as embed_mod
 from memman.cli import _StoreContext, cli
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.exceptions import ConfigError, EmbedCredentialError
@@ -29,15 +28,13 @@ def _seed_fingerprint(sdir: str, fp: Fingerprint) -> None:
 
 
 class _UncredentialedStub:
-    """Embed client whose constructor raises ConfigError, as openrouter
-    does when its key is absent.
+    """Embed client whose constructor raises ConfigError, as the real
+    client does when its key is absent.
     """
 
-    name = 'unfunded-stub'
-
-    def __init__(self):
+    def __init__(self, model):
         raise ConfigError(
-            'unfunded-stub provider has no credentials in this process')
+            'unfunded-stub has no credentials in this process')
 
 
 class TestCredentialMissingFailureMode:
@@ -46,31 +43,31 @@ class TestCredentialMissingFailureMode:
 
     @pytest.fixture
     def _registered_unfunded(self, monkeypatch):
-        """Register the `unfunded-stub` provider for the test's lifetime.
+        """Make the registry's client constructor raise ConfigError.
         """
-        monkeypatch.setitem(
-            embed_mod.PROVIDERS, 'unfunded-stub', _UncredentialedStub)
+        monkeypatch.setattr(
+            'memman.embed.registry.Client', _UncredentialedStub)
 
     @pytest.mark.no_autoseed_fingerprint
     @pytest.mark.no_auto_drain
     def test_storectx_opens_with_placeholder_when_creds_missing(
             self, tmp_path, _registered_unfunded):
-        """A store fingerprinted to an uncredentialed provider still opens.
+        """A store fingerprinted to a model without credentials still opens.
 
         `_StoreContext` succeeds with a placeholder client.
 
-        Mutation: `_StoreContext` letting the provider's `ConfigError`
+        Mutation: `_StoreContext` letting the constructor's `ConfigError`
             propagate, so a store without creds cannot be opened.
-        Oracle: the placeholder's `name`, `available()` False, and
+        Oracle: the placeholder's `model`, `available()` False, and
             `EmbedCredentialError` from `embed()`.
         """
         sdir = store_dir(str(tmp_path), 'unfunded')
         _seed_fingerprint(sdir, Fingerprint(
-            provider='unfunded-stub', model='stub-1024', dim=1024))
+            model='stub-1024', dim=1024))
 
         ctx = _StoreContext('unfunded', str(tmp_path))
         try:
-            assert ctx.ec.name == 'unfunded-stub'
+            assert ctx.ec.model == 'stub-1024'
             assert ctx.ec.available() is False
             with pytest.raises(EmbedCredentialError):
                 ctx.ec.embed('hello')
@@ -91,7 +88,7 @@ class TestCredentialMissingFailureMode:
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'unfunded')
         _seed_fingerprint(sdir, Fingerprint(
-            provider='unfunded-stub', model='stub-1024', dim=1024))
+            model='stub-1024', dim=1024))
 
         # The content must be substantive enough that LLM extraction
         # yields a fact. Otherwise the drain never tries to embed, hides

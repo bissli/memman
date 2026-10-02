@@ -34,34 +34,25 @@ Review uses the same pattern checks as write-time `quality_warnings`: instance I
 
 An embedding is a numeric representation of memory content used for semantic search. Vectors from different models cannot be treated as interchangeable, even when their dimensions match.
 
-Each store records an **embedding fingerprint** in `meta.embed_fingerprint`: provider, model, and vector dimension. Recall, the worker, and re-enrichment build their client from this fingerprint through `bound_embedder`, so stores in one process can use different embedding models.
+Each store records an **embedding fingerprint** in `meta.embed_fingerprint`: model and vector dimension. Recall, the worker, and re-enrichment build their client from this fingerprint through `bound_embedder`, so stores in one process can use different embedding models.
 
-The global `MEMMAN_EMBED_PROVIDER` setting serves three purposes:
+The global `MEMMAN_EMBED_MODEL` setting serves three purposes:
 
 | Role                 | Effect                                                                                                                                |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | New store            | Supplies the fingerprint when an empty store is first initialized.                                                                    |
-| Model change         | Selects the target for `embed reembed` and the default provider for `embed swap`.                                                     |
-| Store-opening checks | Normal store sessions also construct this provider's client. Missing Voyage or OpenRouter keys can stop the command before retrieval. |
+| Model change         | Selects the target for `embed reembed`. Changing it alone does not convert existing vectors.                                          |
+| Store-opening checks | Normal store sessions also construct this model's client. A missing `MEMMAN_API_KEY` can stop the command before retrieval.          |
 
 The diagnostic and maintenance paths for `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` bypass the normal fingerprint initialization check. The related-memory read in `remember` also avoids model clients.
 
-If the store-bound provider lacks credentials, recall falls back to keyword and recency ranking, and the worker fails queued writes that need those credentials. This fallback cannot recover a command that already failed while building the global provider's client.
+If the shared endpoint lacks credentials, recall falls back to keyword and recency ranking, and the worker fails queued writes that need those credentials. This fallback cannot recover a command that already failed while building the global model's client.
 
-`embed status` reports the fingerprint, any swap in progress, and whether the fingerprint's provider has credentials. The `embed_fingerprint` check in `doctor` fails when that key is missing, and on a store that holds memories but has no fingerprint. The drain refuses such a store.
+`embed status` reports the fingerprint, any swap in progress, and whether the endpoint has credentials. The `embed_fingerprint` check in `doctor` fails when that key is missing, and on a store that holds memories but has no fingerprint. The drain refuses such a store.
 
-### Supported providers
+### Embedding endpoint
 
-memman ships these model defaults:
-
-| Provider     | Default model            | Credential                    | Install wizard      |
-| ------------ | ------------------------ | ----------------------------- | ------------------- |
-| `voyage`     | `voyage-3-lite`          | `MEMMAN_VOYAGE_API_KEY`       | Yes                 |
-| `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` | Yes                 |
-| `openrouter` | `baai/bge-m3`            | `MEMMAN_OPENROUTER_API_KEY`   | Yes                 |
-| `ollama`     | `nomic-embed-text`       | None                          | Configure afterward |
-
-The Voyage default has a known dimension of 512. Other models require an initial embedding probe to determine their dimension. [Provider setup](../USAGE.md#provider-setup) lists endpoints and settings.
+Every embedding call goes to `<MEMMAN_ENDPOINT>/embeddings` with `MEMMAN_API_KEY`. The shipped default model is `voyageai/voyage-4-lite`, which returns 1024-dimension vectors. A store binds its client by the fingerprint's model on the shared endpoint. A model other than the default requires an initial embedding probe to determine its dimension. [Provider setup](../USAGE.md#provider-setup) lists the endpoint settings.
 
 ### Vector storage
 
@@ -79,7 +70,7 @@ A new Postgres store sizes its vector column from the embedding client. On SQLit
 | Drain and `enrich` | Store fingerprint        | Original memory content |
 | Recall             | Store fingerprint        | Query                   |
 | `embed swap`       | Explicit target          | Original memory content |
-| `embed reembed`    | Global provider settings | Original memory content |
+| `embed reembed`    | Global embed settings    | Original memory content |
 
 The worker attempts embedding after enrichment. A handled HTTP or provider runtime failure leaves the memory without a vector; missing credentials fail the queued write. A later enrichment pass can repair incomplete memories, as described in [failure and retry](03-pipelines.md#failure-and-retry).
 

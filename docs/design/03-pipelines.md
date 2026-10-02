@@ -94,17 +94,17 @@ The systemd/launchd interval is written into the installed unit. The serve loop 
 
 ### LLM routing
 
-`MemmanLLMClient` handles enrichment and the `doctor` connectivity probe. It posts to `<MEMMAN_LLM_ENDPOINT>/chat/completions` using `MEMMAN_LLM_MODEL` and `MEMMAN_LLM_API_KEY`.
+`MemmanLLMClient` handles enrichment and the `doctor` connectivity probe. It posts to `<MEMMAN_ENDPOINT>/chat/completions` using `MEMMAN_LLM_MODEL` and `MEMMAN_API_KEY`.
 
 Each request allows up to 4,096 output tokens and has a 60-second timeout. The client makes up to three attempts. Retriable HTTP responses (429, 500, 502, 503, 504, 529) use one- and two-second waits; empty replies use a 0.1-second wait. The enrichment parser's extra request is separate from these transport retries.
 
-On OpenRouter, the client adds attribution headers and provider routing:
+On OpenRouter, the client adds attribution headers and provider routing. The embed and rerank clients send `data_collection` and `zdr` in the same `provider` field. They omit `only`, because OpenRouter refuses Voyage models under a vendor pin.
 
-| Setting                      | Install default                      | Request field     |
-| ---------------------------- | ------------------------------------ | ----------------- |
-| `MEMMAN_LLM_PROVIDER_ONLY`   | `amazon-bedrock,azure,google-vertex` | `only`            |
-| `MEMMAN_LLM_DATA_COLLECTION` | `deny`                               | `data_collection` |
-| `MEMMAN_LLM_ZDR`             | `true`                               | `zdr`             |
+| Setting                    | Install default                      | Request field     | Sent on                |
+| -------------------------- | ------------------------------------ | ----------------- | ---------------------- |
+| `MEMMAN_LLM_PROVIDER_ONLY` | `amazon-bedrock,azure,google-vertex` | `only`            | LLM requests           |
+| `MEMMAN_DATA_COLLECTION`   | `deny`                               | `data_collection` | LLM, embed, and rerank |
+| `MEMMAN_ZDR`               | `true`                               | `zdr`             | LLM, embed, and rerank |
 
 No eligible provider means the request fails. An empty provider list removes the `only` restriction. Other endpoints receive neither OpenRouter headers nor routing fields.
 
@@ -179,9 +179,9 @@ Recency contributes only through the anchor term, so a recent memory can appear 
 
 ### Reranking and limits
 
-A cross-encoder reads the query and one memory together and scores their relevance directly, so it catches matches that cosine and word overlap miss. Voyage reranking runs when enabled, the query has more than two whitespace-separated words (`MIN_RERANK_TOKENS`), and at least two candidates exist. It scores the query against the original content of the top 100 candidates (`RERANK_SHORTLIST`), then replaces their scores and order. A failed request, including a missing key, preserves the combined ranking and logs a warning.
+A cross-encoder reads the query and one memory together and scores their relevance directly, so it catches matches that cosine and word overlap miss. Reranking runs when enabled, the query has more than two whitespace-separated words (`MIN_RERANK_TOKENS`), and at least two candidates exist. It scores the query against the original content of the top 100 candidates (`RERANK_SHORTLIST`), then replaces their scores and order. A failed request, including a missing key, preserves the combined ranking and logs a warning.
 
-The default model is `rerank-3-lite`. `MEMMAN_RERANK_ENABLED_<store>` overrides the global `MEMMAN_RERANK_ENABLED` setting. Reranking always uses `MEMMAN_VOYAGE_API_KEY`, whatever the embedding provider. Recall has no rerank flag, so the agent never makes this choice.
+The client posts `{model, query, documents, top_n}` to `<MEMMAN_ENDPOINT>/rerank`. The default model is `MEMMAN_RERANK_MODEL`, `voyageai/rerank-3-lite`. `MEMMAN_RERANK_ENABLED_<store>` overrides the global `MEMMAN_RERANK_ENABLED` setting. Reranking uses `MEMMAN_API_KEY`. Recall has no rerank flag, so the agent never makes this choice.
 
 Reranking changes what the blend weights decide:
 

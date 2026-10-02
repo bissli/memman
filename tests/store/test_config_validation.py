@@ -6,8 +6,8 @@ active backend, with a `did you mean` hint pointing at the per-store
 form. Bare canonical keys (e.g. `MEMMAN_POSTGRES_DSN`) are also
 rejected -- the per-store routing model requires the `_<store>`
 suffix or the `MEMMAN_DEFAULT_POSTGRES_DSN` fallback. Cross-backend
-keys (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`) are never
+keys (`MEMMAN_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
+`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_MODEL`) are never
 scanned. Inactive-backend keys are tolerated -- a sqlite-active
 install may carry `MEMMAN_POSTGRES_DSN_<store>` from a prior postgres
 trial without erroring.
@@ -87,10 +87,10 @@ class TestPostgresValidation:
         Oracle: no `ConfigError` on a hand-built env of shared keys.
         """
         env = {
-            'MEMMAN_OPENROUTER_API_KEY': 'k',
+            'MEMMAN_API_KEY': 'k',
             'MEMMAN_DEFAULT_BACKEND': 'postgres',
             'MEMMAN_DEFAULT_POSTGRES_DSN': 'postgresql://localhost/x',
-            'MEMMAN_EMBED_PROVIDER': 'voyage',
+            'MEMMAN_EMBED_MODEL': 'voyageai/voyage-4-lite',
             'MEMMAN_DATA_DIR': '/tmp/x',
             }
         PostgresBackendConfig._validate(env)

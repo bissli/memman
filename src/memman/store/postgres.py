@@ -5,8 +5,8 @@ each memman store maps to a Postgres schema named `store_<name>`,
 holding the per-store tables (insights, oplog, meta, worker_runs).
 
 Vector storage:
-- `embedding vector(N)` (pgvector), `N` sized to the active embedding
-  provider's dim (default 512 via `EMBEDDING_DIM`); pgvector adapter binds
+- `embedding vector(N)` (pgvector), `N` sized to the active embed
+  model's dim (default 512 via `EMBEDDING_DIM`); pgvector adapter binds
   `list[float]` directly with no per-call serialization.
 - HNSW index built `create index concurrently ... vector_cosine_ops
   where deleted_at is null and replaced_by is null`. Built outside

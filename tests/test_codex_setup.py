@@ -419,21 +419,21 @@ def test_fresh_install_initializes_from_persisted_config(
     """Verify a fresh install seeds the default store from persisted config.
 
     Mutation: _run_install_flow initializes the default store before
-    install_scheduler persists the provider defaults, so the fresh env file
+    install_scheduler persists the model defaults, so the fresh env file
     fails.
     Oracle: The real config writer, skill deployment, and store init run;
-    assertions read the persisted embed provider, memman.db, and SKILL.md.
+    assertions read the persisted embed model, memman.db, and SKILL.md.
     """
     monkeypatch.setenv('MEMMAN_SCHEDULER_KIND', 'serve')
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'test-openrouter-key')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'test-voyage-key')
+    monkeypatch.setenv(config.API_KEY, 'test-api-key')
     monkeypatch.setattr(setup.openrouter_models, 'refresh_model_state',
                         lambda *a, **kw: None)
     data_dir = tmp_path / 'fresh-install'
     result = CliRunner().invoke(
         cli, ['--data-dir', str(data_dir), 'install', '--no-wizard', *flags])
     assert result.exit_code == 0, result.output
-    assert config.get_scoped(config.EMBED_PROVIDER, str(data_dir)) == 'voyage'
+    assert config.get_scoped(config.EMBED_MODEL, str(data_dir)) == (
+        'voyageai/voyage-4-lite')
     assert (data_dir / 'data/default/memman.db').is_file()
     assert (Path(codex_env['skills_dir']) / 'memman/SKILL.md').is_file()
 
@@ -456,13 +456,13 @@ def test_selective_uninstall_keeps_shared_services_for_other_agent(
     install_codex(codex_env)
     # Both detections use their installed files, not host CLI binaries.
     data_dir = str(Path.home() / '.memman')
-    scheduler._write_env_keys({config.LLM_API_KEY: 'retained-key'},
+    scheduler._write_env_keys({config.API_KEY: 'retained-key'},
                               data_dir=data_dir)
     removed = []
 
     def remove_scheduler(**kwargs):
         removed.append('scheduler')
-        scheduler._write_env_keys({}, removes={config.LLM_API_KEY},
+        scheduler._write_env_keys({}, removes={config.API_KEY},
                                   data_dir=data_dir)
         return {}
 
@@ -474,7 +474,7 @@ def test_selective_uninstall_keeps_shared_services_for_other_agent(
                                  'uninstall', f'--{selected}'])
     assert result.exit_code == 0, result.output
     assert removed == []
-    assert config.get_scoped(config.LLM_API_KEY, data_dir) == 'retained-key'
+    assert config.get_scoped(config.API_KEY, data_dir) == 'retained-key'
     assert (claude_dir / 'skills/memman/SKILL.md').exists() == (selected == 'codex')
     assert (Path(codex_env['skills_dir']) / 'memman').is_symlink() == (
         selected == 'claude-code')
@@ -483,4 +483,4 @@ def test_selective_uninstall_keeps_shared_services_for_other_agent(
     result = runner.invoke(cli, ['--data-dir', data_dir, 'uninstall'])
     assert result.exit_code == 0, result.output
     assert removed == ['scheduler', 'backup']
-    assert config.get_scoped(config.LLM_API_KEY, data_dir) is None
+    assert config.get_scoped(config.API_KEY, data_dir) is None

@@ -38,7 +38,7 @@ Without `--verbose` or `--debug`, the stderr level is `MEMMAN_LOG_LEVEL` (defaul
 
 `pipx install memman` installs the package, and `memman install` configures it. `pipx install 'memman[postgres]'` adds Postgres support. memman needs Python 3.11+.
 
-The default setup uses OpenRouter for summaries and Voyage for embeddings and reranking, so the wizard asks for both keys. [Provider setup](#provider-setup) lists the alternatives.
+The default setup uses one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the wizard asks for one key. [Provider setup](#provider-setup) lists the alternatives.
 
 ```bash
 memman install                        # interactive wizard in a terminal
@@ -57,8 +57,7 @@ memman uninstall --claude-code
 | `--codex`               | Install the Codex skill and command rules, whether or not Codex is detected.                                                                                              |
 | `--backend NAME`        | Default storage backend, `sqlite` or `postgres`. Skips the backend prompt.                                                                                                |
 | `--pg-dsn URL`          | Postgres DSN. Install connects, checks for `pgvector`, and stops when either fails. Required with `--backend postgres` when no prompt runs and the env file holds no DSN. |
-| `--llm-endpoint URL`    | LLM endpoint URL. Skips the endpoint prompt. Must start with `http://` or `https://`.                                                                                     |
-| `--embed-provider NAME` | Embedding provider: `voyage`, `openai`, or `openrouter`. Skips the provider prompt.                                                                                       |
+| `--endpoint URL`        | Endpoint URL for the LLM, embeddings, and rerank. Skips the endpoint prompt. Must start with `http://` or `https://`.                                                      |
 | `--no-wizard`           | Skip all prompts, even in a terminal. Flags, the shell, and defaults supply every value.                                                                                  |
 
 ### Installed files and services
@@ -107,15 +106,14 @@ Both agents share the same stores and background worker. Reinstallation refreshe
 
 The wizard runs only in a terminal and only without `--no-wizard`. Each step prompts only when no flag supplies the value and the env file lacks it. The key and model steps also skip the prompt when the shell exports the `MEMMAN_` variable. Key prompts hide the input.
 
-1. **LLM endpoint.** Any OpenAI-compatible URL. The default is `https://openrouter.ai/api/v1`.
-2. **Embedding provider.** `voyage` (default), `openai`, or `openrouter`.
-3. **Embedding key.** The key the provider needs, such as `MEMMAN_VOYAGE_API_KEY`. When the shell exports only the vendor name (`VOYAGE_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`), the prompt offers that value as its default.
-4. **LLM key.** `MEMMAN_LLM_API_KEY`. Required for any endpoint outside the local machine and optional for `localhost`. On an OpenRouter endpoint the step is skipped when `MEMMAN_OPENROUTER_API_KEY` is set, and install copies that key into `MEMMAN_LLM_API_KEY`.
+1. **Endpoint.** Any OpenAI-compatible URL that answers `/chat/completions`, `/embeddings`, and `/rerank`. The default is `https://openrouter.ai/api/v1`.
+2. **API key.** `MEMMAN_API_KEY`. Required for any endpoint outside the local machine and optional for `localhost`. On an OpenRouter endpoint with no key set, the prompt offers the shell's `OPENROUTER_API_KEY` as its default.
+3. **Models.** Asked only on an endpoint other than OpenRouter, because the shipped defaults for `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` are OpenRouter ids. Each model ID passes unchanged to the endpoint.
 5. **Model.** Asked only on an endpoint other than OpenRouter, because the default model `qwen/qwen3-235b-a22b-2507` is an OpenRouter id. The model ID passes unchanged to `/chat/completions`.
-6. **Backend.** `sqlite` or `postgres`. Offered only when the `memman[postgres]` extra is installed.
-7. **Postgres DSN.** Asked for the `postgres` backend. The wizard connects, checks that the `pgvector` extension exists, and allows three attempts. A DSN that names a host other than `localhost` prints a hint to run Postgres behind PgBouncer in transaction-pooling mode.
+4. **Backend.** `sqlite` or `postgres`. Offered only when the `memman[postgres]` extra is installed.
+5. **Postgres DSN.** Asked for the `postgres` backend. The wizard connects, checks that the `pgvector` extension exists, and allows three attempts. A DSN that names a host other than `localhost` prints a hint to run Postgres behind PgBouncer in transaction-pooling mode.
 
-Without the wizard, installation stops when a required value is missing: the embedding key, the DSN for `--backend postgres`, or `MEMMAN_LLM_MODEL` on an endpoint other than OpenRouter. The error names the key.
+Without the wizard, installation stops when a required value is missing: `MEMMAN_API_KEY` on a non-loopback endpoint, the DSN for `--backend postgres`, or any of `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` on an endpoint other than OpenRouter. The error names the key.
 
 ### Uninstall
 
@@ -130,7 +128,7 @@ When no memman integration remains, uninstall also removes the shared services:
 
 - the scheduled backup timer or agent,
 - the scheduler unit, `~/.memman/scheduler.state`, and `~/.memman/debug.state`,
-- the secret keys in the env file: `MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, and `MEMMAN_DEFAULT_POSTGRES_DSN`.
+- the secret keys in the env file: `MEMMAN_API_KEY` and `MEMMAN_DEFAULT_POSTGRES_DSN`.
 
 A selective uninstall that leaves another integration installed keeps the shared services.
 
@@ -140,50 +138,47 @@ It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, 
 
 ## Provider setup
 
-memman uses separate services for summaries, embeddings, and reranking. The defaults below are the models included in this version. The [README cost table](../README.md#cost) estimates their combined cost.
+memman sends summaries, embeddings, and reranking to one OpenAI-compatible endpoint with one key. The defaults below are the models included in this version. The [README cost table](../README.md#cost) estimates their combined cost.
 
-### LLM providers
+| Setting                | Default                        | Purpose                                                              |
+| ---------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| `MEMMAN_ENDPOINT`      | `https://openrouter.ai/api/v1` | Base URL. Must answer `/chat/completions`, `/embeddings`, `/rerank`. |
+| `MEMMAN_API_KEY`       | None                           | Secret. Required off a loopback endpoint.                            |
+| `MEMMAN_LLM_MODEL`     | `qwen/qwen3-235b-a22b-2507`    | Summary model.                                                       |
+| `MEMMAN_EMBED_MODEL`   | `voyageai/voyage-4-lite`       | Embedding model. Returns 1024-dimension vectors.                     |
+| `MEMMAN_RERANK_MODEL`  | `voyageai/rerank-3-lite`       | Rerank model.                                                        |
 
-The enrichment client uses the OpenAI-compatible `/chat/completions` protocol. The endpoint, API key, and model are set together, because model IDs are specific to the endpoint.
-
-| Endpoint                | `MEMMAN_LLM_ENDPOINT`          | Model selection                                               |
-| ----------------------- | ------------------------------ | ------------------------------------------------------------- |
-| OpenRouter              | `https://openrouter.ai/api/v1` | Defaults to `qwen/qwen3-235b-a22b-2507`.                      |
-| OpenAI                  | `https://api.openai.com/v1`    | Set a supported model explicitly.                             |
-| Ollama                  | `http://localhost:11434/v1`    | Set a locally available model; the wizard allows a blank key. |
-| Other compatible server | Its chat API base URL          | Set the model and authentication required by that server.     |
+Model IDs are specific to the endpoint. The shipped defaults are OpenRouter ids, so an install on another endpoint requires all three model settings.
 
 ```bash
-memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
-memman config set MEMMAN_LLM_API_KEY <api-key>
+memman config set MEMMAN_ENDPOINT https://api.openai.com/v1
+memman config set MEMMAN_API_KEY <api-key>
 memman config set MEMMAN_LLM_MODEL <model-id>
+memman config set MEMMAN_EMBED_MODEL <model-id>
+memman config set MEMMAN_RERANK_MODEL <model-id>
 ```
 
-On OpenRouter, installation can copy `MEMMAN_OPENROUTER_API_KEY` into `MEMMAN_LLM_API_KEY` when the latter is unset. Requests use the configured provider restrictions and zero-data-retention setting. The [routing reference](design/03-pipelines.md#llm-routing) documents those defaults and the daily availability check.
+At install on an OpenRouter endpoint, a blank `MEMMAN_API_KEY` is seeded from the shell's `OPENROUTER_API_KEY`.
 
-### Embedding providers
+### OpenRouter routing
 
-| Provider     | Shipped model            | Key                           | Endpoint setting                                                      |
-| ------------ | ------------------------ | ----------------------------- | --------------------------------------------------------------------- |
-| `voyage`     | `voyage-3-lite`          | `MEMMAN_VOYAGE_API_KEY`       | Fixed Voyage endpoint.                                                |
-| `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` | `MEMMAN_OPENAI_EMBED_ENDPOINT`, default `https://api.openai.com`.     |
-| `openrouter` | `baai/bge-m3`            | `MEMMAN_OPENROUTER_API_KEY`   | `MEMMAN_OPENROUTER_ENDPOINT`, default `https://openrouter.ai/api/v1`. |
-| `ollama`     | `nomic-embed-text`       | None                          | `MEMMAN_OLLAMA_HOST`, default `http://localhost:11434`.               |
+On an OpenRouter endpoint, every LLM, embedding, and rerank request carries a `provider` routing field built from `MEMMAN_ZDR` (default `true`) and `MEMMAN_DATA_COLLECTION` (default `deny`). `MEMMAN_LLM_PROVIDER_ONLY` (default `amazon-bedrock,azure,google-vertex`) pins the vendor on LLM requests only, because OpenRouter refuses `voyageai` models under a vendor pin. The [routing reference](design/03-pipelines.md#llm-routing) documents these defaults and the daily availability check.
 
-The wizard offers the first three. `memman config set MEMMAN_EMBED_PROVIDER ollama` selects Ollama after installation. Each provider has a model setting: `MEMMAN_VOYAGE_EMBED_MODEL`, `MEMMAN_OPENAI_EMBED_MODEL`, `MEMMAN_OPENROUTER_EMBED_MODEL`, or `MEMMAN_OLLAMA_EMBED_MODEL`.
+### Voyage models through OpenRouter
 
-Existing stores keep their recorded model until an explicit [swap or re-embed](#embedding-operations).
+OpenRouter runs Voyage models on the operator's own key (OpenRouter BYOK). OpenRouter's Voyage provider calls MongoDB's Atlas Embedding and Reranking API, so the BYOK key must be a MongoDB Atlas model API key (Atlas project, AI Model APIs). A voyageai.com dashboard key does not work. Atlas has its own training opt-out, the organization setting "Help Improve Voyage AI Models", which is on by default.
+
+Existing stores keep their recorded embedding model until an explicit [swap or re-embed](#embedding-operations).
 
 ### Reranker
 
-Voyage is the only reranker. It uses its own model setting and needs a Voyage key even when embeddings use another provider.
+The reranker posts `{model, query, documents, top_n}` to `<MEMMAN_ENDPOINT>/rerank`.
 
-| Setting                         | Default         | Purpose                     |
-| ------------------------------- | --------------- | --------------------------- |
-| `MEMMAN_RERANK_ENABLED`         | `true`          | Enable reranking globally.  |
-| `MEMMAN_RERANK_ENABLED_<store>` | Global value    | Override for one store.     |
-| `MEMMAN_VOYAGE_RERANK_MODEL`    | `rerank-3-lite` | Select the reranking model. |
-| `MEMMAN_VOYAGE_API_KEY`         | None            | Authenticate requests.      |
+| Setting                         | Default                  | Purpose                    |
+| ------------------------------- | ------------------------ | -------------------------- |
+| `MEMMAN_RERANK_ENABLED`         | `true`                   | Enable reranking globally. |
+| `MEMMAN_RERANK_ENABLED_<store>` | Global value             | Override for one store.    |
+| `MEMMAN_RERANK_MODEL`           | `voyageai/rerank-3-lite` | Select the reranking model.|
 
 ```bash
 memman config set MEMMAN_RERANK_ENABLED false
@@ -191,20 +186,20 @@ memman config set MEMMAN_RERANK_ENABLED false
 
 ### Credential requirements
 
-At runtime, memman reads provider settings from `<data dir>/env` and ignores the shell. `config set` changes them. Installation can import keys from the shell ([configuration precedence](#configuration)).
+At runtime, memman reads endpoint settings from `<data dir>/env` and ignores the shell. `config set` changes them. Installation can import keys from the shell ([configuration precedence](#configuration)).
 
 | Operation                                                                        | Credentials                                             | If unavailable                                                         |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Queue `remember`                                                                 | No model key required.                                  | Model work waits for the worker.                                       |
-| Open a normal store session, including `replace`, `forget`, and `recall --basic` | Global embedding provider's key where required.         | The Voyage and OpenRouter clients stop the command.                    |
-| Embed recall query                                                               | Store fingerprint's provider key.                       | Recall warns and falls back to keyword and recency ranking.            |
-| Embed a queued memory                                                            | Store fingerprint's provider key.                       | Missing credentials fail the write; the queue entry records the error. |
-| Generate a summary                                                               | `MEMMAN_LLM_API_KEY`, unless the endpoint permits none. | A rejected request leaves the memory without a summary.                |
-| Rerank recall candidates                                                         | `MEMMAN_VOYAGE_API_KEY`.                                | Recall warns and preserves its pre-rerank order.                       |
+| Open a normal store session, including `replace`, `forget`, and `recall --basic` | `MEMMAN_API_KEY`, unless the endpoint permits none.     | The embedding client stops the command.                                |
+| Embed recall query                                                               | `MEMMAN_API_KEY`, unless the endpoint permits none.     | Recall warns and falls back to keyword and recency ranking.            |
+| Embed a queued memory                                                            | `MEMMAN_API_KEY`, unless the endpoint permits none.     | Missing credentials fail the write; the queue entry records the error. |
+| Generate a summary                                                               | `MEMMAN_API_KEY`, unless the endpoint permits none.     | A rejected request leaves the memory without a summary.                |
+| Rerank recall candidates                                                         | `MEMMAN_API_KEY`, unless the endpoint permits none.     | Recall warns and preserves its pre-rerank order.                       |
 
-A normal store session builds the global embedding client as well as the store-bound one, so a command can need the key of a global provider that no store uses. Opening a new store, or one whose model's vector size is not built in, also sends a probe embedding.
+A normal store session builds the global embedding client as well as the store-bound one, so a command can need the key even when no store uses the global model. Opening a new store, or one whose model's vector size is not built in, also sends a probe embedding.
 
-`remember` uses a separate related-memory lookup that calls no model. Diagnostics and operations such as `embed status`, `embed swap`, `migrate`, and `backup` bypass normal fingerprint initialization. The `openai` client starts without a key, and its first request fails instead. `doctor` checks provider configuration and connectivity.
+`remember` uses a separate related-memory lookup that calls no model. Diagnostics and operations such as `embed status`, `embed swap`, `migrate`, and `backup` bypass normal fingerprint initialization. `doctor` checks endpoint configuration and connectivity.
 
 ---
 
@@ -289,7 +284,7 @@ A score ranks a row against its siblings in one response and means nothing acros
 
 `--basic` requires every query word to appear as a substring of the content and returns newest memories first. It skips query embedding and reranking. Store-opening checks still run, so it can require credentials or an embedding probe; see [credential requirements](#credential-requirements).
 
-**Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker is Voyage (model `MEMMAN_VOYAGE_RERANK_MODEL`, default `rerank-3-lite`), and it needs `MEMMAN_VOYAGE_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
+**Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker uses `MEMMAN_RERANK_MODEL` (default `voyageai/rerank-3-lite`) on the shared endpoint with `MEMMAN_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
 
 ```bash
 memman config set MEMMAN_RERANK_ENABLED_work false
@@ -339,21 +334,21 @@ memman scheduler start
 
 ## Embedding operations
 
-Each store records its embedding provider, model, and vector dimension in a **fingerprint**. Recall and the worker use that recorded model. Changing `MEMMAN_EMBED_PROVIDER` alone does not convert existing vectors. [Credential requirements](#credential-requirements) and the [embedding design](design/04-lifecycle.md#43-embedding-support) give the detail.
+Each store records its embedding model and vector dimension in a **fingerprint**. Recall and the worker use that recorded model on the shared endpoint. Changing `MEMMAN_EMBED_MODEL` alone does not convert existing vectors. [Credential requirements](#credential-requirements) and the [embedding design](design/04-lifecycle.md#43-embedding-support) give the detail.
 
 | Command                                   | Scope                             | Purpose                                                              |
 | ----------------------------------------- | --------------------------------- | -------------------------------------------------------------------- |
 | `embed status`                            | Selected store                    | Show fingerprint, credentials, and swap progress.                    |
-| `embed swap --to MODEL [--provider NAME]` | Selected SQLite or Postgres store | Change model while recall continues using old vectors until cutover. |
+| `embed swap --to MODEL`                   | Selected SQLite or Postgres store | Change model while recall continues using old vectors until cutover. |
 | `embed swap --resume`                     | Selected store                    | Continue an interrupted swap.                                        |
 | `embed swap --abort`                      | Selected store                    | Discard pending vectors and swap state, before cutover only.         |
-| `embed reembed [--dry-run]`               | All SQLite stores                 | Rewrite vectors using global provider settings.                      |
+| `embed reembed [--dry-run]`               | All SQLite stores                 | Rewrite vectors using `MEMMAN_EMBED_MODEL`.                          |
 
-To change one store's model after configuring the target provider's credentials:
+To change one store's model:
 
 ```bash
 memman scheduler stop
-memman --store work embed swap --to text-embedding-3-small --provider openai
+memman --store work embed swap --to <model-id>
 memman scheduler start
 ```
 
@@ -366,19 +361,18 @@ After a failed swap, `embed status` shows its state, and `--resume` or `--abort`
 - The final switch, called cutover, replaces the old vectors in one transaction. Returning to the old model requires another full swap.
 - One swap or abort runs per store at a time. A second one, from any shell, refuses while the first holds the store's swap lock.
 - `--resume` continues an interrupted swap from its recorded cursor. `--abort` discards pending vectors and swap state. Once a swap reaches cutover, `--abort` refuses and `--resume` finishes it, because the cutover may already have committed.
-- `--provider` defaults to `MEMMAN_EMBED_PROVIDER`. The swap leaves `MEMMAN_EMBED_PROVIDER` unchanged.
+- The swap leaves `MEMMAN_EMBED_MODEL` unchanged.
 
-**`embed reembed`** converts every SQLite store under the data directory to the `MEMMAN_EMBED_PROVIDER` client.
+**`embed reembed`** converts every SQLite store under the data directory to the `MEMMAN_EMBED_MODEL` client.
 
 - It needs a stopped scheduler, except with `--dry-run`. It refuses to run when the selected store is on Postgres, and it skips Postgres stores.
 - For each store, every current memory whose vector is not on the target model is re-embedded, and the store gets the new fingerprint. An empty store gets only the fingerprint.
 - A second run resumes an interrupted one.
 
-To change the global embedding provider:
+To change the global embedding model:
 
 ```bash
-memman config set MEMMAN_EMBED_PROVIDER openai
-memman config set MEMMAN_OPENAI_EMBED_API_KEY sk-...
+memman config set MEMMAN_EMBED_MODEL <model-id>
 memman scheduler stop
 memman embed reembed
 memman scheduler start
@@ -520,7 +514,7 @@ memman scheduler start [--text]       # accept writes and resume drains
 memman scheduler stop [--text]        # refuse writes and pause drains
 memman scheduler trigger              # start a drain now and return at once
 memman scheduler interval [--seconds N]
-memman scheduler install [--interval N] [--llm-endpoint URL] [--embed-provider NAME]
+memman scheduler install [--interval N] [--endpoint URL]
 memman scheduler uninstall
 memman scheduler serve [--interval N] [--once]
 memman scheduler debug on|off|status
@@ -592,7 +586,7 @@ A bundle consists of a `.tar.gz` archive and an adjacent manifest used by `backu
 
 The queue is copied before the stores, preserving pending writes for the restored installation. The manifest records their count as `queue_pending`. Queue UUIDs prevent restored writes from duplicating memories already captured in a store snapshot.
 
-**Excluded settings.** The bundle's `env.nonsecret` member leaves out the four API keys, `MEMMAN_DEFAULT_POSTGRES_DSN`, every `MEMMAN_POSTGRES_DSN_<store>`, and the host's own `MEMMAN_BACKUP_*` keys. It keeps per-store backend keys and model and provider settings.
+**Excluded settings.** The bundle's `env.nonsecret` member leaves out `MEMMAN_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, every `MEMMAN_POSTGRES_DSN_<store>`, and the host's own `MEMMAN_BACKUP_*` keys. It keeps per-store backend keys and model and endpoint settings.
 
 **Restore.**
 
@@ -626,7 +620,7 @@ The file uses `KEY=VALUE` entries and mode 0600. Blank lines and comments are ig
 
 1. the value already in the env file, which install never replaces,
 2. an install flag or a wizard answer,
-3. the shell: the `MEMMAN_` name, then the vendor name for three keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, and `OPENAI_API_KEY` for `MEMMAN_OPENAI_EMBED_API_KEY`),
+3. the shell: the `MEMMAN_` name, then, for `MEMMAN_API_KEY` on an OpenRouter endpoint, `OPENROUTER_API_KEY`,
 4. the included default (`INSTALL_DEFAULTS` in `src/memman/config.py`).
 
 ### Process-control variables
@@ -700,8 +694,8 @@ These variables are not installable. The component that uses each one reads it f
 | -------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
 | A new memory does not appear in recall       | `scheduler status`, then `scheduler queue list` | Wait for processing; inspect a failed entry and fix its reported error before retrying. |
 | Writes report that the scheduler is stopped  | `scheduler status`                              | Run `scheduler start` when maintenance is finished.                                     |
-| Recall warns about embedding or reranking    | `embed status`, then provider settings          | Restore the required key or endpoint; reranking can be disabled separately.             |
-| Even `recall --basic` fails on a missing key | Global embedding provider settings              | Supply the key required during store opening.                                           |
+| Recall warns about embedding or reranking    | `embed status`, then endpoint settings          | Restore the required key or endpoint; reranking can be disabled separately.             |
+| Even `recall --basic` fails on a missing key | Global embedding model and endpoint             | Supply the key required during store opening.                                           |
 | Doctor reports incomplete enrichment         | `doctor --text`                                 | Stop the scheduler, run `enrich --stale-only`, then restart it.                         |
 | A model swap was interrupted                 | `embed status`                                  | Resume or abort the swap.                                                               |
 | Claude Code has no memory reminders          | `doctor --text`                                 | Re-run `memman install` and start a new session.                                        |

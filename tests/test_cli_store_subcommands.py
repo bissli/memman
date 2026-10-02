@@ -32,8 +32,7 @@ def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
     env_path.parent.mkdir(parents=True, exist_ok=True)
     rows = config.parse_env_file(env_path) if env_path.exists() else {}
     rows.update({
-        'MEMMAN_OPENROUTER_API_KEY': 'mock-key-for-testing',
-        'MEMMAN_VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
+        'MEMMAN_API_KEY': 'mock-key-for-testing',
         f'MEMMAN_BACKEND_{store_name}': 'postgres',
         f'MEMMAN_POSTGRES_DSN_{store_name}': pg_dsn,
         'MEMMAN_DEFAULT_POSTGRES_DSN': pg_dsn,

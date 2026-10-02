@@ -6,7 +6,7 @@ The unit suite at `tests/conftest.py` autouses two patches
 
 - e2e tests run the *real* `memman` CLI in a subprocess with no
   in-process monkeypatches affecting it.
-- e2e tests gate on real `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` via
+- e2e tests gate on a real `MEMMAN_API_KEY` via
   the `live_keys` fixture rather than on a `--live` flag.
 - the `memman_home` fixture handles HOME redirection (env + Path.home)
   and the started-state file. Hosts without systemd/launchd opt into
@@ -19,14 +19,11 @@ from pathlib import Path
 
 import pytest
 from memman import config
+from memman.embed.fingerprint import Fingerprint
 
 _PLACEHOLDER = 'placeholder-for-non-live-tests'
 
-_SECRET_KEYS = (
-    'MEMMAN_OPENROUTER_API_KEY',
-    'MEMMAN_VOYAGE_API_KEY',
-    'MEMMAN_LLM_API_KEY',
-    )
+_SECRET_KEYS = (config.API_KEY,)
 
 
 def resolve_e2e_secret(name: str) -> str:
@@ -47,7 +44,7 @@ def resolve_e2e_secret(name: str) -> str:
 def build_e2e_env_body() -> str:
     """Render a `KEY=VALUE`-per-line env-file body for e2e tests.
 
-    Starts from `config.INSTALL_DEFAULTS` so model/provider/endpoint
+    Starts from `config.INSTALL_DEFAULTS` so model/endpoint
     constants stay in sync with what `memman install` writes, then
     overlays e2e-specific secrets resolved from shell env or
     `~/.memman/env`.
@@ -56,16 +53,14 @@ def build_e2e_env_body() -> str:
     rows[config.DEFAULT_BACKEND] = 'sqlite'
     for name in _SECRET_KEYS:
         rows[name] = resolve_e2e_secret(name)
-    if rows['MEMMAN_LLM_API_KEY'] == _PLACEHOLDER:
-        rows['MEMMAN_LLM_API_KEY'] = rows['MEMMAN_OPENROUTER_API_KEY']
     return ''.join(f'{k}={v}\n' for k, v in rows.items())
 
 
 def seed_fingerprint(db_path: Path) -> None:
-    """Write a voyage-3-lite/512 fingerprint into the store DB.
+    """Write a default-embed-model/1024 fingerprint into the store DB.
 
     Pre-seeding lets `seed_if_fresh` short-circuit on a fresh store,
-    avoiding the live Voyage probe on every store-open. Used by e2e
+    avoiding the live embed probe on every store-open. Used by e2e
     fixtures that don't need a real embed pipeline (CLI plumbing
     tests, list/use/remove behavior).
     """
@@ -77,8 +72,10 @@ def seed_fingerprint(db_path: Path) -> None:
             '(key text primary key, value text not null)')
         conn.execute(
             "insert or replace into meta (key, value) values "
-            "('embed_fingerprint', "
-            '\'{"provider":"voyage","model":"voyage-3-lite","dim":512}\')')
+            "('embed_fingerprint', ?)",
+            (Fingerprint(
+                config.INSTALL_DEFAULTS[config.EMBED_MODEL], 1024
+                ).to_json(),))
         conn.commit()
     finally:
         conn.close()
@@ -116,8 +113,8 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def live_keys() -> None:
     """Gate live-key tests; fail-loud under MEMMAN_E2E_REQUIRE_LIVE=1.
 
-    Tests that exercise enrichment, or any path that hits OpenRouter /
-    Voyage, take this fixture as a dependency. With
+    Tests that exercise enrichment, or any path that hits the
+    endpoint, take this fixture as a dependency. With
     `MEMMAN_E2E_REQUIRE_LIVE=1` set, missing keys raise instead of
     skipping silently.
 
@@ -125,7 +122,7 @@ def live_keys() -> None:
     via workflow), then the developer's canonical `~/.memman/env`.
     """
     require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
-    for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
+    for name in _SECRET_KEYS:
         val = resolve_e2e_secret(name)
         if val in {_PLACEHOLDER, 'mock-key-for-testing'}:
             msg = f'{name} not set; live e2e test cannot run'

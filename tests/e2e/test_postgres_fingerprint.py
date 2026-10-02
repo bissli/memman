@@ -1,7 +1,7 @@
 """Embed fingerprint mismatch refusal on Postgres.
 
 The fingerprint contract: every store stamps `meta.embed_fingerprint`
-with `{provider, model, dim}` of the embedding client used at seed
+with `{model, dim}` of the embedding client used at seed
 time. On reopen, a different active client surfaces a mismatch.
 
 The tests exercise the contract at the Backend Protocol layer
@@ -34,7 +34,7 @@ def test_stored_fingerprint_round_trips_through_backend_meta(
     backend = open_postgres_backend(store, pg_dsn)
     try:
         target = Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512)
+            model='voyage-3-lite', dim=512)
         backend.meta.set(META_KEY, target.to_json())
         backend._conn.commit()
 
@@ -62,12 +62,12 @@ def test_active_vs_stored_fingerprint_mismatch_is_observable(
     backend = open_postgres_backend(store, pg_dsn)
     try:
         seeded = Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512)
+            model='voyage-3-lite', dim=512)
         backend.meta.set(META_KEY, seeded.to_json())
         backend._conn.commit()
 
         active = Fingerprint(
-            provider='voyage', model='voyage-large', dim=1024)
+            model='voyage-large', dim=1024)
         stored_raw = backend.meta.get(META_KEY)
         assert stored_raw is not None
         stored = Fingerprint.from_json(stored_raw)

@@ -36,7 +36,6 @@ import click
 import memman
 from memman import config
 from memman.drain_lock import DrainLockBusy, acquire, release
-from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.embed import fingerprint, get_client
 from memman.embed import registry as _ec_registry
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
@@ -673,7 +672,7 @@ def list_claude_permissions() -> list[str]:
 
 @cli.group(name='embed')
 def embed_grp() -> None:
-    """Embed-provider operations: status, re-embed on swap.
+    """Embed operations: status, re-embed, model swap.
     """
 
 
@@ -1362,7 +1361,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         'embedder_credential_missing',
                         row_id=row.id,
                         store=row.store,
-                        provider=store_ctx.ec.name,
                         model=store_ctx.ec.model,
                         reason=str(exc)[:500])
                 if verbose:
@@ -1496,10 +1494,8 @@ class _StoreContext:
         if current != self._stored_fp:
             raise EmbedFingerprintError(
                 f'store {self.store_name!r} fingerprint changed during'
-                f' drain: was {self._stored_fp.provider}:'
-                f'{self._stored_fp.model}:{self._stored_fp.dim},'
-                f' now {current.provider if current else None}:'
-                f'{current.model if current else None}:'
+                f' drain: was {self._stored_fp.model}:{self._stored_fp.dim},'
+                f' now {current.model if current else None}:'
                 f'{current.dim if current else None};'
                 ' row released for retry.')
 
@@ -2111,21 +2107,15 @@ def _scheduler_emit(result: dict, text_output: bool) -> None:
                     ' systemd/launchd). Default: 60. For sub-minute'
                     ' intervals, use serve mode instead'
                     ' (`memman scheduler serve --interval N`).'))
-@click.option('--llm-endpoint', type=str, default=None,
-              help='LLM endpoint URL to seed into the env file.')
-@click.option('--embed-provider',
-              type=click.Choice(list(_EMBED_PROVIDER_CHOICES)),
-              default=None,
-              help='Embed provider to seed into the env file.')
+@click.option('--endpoint', type=str, default=None,
+              help='Endpoint URL to seed into the env file.')
 @click.pass_context
 def scheduler_install(ctx: click.Context, interval: int | None,
-                      llm_endpoint: str | None,
-                      embed_provider: str | None) -> None:
+                      endpoint: str | None) -> None:
     """Install the scheduler unit only (no agent integration).
 
-    Reads the API keys required by the configured endpoint + embed
-    provider (e.g., MEMMAN_LLM_API_KEY + MEMMAN_VOYAGE_API_KEY for the
-    default OpenRouter + voyage pair) from env and writes them to
+    Reads MEMMAN_API_KEY (or, on OpenRouter, OPENROUTER_API_KEY) from
+    env and writes it to
     ~/.memman/env (mode 600), then installs the systemd timer or
     launchd plist that runs the worker every interval. For full
     agent-integration setup (hooks, skill, scheduler), use
@@ -2137,15 +2127,9 @@ def scheduler_install(ctx: click.Context, interval: int | None,
 
     data_dir = ctx.obj['data_dir']
     _reject_flag_file_conflicts(
-        data_dir=data_dir, backend=None, pg_dsn=None,
-        llm_endpoint=llm_endpoint, embed_provider=embed_provider)
-    endpoint_seed: dict[str, str] = {}
-    if llm_endpoint:
-        endpoint_seed[config.LLM_ENDPOINT] = llm_endpoint
-    if embed_provider:
-        endpoint_seed[config.EMBED_PROVIDER] = embed_provider
-    if endpoint_seed:
-        _write_env_keys(endpoint_seed, data_dir=data_dir)
+        data_dir=data_dir, backend=None, pg_dsn=None, endpoint=endpoint)
+    if endpoint:
+        _write_env_keys({config.ENDPOINT: endpoint}, data_dir=data_dir)
 
     try:
         knobs = config.collect_install_knobs(data_dir)
@@ -3073,19 +3057,16 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
 @click.option('--pg-dsn', default=None,
               help='Postgres DSN (postgresql://...); required with'
                    ' --backend postgres in non-interactive mode.')
-@click.option('--llm-endpoint', type=str, default=None,
-              help='LLM endpoint URL; bypasses the wizard prompt when set.')
-@click.option('--embed-provider',
-              type=click.Choice(list(_EMBED_PROVIDER_CHOICES)),
-              default=None,
-              help='Embed provider; bypasses the wizard prompt when set.')
+@click.option('--endpoint', type=str, default=None,
+              help='Endpoint URL for the LLM, embed, and rerank paths;'
+                   ' bypasses the wizard prompt when set.')
 @click.option('--no-wizard', is_flag=True,
               help='Disable interactive prompts; flags + defaults only.')
 @click.pass_context
 def install(ctx: click.Context, claude_code: bool, codex: bool,
             backend: str | None,
-            pg_dsn: str | None, llm_endpoint: str | None,
-            embed_provider: str | None, no_wizard: bool) -> None:
+            pg_dsn: str | None, endpoint: str | None,
+            no_wizard: bool) -> None:
     """Install memman integration: skill, hooks, scheduler.
 
     \b
@@ -3102,10 +3083,9 @@ def install(ctx: click.Context, claude_code: bool, codex: bool,
     pg_dsn : str or None
         Postgres DSN for `--backend postgres`; a run that cannot
         prompt needs it here or already in the env file.
-    llm_endpoint : str or None
-        OpenAI-compatible LLM endpoint URL.
-    embed_provider : str or None
-        Embed provider name.
+    endpoint : str or None
+        OpenAI-compatible endpoint URL for the LLM, embed, and rerank
+        paths.
     no_wizard : bool
         Take flags, the env file, and defaults only; never prompt.
 
@@ -3132,8 +3112,7 @@ def install(ctx: click.Context, claude_code: bool, codex: bool,
         codex=codex,
         backend=backend,
         pg_dsn=pg_dsn,
-        llm_endpoint=llm_endpoint,
-        embed_provider=embed_provider,
+        endpoint=endpoint,
         no_wizard=no_wizard)
 
 
@@ -3904,8 +3883,8 @@ def enrich(ctx: click.Context, dry_run: bool,
 @embed_grp.command('status')
 @click.pass_context
 def embed_status(ctx: click.Context) -> None:
-    """Show the store's stored fingerprint, swap state, and credential
-    availability for that fingerprint's provider.
+    """Show the store's stored fingerprint, swap state, and whether the
+    endpoint serves that fingerprint's model.
 
     Under per-store embedder sovereignty, the store's stored
     fingerprint is the source of truth -- there is no env-active
@@ -3919,13 +3898,12 @@ def embed_status(ctx: click.Context) -> None:
 
     out: dict = {
         'stored': None if stored is None else {
-            'provider': stored.provider,
             'model': stored.model,
             'dim': stored.dim,
             },
         }
     if stored is not None:
-        ec = _ec_registry.get_for(stored.provider, stored.model)
+        ec = _ec_registry.get_for(stored.model)
         out['credentials_available'] = ec.available()
         if not ec.available():
             out['hint'] = ec.unavailable_message()
@@ -3936,7 +3914,6 @@ def embed_status(ctx: click.Context) -> None:
         out['swap'] = {
             'state': progress.state,
             'cursor': progress.cursor,
-            'target_provider': progress.target_provider,
             'target_model': progress.target_model,
             'target_dim': progress.target_dim,
             }
@@ -4060,14 +4037,14 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     """Sweep every store with the active client; write fingerprints.
 
     Always global: iterates all stores under the configured
-    data_dir. The active embed provider is set by a single global
-    env var, so a swap necessarily applies to every store; per-store
+    data_dir. The active embed model is set by a single global env
+    var, so a sweep necessarily applies to every store; per-store
     scoping is intentionally not supported.
 
     Three cases through one walk per store:
     1. Empty DB - zero rows; only the fingerprint is written.
-    2. Existing DB on the same provider - rows match; skip re-embed.
-    3. Provider swap - rows mismatch; re-embed each.
+    2. Existing DB on the same model - rows match; skip re-embed.
+    3. Model change - rows mismatch; re-embed each.
 
     The sweep is resumable per store: progress is tracked in each
     store's `meta.embed_reembed_state` and `meta.embed_reembed_cursor`.
@@ -4121,7 +4098,6 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
 
     out: dict = {
         'fingerprint': {
-            'provider': target.provider,
             'model': target.model,
             'dim': target.dim,
             },
@@ -4139,11 +4115,8 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
 @embed_grp.command('swap')
 @click.option(
     '--to', 'to_model', default='',
-    help="Target embed model (e.g. 'voyage-3-large'). Resolved with"
-         " the active provider unless --provider is given.")
-@click.option(
-    '--provider', 'to_provider', default='',
-    help='Target embed provider (default: active provider from env).')
+    help="Target embed model on the shared endpoint"
+         " (e.g. 'voyageai/voyage-4-lite').")
 @click.option(
     '--resume', 'resume', is_flag=True, default=False,
     help='Continue an in-flight swap from the recorded cursor.')
@@ -4156,7 +4129,7 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
          ' old model (full re-embed cost).')
 @click.pass_context
 def embed_swap(
-        ctx: click.Context, to_model: str, to_provider: str,
+        ctx: click.Context, to_model: str,
         resume: bool, abort: bool) -> None:
     """Online per-store swap to a new embed model.
 
@@ -4199,7 +4172,6 @@ def embed_swap(
             if progress.state == '':
                 raise click.ClickException(
                     f'no in-flight swap on store {name!r}')
-            target_provider = progress.target_provider
             target_model = progress.target_model
             target_dim = progress.target_dim
         else:
@@ -4211,26 +4183,20 @@ def embed_swap(
             if not to_model:
                 raise click.ClickException(
                     '--to <model> is required to start a new swap')
-            target_provider = (
-                to_provider or config.get(config.EMBED_PROVIDER) or 'voyage')
             target_model = to_model
             target_dim = 0
 
-        ec_new = _ec_registry.get_for(target_provider, target_model)
+        ec_new = _ec_registry.get_for(target_model)
         if not ec_new.available():
             raise click.ClickException(ec_new.unavailable_message())
         if target_dim == 0:
             target_dim = ec_new.dim
         if target_dim <= 0:
             raise click.ClickException(
-                f'failed to discover dim for {target_provider}:'
-                f'{target_model}; provider should expose dim after'
-                ' prepare()')
+                f'failed to discover dim for {target_model}; the client'
+                ' should expose dim after prepare()')
 
-        plan = SwapPlan(
-            target_provider=target_provider,
-            target_model=target_model,
-            target_dim=target_dim)
+        plan = SwapPlan(target_model=target_model, target_dim=target_dim)
 
         with backend.swap_lock() as held:
             if not held:
@@ -4251,11 +4217,9 @@ def embed_swap(
         #   target, so it re-embeds nothing.
         try:
             target_fp = Fingerprint(
-                provider=plan.target_provider,
-                model=plan.target_model,
-                dim=plan.target_dim)
+                model=plan.target_model, dim=plan.target_dim)
             fp = fingerprint.stored_fingerprint(backend) or target_fp
-            if fp.provider != plan.target_provider:
+            if fp != target_fp:
                 write_fingerprint(backend, target_fp)
                 fp = target_fp
         # Both types are reachable: the Postgres backend translates at
@@ -4265,7 +4229,7 @@ def embed_swap(
         except (BackendError, sqlite3.Error) as exc:
             raise click.ClickException(
                 f'store {name!r}: the vector cutover to'
-                f' {plan.target_provider}:{plan.target_model} COMPLETED,'
+                f' {plan.target_model} COMPLETED,'
                 f' and only the fingerprint check after it failed:'
                 f' {exc}. No data is pending and nothing was rolled'
                 ' back. Re-run the same `memman embed swap --to` to'
@@ -4276,7 +4240,6 @@ def embed_swap(
             'store': name,
             'state': progress.state,
             'fingerprint': {
-                'provider': fp.provider,
                 'model': fp.model,
                 'dim': fp.dim,
                 },

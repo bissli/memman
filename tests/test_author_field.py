@@ -149,7 +149,7 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
             author='alice'))
         set_meta(
             db, 'embed_fingerprint',
-            '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
+            '{"model":"voyage-3-lite","dim":512}')
     finally:
         db.close()
 

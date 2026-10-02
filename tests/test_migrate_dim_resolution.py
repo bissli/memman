@@ -40,7 +40,7 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             '{"provider":"fixture","model":"fixture","dim":' +
+             '{"model":"fixture","dim":' +
              str(dim) + '}'))
         conn.commit()
     finally:
@@ -118,7 +118,7 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             '{"provider":"fixture","model":"fixture","dim":512}'))
+             '{"model":"fixture","dim":512}'))
         conn.commit()
     finally:
         conn.close()

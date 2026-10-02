@@ -428,14 +428,7 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
             _write_env_keys(nonsecret, data_dir=data_dir)
 
         target_env = config.parse_env_file(config.env_file_path(data_dir))
-        host_provider = target_env.get(config.EMBED_PROVIDER) or ''
-        host_model_key = {
-            'voyage': config.VOYAGE_EMBED_MODEL,
-            'openai': config.OPENAI_EMBED_MODEL,
-            'openrouter': config.OPENROUTER_EMBED_MODEL,
-            'ollama': config.OLLAMA_EMBED_MODEL,
-            }.get(host_provider)
-        host_model = target_env.get(host_model_key) if host_model_key else None
+        host_model = target_env.get(config.EMBED_MODEL)
 
         restored: list[str] = []
         pg_skipped: list[str] = []
@@ -477,9 +470,8 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
                 continue
             restored.append(name)
             fp_json = entry.get('embed_fingerprint')
-            if fp_json and host_provider and host_model:
-                fp = Fingerprint.from_json(fp_json)
-                if fp.provider != host_provider or fp.model != host_model:
+            if fp_json and host_model:
+                if Fingerprint.from_json(fp_json).model != host_model:
                     embed_mismatch.append(name)
 
         queue_member = extract_root / QUEUE_FILENAME

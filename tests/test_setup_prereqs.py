@@ -11,8 +11,8 @@ from memman.setup import claude as setup_claude
 from tests.conftest import install_env_factory
 
 
-def _write_keys(data_dir, openrouter=None, voyage=None):
-    install_env_factory(data_dir, openrouter=openrouter, voyage=voyage)
+def _write_keys(data_dir, api_key=None):
+    install_env_factory(data_dir, api_key=api_key)
 
 
 @pytest.fixture
@@ -21,15 +21,13 @@ def all_prereqs_ok(monkeypatch):
 
     Also clears live-mode shell env vars so prereq tests see exactly what
     `_write_keys` puts in the test's env file -- otherwise `--live` mode
-    leaks real OR/Voyage keys into `collect_install_knobs`'s install-time
+    leaks a real API key into `collect_install_knobs`'s install-time
     shell seed step and the "missing key fails loud" assertion breaks.
     """
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(setup_claude, 'memman_binary_path',
                         lambda: '/fake/bin/memman')
-    for key in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
-                'MEMMAN_OPENAI_EMBED_API_KEY',
-                'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT'):
+    for key in ('MEMMAN_API_KEY', 'MEMMAN_ENDPOINT', 'OPENROUTER_API_KEY'):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -51,7 +49,7 @@ class TestPrereqs:
         monkeypatch.setattr(setup_claude, 'detect_scheduler', no_scheduler)
         monkeypatch.setattr(setup_claude, 'memman_binary_path',
                             lambda: '/fake/bin/memman')
-        _write_keys(tmp_path, openrouter='x', voyage='y')
+        _write_keys(tmp_path, api_key='x')
         with pytest.raises(RuntimeError, match='no scheduler available'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
@@ -68,21 +66,21 @@ class TestPrereqs:
             raise RuntimeError('memman binary not on PATH')
 
         monkeypatch.setattr(setup_claude, 'memman_binary_path', _not_found)
-        _write_keys(tmp_path, openrouter='x', voyage='y')
+        _write_keys(tmp_path, api_key='x')
         with pytest.raises(click.ClickException, match='memman binary'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
-    def test_missing_embed_api_key_fails_loud(
+    def test_missing_api_key_fails_loud(
             self, all_prereqs_ok, tmp_path):
-        """run_install raises when the embed provider's API key is absent.
+        """run_install raises when the shared API key is absent.
 
-        Mutation: checking only the LLM key, so an install with no
-        embed key finishes and fails at the first recall.
-        Oracle: `ClickException` naming `MEMMAN_VOYAGE_API_KEY` when
-        only the OpenRouter key is written.
+        Mutation: skipping the key check, so an install with no key
+        finishes and fails at the first enrichment or recall.
+        Oracle: `ClickException` naming `MEMMAN_API_KEY` when no key is
+        written on the default OpenRouter endpoint.
         """
-        _write_keys(tmp_path, openrouter='x')
-        with pytest.raises(click.ClickException, match='MEMMAN_VOYAGE_API_KEY'):
+        _write_keys(tmp_path)
+        with pytest.raises(click.ClickException, match='MEMMAN_API_KEY'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
     def test_uninstall_skips_prereq_checks(self, monkeypatch, tmp_path):
@@ -129,9 +127,8 @@ class TestPrereqs:
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
         monkeypatch.setattr(setup_claude, 'memman_binary_path',
                             lambda: '/fake/bin/memman')
-        for key in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
-                    'MEMMAN_OPENAI_EMBED_API_KEY',
-                    'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT'):
+        for key in ('MEMMAN_API_KEY', 'MEMMAN_ENDPOINT',
+                    'OPENROUTER_API_KEY'):
             monkeypatch.delenv(key, raising=False)
         before = sorted(p for p in tmp_path.rglob('*'))
 

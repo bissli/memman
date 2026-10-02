@@ -8,35 +8,25 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli
+from memman.exceptions import ConfigError
 
 ALL_EXPECTED_NAMES = {
     'MEMMAN_DATA_DIR',
     'MEMMAN_STORE',
-    'MEMMAN_LLM_ENDPOINT',
-    'MEMMAN_LLM_API_KEY',
+    'MEMMAN_ENDPOINT',
+    'MEMMAN_API_KEY',
+    'MEMMAN_ZDR',
+    'MEMMAN_DATA_COLLECTION',
     'MEMMAN_LLM_MODEL',
     'MEMMAN_LLM_PROVIDER_ONLY',
-    'MEMMAN_LLM_DATA_COLLECTION',
-    'MEMMAN_LLM_ZDR',
-    'MEMMAN_EMBED_PROVIDER',
-    'MEMMAN_OPENROUTER_ENDPOINT',
+    'MEMMAN_EMBED_MODEL',
+    'MEMMAN_RERANK_MODEL',
     'MEMMAN_RERANK_ENABLED',
-    'MEMMAN_VOYAGE_RERANK_MODEL',
     'MEMMAN_DEBUG',
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
     'MEMMAN_DEFAULT_BACKEND',
     'MEMMAN_DEFAULT_POSTGRES_DSN',
-    'MEMMAN_OPENROUTER_API_KEY',
-    'MEMMAN_VOYAGE_API_KEY',
-    'MEMMAN_OPENAI_EMBED_API_KEY',
-    'MEMMAN_OPENAI_EMBED_ENDPOINT',
-    'MEMMAN_OPENAI_EMBED_MODEL',
-    'MEMMAN_OLLAMA_HOST',
-    'MEMMAN_OLLAMA_EMBED_MODEL',
-    'MEMMAN_OLLAMA_MAX_INPUT_CHARS',
-    'MEMMAN_OPENROUTER_EMBED_MODEL',
-    'MEMMAN_VOYAGE_EMBED_MODEL',
     'MEMMAN_INTERVAL',
     'MEMMAN_BACKUP_CRON',
     'MEMMAN_BACKUP_TARGET',
@@ -49,40 +39,37 @@ ALL_EXPECTED_NAMES = {
     }
 
 
-def test_required_install_keys_returns_subset_of_installable():
-    """Verify required_install_keys stays inside INSTALLABLE_KEYS.
+def test_api_key_for_returns_the_key(env_file):
+    """Verify api_key_for returns the configured key for a remote endpoint.
 
-    Mutation: A provider mapped to a key install cannot write, so the install
-        check demands a variable it never persists.
-    Oracle: Subset test against INSTALLABLE_KEYS for each curated provider.
+    Mutation: Returning '' or the endpoint instead of the stored key.
+    Oracle: The literal key written to the env file.
     """
-    for embed in ('voyage', 'openai', 'openrouter'):
-        keys = config.required_install_keys(embed)
-        assert keys <= set(config.INSTALLABLE_KEYS)
+    env_file(config.API_KEY, 'sk-shared')
+    assert config.api_key_for('https://openrouter.ai/api/v1') == 'sk-shared'
 
 
-def test_required_install_keys_picks_curated_secrets():
-    """Verify each curated embed provider maps to its own API key.
+def test_api_key_for_allows_blank_key_on_loopback(env_file):
+    """Verify a blank key is accepted for a loopback endpoint.
 
-    Mutation: Two providers swapped in PROVIDER_REQUIRED_KEYS, so install
-        verifies the wrong secret.
-    Oracle: Hand-written provider to key pairs.
+    Mutation: Raising for a blank key on loopback, which blocks keyless
+        Ollama installs.
+    Oracle: The literal '' for a localhost URL.
     """
-    assert config.required_install_keys('voyage') == {config.VOYAGE_API_KEY}
-    assert config.required_install_keys('openai') == {
-        config.OPENAI_EMBED_API_KEY}
-    assert config.required_install_keys('openrouter') == {
-        config.OPENROUTER_API_KEY}
+    env_file(config.API_KEY, None)
+    assert config.api_key_for('http://localhost:11434/v1') == ''
 
 
-def test_required_install_keys_experimental_returns_empty():
-    """Verify an unregistered embed provider needs no key.
+def test_api_key_for_raises_on_blank_key_off_loopback(env_file):
+    """Verify a blank key off loopback raises ConfigError naming the key.
 
-    Mutation: required_install_keys indexing the map directly and raising
-        KeyError for an unknown provider.
-    Oracle: The empty set for `cohere`.
+    Mutation: Returning '' for every endpoint, so a keyless remote request
+        goes out and fails with a bare 401.
+    Oracle: ConfigError whose message contains MEMMAN_API_KEY.
     """
-    assert config.required_install_keys('cohere') == set()
+    env_file(config.API_KEY, None)
+    with pytest.raises(ConfigError, match='MEMMAN_API_KEY'):
+        config.api_key_for('https://openrouter.ai/api/v1')
 
 
 class TestIsOpenrouterEndpoint:
@@ -262,26 +249,14 @@ def test_constants_match_expected_names():
     """
     actual = {
         config.DATA_DIR, config.STORE,
-        config.LLM_ENDPOINT, config.LLM_API_KEY,
+        config.ENDPOINT, config.API_KEY,
+        config.ZDR, config.DATA_COLLECTION,
         config.LLM_MODEL,
         config.LLM_PROVIDER_ONLY,
-        config.LLM_DATA_COLLECTION,
-        config.LLM_ZDR,
-        config.EMBED_PROVIDER,
-        config.OPENROUTER_ENDPOINT,
+        config.EMBED_MODEL,
+        config.RERANK_MODEL,
         config.RERANK_ENABLED,
-        config.VOYAGE_RERANK_MODEL,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,
-        config.OPENROUTER_API_KEY,
-        config.VOYAGE_API_KEY,
-        config.OPENAI_EMBED_API_KEY,
-        config.OPENAI_EMBED_ENDPOINT,
-        config.OPENAI_EMBED_MODEL,
-        config.OLLAMA_HOST,
-        config.OLLAMA_EMBED_MODEL,
-        config.OLLAMA_MAX_INPUT_CHARS,
-        config.OPENROUTER_EMBED_MODEL,
-        config.VOYAGE_EMBED_MODEL,
         config.DEFAULT_BACKEND,
         config.DEFAULT_PG_DSN,
         config.INTERVAL,
@@ -368,10 +343,10 @@ def test_enumerate_reflects_current_env(env_file):
     Mutation: Serving a stale value, or None for a set var.
     Oracle: Two values written to the env file.
     """
-    env_file(config.LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
+    env_file(config.ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(config.LLM_MODEL, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
-    assert out[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
+    assert out[config.ENDPOINT] == 'https://openrouter.ai/api/v1'
     assert out[config.LLM_MODEL] == 'anthropic/claude-sonnet-4.6'
 
 
@@ -381,11 +356,11 @@ def test_enumerate_redacts_secrets_by_default(env_file):
     Mutation: Dropping the redact branch, so an API key prints in plain text.
     Oracle: The `***REDACTED***` marker for two secret keys.
     """
-    env_file(config.OPENROUTER_API_KEY, 'sk-or-secret-value')
-    env_file(config.VOYAGE_API_KEY, 'pa-secret')
+    env_file(config.API_KEY, 'sk-or-secret-value')
+    env_file(config.DEFAULT_PG_DSN, 'postgresql://u:pw@h/db')
     out = config.enumerate_effective_config()
-    assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
-    assert out[config.VOYAGE_API_KEY] == '***REDACTED***'
+    assert out[config.API_KEY] == '***REDACTED***'
+    assert out[config.DEFAULT_PG_DSN] == '***REDACTED***'
 
 
 def test_enumerate_redact_false_exposes_secrets(env_file):
@@ -394,9 +369,9 @@ def test_enumerate_redact_false_exposes_secrets(env_file):
     Mutation: Redacting regardless of the flag.
     Oracle: The plain value written to the env file.
     """
-    env_file(config.OPENROUTER_API_KEY, 'sk-or-plaintext')
+    env_file(config.API_KEY, 'sk-or-plaintext')
     out = config.enumerate_effective_config(redact=False)
-    assert out[config.OPENROUTER_API_KEY] == 'sk-or-plaintext'
+    assert out[config.API_KEY] == 'sk-or-plaintext'
 
 
 @pytest.mark.no_default_env
@@ -473,8 +448,8 @@ class TestConfigSet:
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n'
-            f'{config.OPENROUTER_API_KEY}=keep-me\n'
+            f'{config.ENDPOINT}=https://openrouter.ai/api/v1\n'
+            f'{config.API_KEY}=keep-me\n'
             f'{config.DEFAULT_BACKEND}=sqlite\n')
         runner = CliRunner()
         result = runner.invoke(
@@ -483,8 +458,8 @@ class TestConfigSet:
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
-        assert parsed[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
-        assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
+        assert parsed[config.ENDPOINT] == 'https://openrouter.ai/api/v1'
+        assert parsed[config.API_KEY] == 'keep-me'
 
 
 class TestConfigGet:
@@ -533,11 +508,11 @@ class TestConfigGet:
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.OPENROUTER_API_KEY}=secret-token-xyz\n')
+            f'{config.API_KEY}=secret-token-xyz\n')
         runner = CliRunner()
         result = runner.invoke(
             cli, ['--data-dir', str(data_dir), 'config', 'get',
-                  config.OPENROUTER_API_KEY])
+                  config.API_KEY])
         assert result.exit_code == 0
         assert 'secret-token-xyz' not in result.output
 
@@ -691,11 +666,11 @@ class TestConfigResolver:
             f'{config.LLM_MODEL}=model-a',
             '   ',
             '# Another comment',
-            f'{config.LLM_ENDPOINT}=endpoint-b',
+            f'{config.ENDPOINT}=endpoint-b',
             ])
         _write_env(env_path, contents + '\n')
         assert config.get(config.LLM_MODEL) == 'model-a'
-        assert config.get(config.LLM_ENDPOINT) == 'endpoint-b'
+        assert config.get(config.ENDPOINT) == 'endpoint-b'
 
     def test_parser_strips_quoted_values(self, env_path):
         """Verify the parser strips matching quotes.
@@ -705,11 +680,11 @@ class TestConfigResolver:
         """
         contents = '\n'.join([
             f'{config.LLM_MODEL}="quoted-model"',
-            f"{config.LLM_ENDPOINT}='quoted-endpoint'",
+            f"{config.ENDPOINT}='quoted-endpoint'",
             ])
         _write_env(env_path, contents + '\n')
         assert config.get(config.LLM_MODEL) == 'quoted-model'
-        assert config.get(config.LLM_ENDPOINT) == 'quoted-endpoint'
+        assert config.get(config.ENDPOINT) == 'quoted-endpoint'
 
     def test_parser_does_not_expand_variables(self, env_path):
         """Verify the parser leaves `${VAR}` as written.
@@ -783,12 +758,12 @@ class TestConfigResolver:
             False.
         Oracle: The marker for one call and the raw value for the other.
         """
-        _write_env(env_path, f'{config.OPENROUTER_API_KEY}=super-secret\n')
+        _write_env(env_path, f'{config.API_KEY}=super-secret\n')
         out = config.enumerate_effective_config(redact=True)
-        assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
+        assert out[config.API_KEY] == '***REDACTED***'
 
         out_unredacted = config.enumerate_effective_config(redact=False)
-        assert out_unredacted[config.OPENROUTER_API_KEY] == 'super-secret'
+        assert out_unredacted[config.API_KEY] == 'super-secret'
 
     def test_enumerate_resolves_through_file(self, env_path, monkeypatch):
         """Verify enumerate_effective_config reads file-only values.

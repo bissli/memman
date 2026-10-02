@@ -1,47 +1,31 @@
-"""Embed provider protocol, registry, and selector.
+"""Embed client protocol and the env-configured client.
 
-`EmbeddingProvider` is the structural contract every provider class
-must satisfy: a `name`/`model`/`dim` triple plus `available()` and
-`embed(text)` methods. Concrete clients (`embed/voyage.py`,
-`embed/openai_compat.py`, `embed/openrouter.py`, `embed/ollama.py`)
-are registered in the `PROVIDERS` dict by a zero-arg factory.
-
-`get_client()` resolves the active provider by looking up
-`MEMMAN_EMBED_PROVIDER` in the registry and invoking its factory.
-Unknown providers surface as `ConfigError`.
-
-Adding a new provider = drop `embed/<name>.py` implementing the
-Protocol, plus one `PROVIDERS[<name>] = factory` line here.
+`EmbeddingProvider` is the structural contract the embed client and
+the registry's credential-missing placeholder both satisfy. A store
+binds its client by the model in its fingerprint; `get_client()`
+builds the one `MEMMAN_EMBED_MODEL` names, for seeding a fresh store.
 """
 
-from collections.abc import Callable
 from typing import Protocol
 
 from memman import config
-from memman.exceptions import ConfigError
+from memman.embed.client import Client
 
 
 class EmbeddingProvider(Protocol):
     """Structural contract every embedding client must satisfy.
     """
 
-    name: str
     model: str
     dim: int
 
     def prepare(self) -> None:
-        """Eagerly populate `dim` so callers can read it directly.
-
-        For providers that know their dim at construction (Voyage),
-        this is a no-op. For probe-only providers (`openai_compat`,
-        `openrouter`, `ollama`), `prepare()` performs a one-token
-        embed and caches the resulting dim on the client. Idempotent
-        once dim is populated.
+        """Populate `dim` with a one-token embed; a no-op once known.
         """
         ...
 
     def available(self) -> bool:
-        """Return True when the provider's API is reachable.
+        """Return True when the endpoint serves the model.
         """
         ...
 
@@ -61,67 +45,13 @@ class EmbeddingProvider(Protocol):
         ...
 
 
-def _voyage_factory() -> EmbeddingProvider:
-    """Build the registered Voyage client.
-    """
-    from memman.embed.voyage import Client
-    return Client()
-
-
-def _openai_factory() -> EmbeddingProvider:
-    """Build the registered OpenAI-compatible client.
-    """
-    from memman.embed.openai_compat import Client
-    return Client()
-
-
-def _ollama_factory() -> EmbeddingProvider:
-    """Build the registered Ollama client.
-    """
-    from memman.embed.ollama import Client
-    return Client()
-
-
-def _openrouter_factory() -> EmbeddingProvider:
-    """Build the registered OpenRouter embed client.
-    """
-    from memman.embed.openrouter import Client
-    return Client()
-
-
-PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
-    'voyage': _voyage_factory,
-    'openai': _openai_factory,
-    'openrouter': _openrouter_factory,
-    'ollama': _ollama_factory,
-    }
-
-PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
-    'voyage': (config.VOYAGE_API_KEY,),
-    'openai': (config.OPENAI_EMBED_API_KEY,),
-    'openrouter': (config.OPENROUTER_API_KEY,),
-    'ollama': (),
-    }
-
-SUPPORTED_EMBED_PROVIDERS = ('voyage', 'openai', 'openrouter')
-
-
 def get_client() -> EmbeddingProvider:
-    """Return the embed client for the configured provider.
+    """Embed client for `MEMMAN_EMBED_MODEL` on the shared endpoint.
 
-    Routes by `MEMMAN_EMBED_PROVIDER`. Raises `ConfigError` when the
-    var is unset (run `memman install`) or the provider name is unknown.
+    Raises
+    ------
+    ConfigError
+        `MEMMAN_EMBED_MODEL` or `MEMMAN_ENDPOINT` is unset, or
+        `MEMMAN_API_KEY` is blank on a non-loopback endpoint.
     """
-    raw = config.get(config.EMBED_PROVIDER)
-    if not raw:
-        raise ConfigError(
-            f'{config.EMBED_PROVIDER} is not set;'
-            ' run `memman install` to populate the env file')
-    name = raw.lower()
-    factory = PROVIDERS.get(name)
-    if factory is None:
-        known = ', '.join(sorted(PROVIDERS)) or '(none)'
-        raise ConfigError(
-            f'unknown {config.EMBED_PROVIDER}={name!r};'
-            f' registered providers: {known}')
-    return factory()
+    return Client(config.require(config.EMBED_MODEL))

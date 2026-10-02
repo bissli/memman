@@ -246,7 +246,7 @@ def test_serve_handles_sigterm_cleanly(tmp_path):
     env = {
         **os.environ,
         'HOME': str(home),
-        'MEMMAN_OPENROUTER_API_KEY': 'mock',
+        'MEMMAN_API_KEY': 'mock',
         'MEMMAN_DATA_DIR': str(data_dir),
         }
     proc = subprocess.Popen(

@@ -40,7 +40,7 @@ def _seed_store(data_dir, name, dim=512):
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             ('{"provider":"voyage","model":"voyage-3-lite","dim":'
+             ('{"model":"voyage-3-lite","dim":'
               f'{dim}}}')))
         conn.execute(
             'insert into insights (id, content,'

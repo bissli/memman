@@ -27,10 +27,8 @@ def _pg_vec(seed: int, dim: int = EMBEDDING_DIM) -> list[float]:
 
 
 class _StubEmbedder:
-    """Second embedder bound to a different (provider, model, dim).
+    """Second embedder bound to a different (model, dim).
     """
-
-    name = 'stub-target'
 
     def __init__(self, dim: int = 768) -> None:
         self.model = f'stub-target-d{dim}'
@@ -81,7 +79,7 @@ def swap_backend(pg_dsn):
     write_fingerprint(
         backend,
         Fingerprint(
-            provider='voyage', model='voyage-3-lite',
+            model='voyage-3-lite',
             dim=EMBEDDING_DIM))
     try:
         yield backend, pg_dsn, store_name
@@ -102,7 +100,6 @@ def test_swap_completes_full_workflow(swap_backend, monkeypatch):
     schema = _store_schema(store_name)
     ec = _StubEmbedder(dim=384)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d384',
         target_dim=384)
 
@@ -132,14 +129,13 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
     """meta.embed_fingerprint reflects the target after cutover.
 
     Mutation: `run_swap` skipping `write_fingerprint`, so the store
-        keeps claiming the old provider and dim.
+        keeps claiming the old model and dim.
     Oracle: the `Fingerprint` built from the plan's hand-set values.
     """
     backend, _pg_dsn, _store_name = swap_backend
     _seed(backend, 2)
     ec = _StubEmbedder(dim=256)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d256',
         target_dim=256)
 
@@ -148,7 +144,6 @@ def test_swap_writes_fingerprint(swap_backend, monkeypatch):
 
     fp = stored_fingerprint(backend)
     assert fp == Fingerprint(
-        provider='stub-target',
         model='stub-target-d256',
         dim=256)
 
@@ -228,7 +223,6 @@ def test_swap_resume_finishes_after_a_crash_past_cutover(
     _seed(backend, 3)
     ec = _StubEmbedder(dim=384)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d384',
         target_dim=384)
 
@@ -245,7 +239,7 @@ def test_swap_resume_finishes_after_a_crash_past_cutover(
 
     assert progress.state == STATE_DONE
     assert stored_fingerprint(backend) == Fingerprint(
-        provider='stub-target', model='stub-target-d384', dim=384)
+        model='stub-target-d384', dim=384)
     assert backend.meta.get('embed_swap_state') is None
 
 
@@ -264,7 +258,6 @@ def test_swap_resume_recovers_after_the_cutover_check_refuses(
     _seed(backend, 4)
     ec = _StubEmbedder(dim=384)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d384',
         target_dim=384)
     real_embed_batch = ec.embed_batch
@@ -291,7 +284,7 @@ def test_swap_resume_recovers_after_the_cutover_check_refuses(
 
     assert progress.state == STATE_DONE
     assert stored_fingerprint(backend) == Fingerprint(
-        provider='stub-target', model='stub-target-d384', dim=384)
+        model='stub-target-d384', dim=384)
 
 
 def test_swap_abort_refuses_while_another_session_holds_the_lock(swap_backend):
@@ -340,7 +333,6 @@ def test_swap_keeps_cutover_state_when_a_committed_cutover_errors(
     _seed(backend, 3)
     ec = _StubEmbedder(dim=384)
     plan = SwapPlan(
-        target_provider='stub-target',
         target_model='stub-target-d384',
         target_dim=384)
     real_cutover = backend.swap_cutover
@@ -357,4 +349,4 @@ def test_swap_keeps_cutover_state_when_a_committed_cutover_errors(
     assert backend.meta.get('embed_swap_state') == 'cutover'
     assert run_swap(backend, ec, plan).state == STATE_DONE
     assert stored_fingerprint(backend) == Fingerprint(
-        provider='stub-target', model='stub-target-d384', dim=384)
+        model='stub-target-d384', dim=384)

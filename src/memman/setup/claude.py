@@ -295,8 +295,7 @@ def _uninstall_env(env: dict) -> bool:
 def run_install(data_dir: str, claude_code: bool = False,
                 backend: str | None = None,
                 pg_dsn: str | None = None,
-                llm_endpoint: str | None = None,
-                embed_provider: str | None = None,
+                endpoint: str | None = None,
                 no_wizard: bool = False, codex: bool = False) -> None:
     """Install memman integration. Called by the `memman install` command.
 
@@ -312,10 +311,9 @@ def run_install(data_dir: str, claude_code: bool = False,
         the env file.
     pg_dsn : str or None, default None
         Postgres DSN for `backend='postgres'`.
-    llm_endpoint : str or None, default None
-        OpenAI-compatible LLM endpoint URL.
-    embed_provider : str or None, default None
-        Embed provider name.
+    endpoint : str or None, default None
+        OpenAI-compatible endpoint URL for the LLM, embed, and rerank
+        paths.
     no_wizard : bool, default False
         Take flags, the env file, and defaults only; never prompt.
     codex : bool, default False
@@ -330,15 +328,14 @@ def run_install(data_dir: str, claude_code: bool = False,
     """
     _reject_flag_file_conflicts(
         data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
-        llm_endpoint=llm_endpoint, embed_provider=embed_provider)
+        endpoint=endpoint)
     env = detect_claude_code()
     codex_env = detect_codex()
     if codex or (not claude_code and codex_env['detected']):
         check_codex_skill(codex_env)
     wizard_out = wizard.run_wizard(
         data_dir, backend=backend, pg_dsn=pg_dsn,
-        llm_endpoint=llm_endpoint, embed_provider=embed_provider,
-        no_wizard=no_wizard)
+        endpoint=endpoint, no_wizard=no_wizard)
     if wizard_out:
         # A secret the wizard collected counts toward the prereq check.
         _write_env_keys(wizard_out, data_dir=data_dir)
@@ -353,8 +350,7 @@ def _reject_flag_file_conflicts(
         data_dir: str,
         backend: str | None,
         pg_dsn: str | None,
-        llm_endpoint: str | None,
-        embed_provider: str | None) -> None:
+        endpoint: str | None) -> None:
     """Exit 1 when a flag value conflicts with the env file's current value.
 
     The env-file canonical model means install flags are sticky-seed:
@@ -366,8 +362,7 @@ def _reject_flag_file_conflicts(
     pairs: list[tuple[str, str | None]] = [
         (config.DEFAULT_BACKEND, backend),
         (config.DEFAULT_PG_DSN, pg_dsn),
-        (config.LLM_ENDPOINT, llm_endpoint),
-        (config.EMBED_PROVIDER, embed_provider),
+        (config.ENDPOINT, endpoint),
         ]
     for key, flag_value in pairs:
         if flag_value is None:

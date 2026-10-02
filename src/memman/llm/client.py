@@ -4,9 +4,9 @@ memman speaks one wire protocol: OpenAI's `/chat/completions`. Every
 frontier vendor exposes an OpenAI-compat endpoint -- OpenRouter
 natively, Anthropic at `/v1`, Google at `/v1beta/openai`, OpenAI of
 course, plus Groq / DeepSeek / Mistral / Cerebras / Ollama / vLLM /
-LiteLLM / HuggingFace which speak it natively. Users switch vendors
-by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
-model slug).
+LiteLLM / HuggingFace which speak it natively. The endpoint and key
+are the shared `MEMMAN_ENDPOINT` and `MEMMAN_API_KEY`, which the
+embed and rerank clients also use.
 
 One model serves every call - enrichment and doctor's connectivity
 probe - and `MEMMAN_LLM_MODEL` names it.
@@ -17,8 +17,10 @@ import time
 
 import httpx
 from memman import config, trace
-from memman._http import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
+from memman._http import ENRICHMENT_TIMEOUT, MAX_RETRIES
+from memman._http import OPENROUTER_ATTRIBUTION_HEADERS, RETRY_BACKOFF
 from memman._http import RETRYABLE_STATUS_CODES, WORKER_TIMEOUT, get_session
+from memman._http import privacy_routing
 from memman.exceptions import ConfigError
 from memman.llm import usage as llm_usage
 from memman.llm.shared import safe_json
@@ -31,11 +33,6 @@ logger = logging.getLogger('memman')
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1
-
-_OR_ATTRIBUTION_HEADERS = {
-    'HTTP-Referer': 'https://github.com/bissli/memman',
-    'X-Title': 'memman',
-    }
 
 
 class MemmanLLMClient:
@@ -265,32 +262,31 @@ _CLIENT: MemmanLLMClient | None = None
 def get_llm_client() -> MemmanLLMClient:
     """Return the cached `MemmanLLMClient` built from the env file.
 
-    Reads `MEMMAN_LLM_ENDPOINT`, `MEMMAN_LLM_API_KEY`, and
-    `MEMMAN_LLM_MODEL` from the canonical env file. Raises
-    `ConfigError` when a required value is missing. OpenRouter
-    endpoints automatically receive memman's attribution headers and
-    the operator's provider-routing block from
-    `MEMMAN_LLM_PROVIDER_ONLY`, `MEMMAN_LLM_DATA_COLLECTION` and
-    `MEMMAN_LLM_ZDR`; other endpoints receive neither.
+    Reads `MEMMAN_ENDPOINT`, `MEMMAN_API_KEY`, and `MEMMAN_LLM_MODEL`
+    from the canonical env file. Raises `ConfigError` when a required
+    value is missing. OpenRouter endpoints automatically receive
+    memman's attribution headers and a provider-routing block: the
+    shared privacy pin plus the LLM-only vendor pin from
+    `MEMMAN_LLM_PROVIDER_ONLY`; other endpoints receive neither.
     """
     global _CLIENT
     if _CLIENT is not None:
         return _CLIENT
-    endpoint = config.get(config.LLM_ENDPOINT)
+    endpoint = config.get(config.ENDPOINT)
     if not endpoint:
         raise ConfigError(
-            f'{config.LLM_ENDPOINT} is not set;'
+            f'{config.ENDPOINT} is not set;'
             ' run `memman install` to populate the env file')
     model = config.get(config.LLM_MODEL)
     if not model:
         raise ConfigError(
             f'{config.LLM_MODEL} is not set; run `memman install`'
             ' to persist the model id')
-    api_key = config.get(config.LLM_API_KEY) or ''
+    api_key = config.get(config.API_KEY) or ''
     extra: dict[str, str] = {}
-    routing: dict = {}
+    routing = privacy_routing(endpoint)
     if config.is_openrouter_endpoint(endpoint):
-        extra.update(_OR_ATTRIBUTION_HEADERS)
+        extra.update(OPENROUTER_ATTRIBUTION_HEADERS)
         # Notes:
         # - An empty allowlist sends no pin, so OpenRouter picks any
         #   provider serving the model.
@@ -303,12 +299,6 @@ def get_llm_client() -> MemmanLLMClient:
             if name.strip()]
         if only:
             routing['only'] = only
-        collection = (config.get(config.LLM_DATA_COLLECTION) or '').strip()
-        if collection:
-            routing['data_collection'] = collection.lower()
-        if (config.get(config.LLM_ZDR) or '').strip().lower() in (
-                config.TRUTHY):
-            routing['zdr'] = True
     _CLIENT = MemmanLLMClient(
         endpoint, api_key, model, max_tokens=WORKER_MAX_TOKENS,
         timeout=WORKER_TIMEOUT, extra_headers=extra or None,

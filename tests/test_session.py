@@ -58,34 +58,32 @@ def test_active_store_yields_store_bound_ec_per_store(
     each yield their own bound embedder, regardless of env-active.
 
     The store's `meta.embed_fingerprint` picks the embedder, never the
-    `MEMMAN_EMBED_PROVIDER` env var.
+    `MEMMAN_EMBED_MODEL` env var.
 
-    Mutation: `bound_embedder` resolving the provider from the env
+    Mutation: `bound_embedder` resolving the model from the env
     instead of the store's fingerprint, so both stores get one client.
     Oracle: two stores seeded with hand-picked fingerprints (8 and 16
-    dims); each bound embedder reports its own provider and dim.
+    dims); each bound embedder reports its own model and dim.
     """
 
     data_dir = str(tmp_path / 'memman')
 
-    def _seed(name: str, provider: str, model: str, dim: int) -> None:
+    def _seed(name: str, model: str, dim: int) -> None:
         backend = open_backend(name, data_dir)
         try:
             fp_mod.write_fingerprint(
                 backend,
-                fp_mod.Fingerprint(
-                    provider=provider, model=model, dim=dim))
+                fp_mod.Fingerprint(model=model, dim=dim))
         finally:
             backend.close()
 
     monkeypatch.setattr(
         ec_registry, 'get_for',
-        lambda provider, model: _StubEC(
-            provider=provider, model=model,
-            dim=8 if provider == 'stub-a' else 16))
+        lambda model, dim=0: _StubEC(
+            model=model, dim=8 if model == 'stub-a-d8' else 16))
 
-    _seed('store_a', 'stub-a', 'stub-a-d8', 8)
-    _seed('store_b', 'stub-b', 'stub-b-d16', 16)
+    _seed('store_a', 'stub-a-d8', 8)
+    _seed('store_b', 'stub-b-d16', 16)
 
     with active_store(
             data_dir=data_dir, store='store_a',
@@ -96,9 +94,9 @@ def test_active_store_yields_store_bound_ec_per_store(
             unchecked=True) as backend_b:
         ec_b = fp_mod.bound_embedder(backend_b)
 
-    assert ec_a.provider == 'stub-a'
+    assert ec_a.model == 'stub-a-d8'
     assert ec_a.dim == 8
-    assert ec_b.provider == 'stub-b'
+    assert ec_b.model == 'stub-b-d16'
     assert ec_b.dim == 16
 
 
@@ -106,9 +104,7 @@ class _StubEC:
     """Minimal embed client stub for per-store binding tests.
     """
 
-    def __init__(self, *, provider: str, model: str, dim: int) -> None:
-        self.provider = provider
-        self.name = provider
+    def __init__(self, *, model: str, dim: int) -> None:
         self.model = model
         self.dim = dim
 

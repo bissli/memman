@@ -219,7 +219,7 @@ class TestRecall:
         Mutation: dropping the `rerank=rerank` kwarg from the
             `run_recall` call, so the config default never
             reaches the reranker.
-        Oracle: a spy on the Voyage client, called once.
+        Oracle: a spy on the rerank client, called once.
         """
         for fact in [
                 'Go uses SQLite for persistent storage',
@@ -227,7 +227,7 @@ class TestRecall:
                 'SQLite uses WAL mode for concurrent writes']:
             invoke(runner, ['remember', fact])
 
-        with patch('memman.rerank.voyage.Client.rerank',
+        with patch('memman.rerank.client.Client.rerank',
                    return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
@@ -238,13 +238,13 @@ class TestRecall:
 
         Mutation: ignoring the global config flag, running the
             reranker regardless.
-        Oracle: a spy on the Voyage client, never called.
+        Oracle: a spy on the rerank client, never called.
         """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED', 'false')
 
-        with patch('memman.rerank.voyage.Client.rerank',
+        with patch('memman.rerank.client.Client.rerank',
                    side_effect=AssertionError('rerank called')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
             assert result.exit_code == 0
@@ -255,13 +255,13 @@ class TestRecall:
 
         Mutation: reading only the global flag, so a per-store
             override is silently ignored.
-        Oracle: a spy on the Voyage client, never called.
+        Oracle: a spy on the rerank client, never called.
         """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED_default', 'false')
 
-        with patch('memman.rerank.voyage.Client.rerank',
+        with patch('memman.rerank.client.Client.rerank',
                    side_effect=AssertionError('rerank called')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
             assert result.exit_code == 0
@@ -273,7 +273,7 @@ class TestRecall:
 
         Mutation: letting the global false short-circuit before the
             per-store override is read.
-        Oracle: a spy on the Voyage client, called once.
+        Oracle: a spy on the rerank client, called once.
         """
         for fact in [
                 'Go uses SQLite for persistent storage',
@@ -283,7 +283,7 @@ class TestRecall:
         env_file('MEMMAN_RERANK_ENABLED', 'false')
         env_file('MEMMAN_RERANK_ENABLED_default', 'true')
 
-        with patch('memman.rerank.voyage.Client.rerank',
+        with patch('memman.rerank.client.Client.rerank',
                    return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
@@ -294,12 +294,12 @@ class TestRecall:
 
         Mutation: dropping the token-count guard, so a short query
             still reaches the reranker.
-        Oracle: a spy on the Voyage client, never called.
+        Oracle: a spy on the rerank client, never called.
         """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
 
-        with patch('memman.rerank.voyage.Client.rerank',
+        with patch('memman.rerank.client.Client.rerank',
                    side_effect=AssertionError('rerank called on short query')
                    ) as mock_re:
             result = invoke(runner, ['recall', 'storage'])
@@ -317,8 +317,8 @@ class TestRecall:
                 'Go modules manage dependency versions']:
             invoke(runner, ['remember', fact])
 
-        with patch('memman.rerank.voyage.Client.rerank',
-                   side_effect=RuntimeError('voyage 503')) as mock_re:
+        with patch('memman.rerank.client.Client.rerank',
+                   side_effect=RuntimeError('rerank 503')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
             mock_re.assert_called_once()
@@ -1016,25 +1016,22 @@ def test_data_dir_flag_moves_implicit_env_resolution(tmp_path):
         `session.active_store` -> `embed.get_client()`) keeps reading
         the directory named by the `MEMMAN_DATA_DIR` env var instead
         of the one the flag names.
-    Oracle: two data dirs whose `MEMMAN_EMBED_PROVIDER` rows diverge;
-        `status` (which opens the store through `active_store` and
-        eagerly calls `get_client()`) must fail naming the flag's
-        directory's unregistered provider.
+    Oracle: two data dirs whose `MEMMAN_API_KEY` rows diverge (one
+        holds a key, the flag's directory holds none); `status` (which
+        opens the store through `active_store` and eagerly calls
+        `get_client()`) must fail naming the missing key.
     """
 
     other_dir = tmp_path / 'other'
     other_dir.mkdir()
     rows = dict(config.INSTALL_DEFAULTS)
-    rows[config.EMBED_PROVIDER] = 'bogus-provider'
-    rows['MEMMAN_OPENROUTER_API_KEY'] = 'mock-key-for-testing'
-    rows['MEMMAN_LLM_API_KEY'] = 'mock-llm-api-key-for-testing'
     (other_dir / config.ENV_FILENAME).write_text(
         '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n')
 
     result = CliRunner().invoke(cli, [
         '--data-dir', str(other_dir), 'status'])
     assert result.exit_code != 0, result.output
-    assert 'bogus-provider' in result.output
+    assert 'MEMMAN_API_KEY' in result.output
 
 
 @pytest.mark.scheduler_stopped
@@ -1234,7 +1231,7 @@ class TestEnrichStaleOnly:
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
         write_fingerprint(backend, Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512))
+            model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
             id='drift-1', content='Drifted insight needing re-enrichment',
             prompt_version=OLD_PV))
@@ -1302,7 +1299,7 @@ class TestEnrichStaleOnly:
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
         write_fingerprint(backend, Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512))
+            model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
             id='ok-1', content='Already on active config',
             prompt_version=active_pv))
@@ -1375,7 +1372,7 @@ class TestEnrichStaleOnly:
         store_path = tmp_path / 'memman' / 'data' / 'default'
         db = open_db(str(store_path))
         write_fingerprint(SqliteBackend(db), Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512))
+            model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
             id='strand-1', content='Stranded insight whose enrichment failed'))
         insert_insight(db, make_insight(
@@ -1505,7 +1502,7 @@ class TestHotPathPurity:
             'memman.llm.client.MemmanLLMClient.complete',
             self._make_failing_complete)
         monkeypatch.setattr(
-            'memman.embed.voyage.Client.embed', self._make_failing_embed)
+            'memman.embed.client.Client.embed', self._make_failing_embed)
 
         r, data_dir = runner_with_seed
         out = r.invoke(cli, ['--data-dir', data_dir, 'forget', 'aud-a'])

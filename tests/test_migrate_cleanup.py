@@ -44,7 +44,7 @@ def _seed_with_artifacts(store_dir: Path) -> None:
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             '{"provider":"fixture","model":"fixture","dim":512}'))
+             '{"model":"fixture","dim":512}'))
         conn.commit()
     finally:
         conn.close()

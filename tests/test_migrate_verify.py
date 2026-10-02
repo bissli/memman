@@ -42,7 +42,7 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             '{"provider":"fixture","model":"fixture","dim":512}'))
+             '{"model":"fixture","dim":512}'))
         conn.commit()
     finally:
         conn.close()

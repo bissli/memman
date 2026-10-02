@@ -3,7 +3,7 @@
 Two related guarantees:
 
 - `_ensure_baseline_schema` honors a caller-supplied `dim` so a
-  non-Voyage operator deploying a 1024-dim provider gets a
+  non-Voyage operator deploying a 1024-dim embed model gets a
   `vector(1024)` column on first create.
 - `_assert_vector_dim_matches` refuses to open if the active client
   dim differs from the stored column width, with a clear upgrade

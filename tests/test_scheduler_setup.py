@@ -32,15 +32,13 @@ def uninstall_home(fake_home, monkeypatch):
     return fake_home, data_dir
 
 
-def _knobs(openrouter: str = 'sk-or-test',
-           voyage: str = 'vk-test',
+def _knobs(api_key: str = 'sk-or-test',
            **extra: str) -> dict[str, str]:
     """Build the install-time knobs dict used by `sch.install`.
     """
     base = {
-        'MEMMAN_LLM_ENDPOINT': 'https://openrouter.ai/api/v1',
-        'MEMMAN_OPENROUTER_API_KEY': openrouter,
-        'MEMMAN_VOYAGE_API_KEY': voyage,
+        'MEMMAN_ENDPOINT': 'https://openrouter.ai/api/v1',
+        'MEMMAN_API_KEY': api_key,
         }
     base.update(extra)
     return base
@@ -116,7 +114,7 @@ class TestInstall:
 
         result = sch.install(
             data_dir=str(fake_home / '.memman'),
-            knobs=_knobs(openrouter='sk-or-x', voyage='vk-y'),
+            knobs=_knobs(api_key='sk-or-x'),
             interval_seconds=600)
 
         assert result['platform'] == 'systemd'
@@ -142,7 +140,7 @@ class TestInstall:
 
         result = sch.install(
             data_dir=str(fake_home / '.memman'),
-            knobs=_knobs(openrouter='sk-or-x', voyage='vk-y'),
+            knobs=_knobs(api_key='sk-or-x'),
             interval_seconds=1800)
 
         assert result['platform'] == 'launchd'
@@ -155,7 +153,7 @@ class TestInstall:
 
     def test_install_writes_both_keys_to_env_file(
             self, fake_home, fake_binary, monkeypatch):
-        """Verify install writes both API keys and the endpoint at mode 600.
+        """Verify install writes the API key and the endpoint at mode 600.
 
         Mutation: a key is omitted from the env file, or the file is left
             readable by group or other.
@@ -165,13 +163,12 @@ class TestInstall:
         _no_subprocess(monkeypatch)
 
         sch.install(data_dir=str(fake_home / '.memman'),
-                    knobs=_knobs(openrouter='sk-or-fake', voyage='vk-fake'))
+                    knobs=_knobs(api_key='sk-or-fake'))
         env_path = fake_home / '.memman' / 'env'
         assert env_path.exists()
         contents = env_path.read_text()
-        assert 'OPENROUTER_API_KEY=sk-or-fake' in contents
-        assert 'VOYAGE_API_KEY=vk-fake' in contents
-        assert 'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1' in contents
+        assert 'MEMMAN_API_KEY=sk-or-fake' in contents
+        assert 'MEMMAN_ENDPOINT=https://openrouter.ai/api/v1' in contents
         mode = stat.S_IMODE(os.stat(env_path).st_mode)
         assert mode == 0o600
 
@@ -188,15 +185,14 @@ class TestInstall:
         env_path.parent.mkdir(parents=True, exist_ok=True)
         env_path.write_text(
             'SOMETHING_ELSE=keep\n'
-            'MEMMAN_LLM_ENDPOINT=https://api.openai.com/v1\n')
+            'MEMMAN_ENDPOINT=https://api.openai.com/v1\n')
 
         sch.install(data_dir=str(fake_home / '.memman'),
-                    knobs=_knobs(openrouter='sk-or-new', voyage='vk-new'))
+                    knobs=_knobs(api_key='sk-or-new'))
         contents = env_path.read_text()
         assert 'SOMETHING_ELSE=keep' in contents
-        assert 'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1' in contents
-        assert 'OPENROUTER_API_KEY=sk-or-new' in contents
-        assert 'VOYAGE_API_KEY=vk-new' in contents
+        assert 'MEMMAN_ENDPOINT=https://openrouter.ai/api/v1' in contents
+        assert 'MEMMAN_API_KEY=sk-or-new' in contents
 
     def test_install_without_interval_uses_60s_default(
             self, fake_home, fake_binary, monkeypatch):
@@ -209,7 +205,7 @@ class TestInstall:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         result = sch.install(data_dir=str(fake_home),
-                             knobs=_knobs(openrouter='x', voyage='y'))
+                             knobs=_knobs(api_key='x'))
         assert result['interval_seconds'] == 60
         timer = Path(result['timer_path']).read_text()
         assert 'OnUnitActiveSec=60s' in timer
@@ -272,9 +268,8 @@ class TestDebugState:
         env_path = fake_home / '.memman' / 'env'
         env_path.parent.mkdir(parents=True, exist_ok=True)
         original = (
-            'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1\n'
-            'OPENROUTER_API_KEY=sk-x\n'
-            'VOYAGE_API_KEY=vk-y\n')
+            'MEMMAN_ENDPOINT=https://openrouter.ai/api/v1\n'
+            'MEMMAN_API_KEY=sk-x\n')
         env_path.write_text(original)
         sch.set_debug(True)
         sch.set_debug(False)
@@ -297,7 +292,7 @@ class TestChangeInterval:
         _no_subprocess(monkeypatch)
 
         sch.install(data_dir=str(fake_home / '.memman'),
-                    knobs=_knobs(openrouter='sk-or-1', voyage='vk-1'),
+                    knobs=_knobs(api_key='sk-or-1'),
                     interval_seconds=900)
         env_before = (fake_home / '.memman' / 'env').read_text()
 
@@ -389,7 +384,7 @@ class TestChangeInterval:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'),
+                    knobs=_knobs(api_key='x'),
                     interval_seconds=900)
         sch.change_interval(str(fake_home), 3600)
         plist = (fake_home / 'Library' / 'LaunchAgents'
@@ -424,7 +419,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'),
+                    knobs=_knobs(api_key='x'),
                     interval_seconds=1800)
         result = sch.status()
         assert result['installed'] is True
@@ -440,7 +435,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _no_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'),
+                    knobs=_knobs(api_key='x'),
                     interval_seconds=1200)
         result = sch.status()
         assert result['platform'] == 'launchd'
@@ -472,7 +467,7 @@ class TestStatusParsing:
             monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
             _record_subprocess(monkeypatch)
             sch.install(data_dir=str(fake_home),
-                        knobs=_knobs(openrouter='x', voyage='y'),
+                        knobs=_knobs(api_key='x'),
                         interval_seconds=900)
 
             _record_subprocess(monkeypatch, responses={
@@ -502,7 +497,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
 
         _record_subprocess(monkeypatch, responses={
             ('systemctl', '--user', 'show',
@@ -521,7 +516,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'),
+                    knobs=_knobs(api_key='x'),
                     interval_seconds=900)
 
         log_path = fake_home / '.memman' / 'logs' / 'enrich.log'
@@ -548,7 +543,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
 
         _record_subprocess(monkeypatch)
         result = sch.status()
@@ -565,7 +560,7 @@ class TestStatusParsing:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
 
         _record_subprocess(monkeypatch, responses={
             ('systemctl', '--user', 'show',
@@ -590,7 +585,7 @@ class TestActivation:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _no_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
         timer_path = (fake_home / '.config' / 'systemd' / 'user'
                       / sch.SYSTEMD_TIMER_NAME)
         service_path = (fake_home / '.config' / 'systemd' / 'user'
@@ -636,7 +631,7 @@ class TestActivation:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         calls = _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
         calls.clear()
 
         result = sch.trigger()
@@ -657,7 +652,7 @@ class TestActivation:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
 
         _record_subprocess(
             monkeypatch, returncode=1,
@@ -676,7 +671,7 @@ class TestActivation:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         calls = _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
         calls.clear()
 
         result = sch.trigger()
@@ -759,7 +754,7 @@ class TestServe:
         monkeypatch.setattr(sch, '_write_env_keys', lambda *a, **k: ['noop'])
         result = sch.install(
             str(fake_home / 'data'),
-            knobs=_knobs(openrouter='or-key', voyage='vy-key'))
+            knobs=_knobs(api_key='or-key'))
         assert result['platform'] == sch.SCHEDULER_KIND_SERVE
         assert result['state'] == sch.STATE_STARTED
         assert sch.read_serve_interval() == sch.DEFAULT_INTERVAL_SECONDS
@@ -1073,13 +1068,10 @@ def _install_env_full(data_dir):
     install_env_factory(
         data_dir,
         **{
-            config.LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
-            config.LLM_API_KEY: 'sk-llm-installed',
+            config.ENDPOINT: 'https://openrouter.ai/api/v1',
+            config.API_KEY: 'sk-installed',
             config.LLM_MODEL: 'anthropic/claude-sonnet-4.6',
-            config.EMBED_PROVIDER: 'voyage',
-            config.OPENROUTER_API_KEY: 'sk-or-installed',
-            config.VOYAGE_API_KEY: 'pa-installed',
-            config.OPENAI_EMBED_API_KEY: 'sk-oa-installed',
+            config.EMBED_MODEL: 'voyageai/voyage-4-lite',
             config.DEFAULT_BACKEND: 'postgres',
             config.DEFAULT_PG_DSN: 'postgresql://user:pw@host/db',
             })
@@ -1105,15 +1097,12 @@ class TestUninstall:
         sch.uninstall(data_dir=str(data_dir))
 
         contents = (data_dir / config.ENV_FILENAME).read_text()
-        assert config.OPENROUTER_API_KEY not in contents
-        assert config.VOYAGE_API_KEY not in contents
-        assert config.OPENAI_EMBED_API_KEY not in contents
+        assert config.API_KEY not in contents
         assert config.DEFAULT_PG_DSN not in contents
-        assert config.LLM_API_KEY not in contents
-        assert (f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1'
+        assert (f'{config.ENDPOINT}=https://openrouter.ai/api/v1'
                 in contents)
         assert config.LLM_MODEL in contents
-        assert config.EMBED_PROVIDER in contents
+        assert config.EMBED_MODEL in contents
         assert f'{config.DEFAULT_BACKEND}=postgres' in contents
 
     @pytest.mark.no_default_env
@@ -1206,7 +1195,7 @@ class TestBackupScheduler:
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         _record_subprocess(monkeypatch)
         sch.install(data_dir=str(fake_home / '.memman'),
-                    knobs=_knobs(openrouter='x', voyage='y'))
+                    knobs=_knobs(api_key='x'))
         sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
         sch.write_backup_state('2026-06-27T03:00')
         unit_dir = fake_home / '.config' / 'systemd' / 'user'

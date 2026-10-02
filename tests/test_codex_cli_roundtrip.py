@@ -44,7 +44,7 @@ def test_subprocess_install_env_store_and_uninstall(tmp_path):
     the default store or scheduler state, or uninstall leaves the skill, state,
     or key.
     Oracle: Fresh child processes with a scrubbed env and no host agents,
-    services, or provider traffic; queue.db rows, the active file, and env
+    services, or endpoint traffic; queue.db rows, the active file, and env
     keys.
     """
     home = Path.home()
@@ -56,26 +56,27 @@ def test_subprocess_install_env_store_and_uninstall(tmp_path):
     binary.chmod(0o755)
     # Use a non-OpenRouter endpoint so installation has no catalog lookup.
     # Only the embedding availability probe is stubbed in the child; its
-    # configuration, provider construction, and store fingerprint stay real.
+    # configuration, client construction, and store fingerprint stay real.
     env = dict(os.environ)
     for name in list(env):
         if name.startswith('MEMMAN_') or name in {
-                'VOYAGE_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY',
-                'CODEX_HOME'}:
+                'OPENROUTER_API_KEY', 'CODEX_HOME'}:
             env.pop(name)
     env.update({
         'HOME': str(home), 'PATH': str(bindir),
         config.DATA_DIR: str(data_dir),
         config.SCHEDULER_KIND: 'serve',
-        config.LLM_ENDPOINT: 'http://127.0.0.1:1/v1',
+        config.ENDPOINT: 'http://127.0.0.1:1/v1',
         config.LLM_MODEL: 'test-model',
-        config.VOYAGE_API_KEY: 'test-only-voyage-key',
+        config.EMBED_MODEL: 'test-embed-model',
+        config.RERANK_MODEL: 'test-rerank-model',
+        config.API_KEY: 'test-only-key',
     })
 
     def invoke(*args):
         script = (
-            'from memman.embed.voyage import Client; '
-            'Client.available = lambda self: True; '
+            'from memman.embed.client import Client; '
+            'Client.available = lambda self: setattr(self, "dim", 512) or True; '
             'from memman.cli import cli; cli()')
         result = subprocess.run(
             [sys.executable, '-c', script, *args],
@@ -105,6 +106,6 @@ def test_subprocess_install_env_store_and_uninstall(tmp_path):
     assert not skill.is_symlink()
     assert not (home / '.memman/scheduler.state').exists()
     values = config.parse_env_file(data_dir / 'env')
-    assert config.VOYAGE_API_KEY not in values
+    assert config.API_KEY not in values
     assert (data_dir / 'queue.db').exists()
     assert (data_dir / 'data/from_env/memman.db').is_file()

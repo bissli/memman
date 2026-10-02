@@ -49,8 +49,7 @@ jobs:
 
       - name: Run CLI e2e tests
         env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMMAN_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MEMMAN_E2E_REQUIRE_LIVE: '1'
         run: make e2e-cli
 
@@ -70,7 +69,6 @@ jobs:
 
       - name: Run containerized e2e tests
         env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          MEMMAN_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MEMMAN_E2E_REQUIRE_LIVE: '1'
         run: make e2e-container

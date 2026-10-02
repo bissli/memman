@@ -155,4 +155,4 @@ def test_remember_stamps_provenance(mm_runner):
         conn.close()
 
     assert prompt_v == compute_prompt_version()
-    assert embed_model == 'voyage-3-lite'
+    assert embed_model == 'voyageai/voyage-4-lite'

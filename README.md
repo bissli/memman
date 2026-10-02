@@ -11,7 +11,7 @@ Storing and recalling 1,000 memories costs **under $1** on the default models ([
 
 ## Install
 
-memman needs Python 3.11+ on Linux or macOS. The default setup uses SQLite for storage, OpenRouter for summaries, and Voyage for embeddings and reranking, so the install asks for an OpenRouter key and a Voyage key.
+memman needs Python 3.11+ on Linux or macOS. The default setup uses SQLite for storage, and one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the install asks for one key.
 
 ```bash
 pipx install memman
@@ -70,22 +70,21 @@ memman store use work                             # the default for every proces
 
 ## Cost
 
-On the default models, 1,000 stored memories and 1,000 recalls cost under $1:
+On the default models, summaries for 1,000 stored memories cost $0.40. MongoDB Atlas bills the embedding and rerank calls that OpenRouter forwards, so this table states no price for them.
 
-| Step                                            | Default model               | Cost          |
-| ----------------------------------------------- | --------------------------- | ------------- |
-| Summaries for 1,000 memories                    | `qwen/qwen3-235b-a22b-2507` | $0.40         |
-| Embeddings for 1,000 memories and 1,000 queries | `voyage-3-lite`             | under $0.01   |
-| Reranking for 1,000 recalls                     | `rerank-3-lite`             | $0.30 - $0.50 |
-| **Total**                                       |                             | **under $1**  |
+| Step                                            | Default model               | Cost            |
+| ----------------------------------------------- | --------------------------- | --------------- |
+| Summaries for 1,000 memories                    | `qwen/qwen3-235b-a22b-2507` | $0.40           |
+| Embeddings for 1,000 memories and 1,000 queries | `voyageai/voyage-4-lite`    | billed by Atlas |
+| Reranking for 1,000 recalls                     | `voyageai/rerank-3-lite`    | billed by Atlas |
 
-The figures rest on these assumptions:
+The summary figure rests on these assumptions:
 
 - **Summaries.** 1,200 input and 100 output tokens per memory, at $0.25 in and $1.00 out per million tokens ([OpenRouter pricing](https://openrouter.ai/qwen/qwen3-235b-a22b-2507)).
-- **Embeddings.** Memories of 150 - 250 tokens and short queries, at $0.02 per million tokens ([Voyage pricing](https://docs.voyageai.com/docs/pricing)).
-- **Reranking.** Up to 100 candidates per recall, 150 - 250 tokens per query and memory pair, at $0.02 per million tokens. A query of two words or fewer skips reranking.
+- **Embeddings.** Memories of 150 - 250 tokens and short queries.
+- **Reranking.** Up to 100 candidates per recall, 150 - 250 tokens per query and memory pair. A query of two words or fewer skips reranking.
 
-Longer memories, retries, and other providers change the total. memman calls the providers with its own API keys, and a Claude Pro or Max subscription does not cover those charges. [Provider setup](docs/USAGE.md#provider-setup) lists the key each step uses and explains how to turn reranking off.
+Longer memories, retries, and other models change the total. memman calls the endpoint with its own API key, and a Claude Pro or Max subscription does not cover those charges. [Provider setup](docs/USAGE.md#provider-setup) lists the key each step uses and explains how to turn reranking off.
 
 ## Operations and upgrades
 

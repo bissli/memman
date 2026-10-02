@@ -1,17 +1,16 @@
-"""Tests for the pluggable embed provider + fingerprint flow.
+"""Tests for the embed fingerprint flow.
 
-Covers: provider registry resolution, Fingerprint serialization,
+Covers: the default embed model, Fingerprint serialization,
 install-time seeding, the embed reembed sweep (initialize, swap,
 resumability, scheduler-stopped gate), and per-store sovereignty
 (worker + recall bind to each store's stored fingerprint regardless
-of env-active provider).
+of env-active model).
 """
 
 import json
 
 import pytest
 from click.testing import CliRunner
-from memman import embed as embed_mod
 from memman.cli import _StoreContext, cli
 from memman.doctor import check_embed_fingerprint
 from memman.embed import get_client
@@ -19,20 +18,20 @@ from memman.embed.fingerprint import Fingerprint, bound_embedder
 from memman.embed.fingerprint import seed_default_fingerprint, seed_if_fresh
 from memman.embed.fingerprint import stored_fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
-from memman.exceptions import ConfigError, EmbedFingerprintError
+from memman.exceptions import EmbedFingerprintError
 from memman.setup import scheduler as sched_mod
 from memman.setup.claude import _init_default_store
 from memman.store.db import DB, get_meta, open_db, set_meta, store_dir
 from memman.store.node import insert_insight, update_embedding
 from memman.store.sqlite import SqliteBackend
-from tests.conftest import make_insight
+from tests.conftest import EMBEDDING_DIM, make_insight
 
 
 def _seed_voyage(db: DB) -> None:
     """Helper: write the canonical voyage fingerprint to meta.
     """
     write_fingerprint(SqliteBackend(db), Fingerprint(
-            provider='voyage', model='voyage-3-lite', dim=512))
+            model='voyage-3-lite', dim=512))
 
 
 def _seed_row_with_embedding(db: DB, *, id: str, content: str = 'x',
@@ -57,32 +56,26 @@ class TestFingerprintRegistry:
     """Provider registry resolution and Fingerprint serialization.
     """
 
-    def test_unknown_provider_raises_config_error(self, env_file):
-        """Verify an unknown MEMMAN_EMBED_PROVIDER raises ConfigError.
+    def test_default_model_is_voyage_lite(self, monkeypatch):
+        """Verify an unset MEMMAN_EMBED_MODEL yields the shipped default model.
 
-        Mutation: get_client indexing PROVIDERS directly (KeyError), or
-            dropping the registered names from the message.
-        Oracle: The literal name `bogus` and the registered name `voyage` in
-            the error text.
+        Mutation: The shipped default embed model drifting from
+            voyageai/voyage-4-lite.
+        Oracle: Hand-written literal model name.
         """
-        env_file('MEMMAN_EMBED_PROVIDER', 'bogus')
-        with pytest.raises(ConfigError) as excinfo:
-            get_client()
-        assert 'bogus' in str(excinfo.value)
-        assert 'voyage' in str(excinfo.value)
-
-    def test_default_provider_is_voyage(self, monkeypatch):
-        """Verify an unset MEMMAN_EMBED_PROVIDER yields the voyage triple.
-
-        Mutation: The shipped default provider, model, or dim drifting from
-            voyage / voyage-3-lite / 512.
-        Oracle: Hand-written literal triple.
-        """
-        monkeypatch.delenv('MEMMAN_EMBED_PROVIDER', raising=False)
+        monkeypatch.delenv('MEMMAN_EMBED_MODEL', raising=False)
         fp = seed_default_fingerprint()
-        assert fp.provider == 'voyage'
-        assert fp.model == 'voyage-3-lite'
-        assert fp.dim == 512
+        assert fp.model == 'voyageai/voyage-4-lite'
+
+    def test_default_fingerprint_carries_the_probed_dim(self):
+        """Verify the seed fingerprint's dim comes from the model's reply.
+
+        Mutation: seeding from a client that never probed, so dim is 0
+            and a fresh Postgres schema falls back to a fixed
+            `vector(N)` width the model does not return.
+        Oracle: the mocked embed reply width, `EMBEDDING_DIM`.
+        """
+        assert seed_default_fingerprint().dim == EMBEDDING_DIM
 
     def test_fingerprint_round_trip_json(self):
         """Verify Fingerprint to_json/from_json is stable and lossless.
@@ -91,11 +84,10 @@ class TestFingerprintRegistry:
             coercing dim to a string.
         Oracle: Hand-written JSON dict and equality with the original.
         """
-        fp = Fingerprint(provider='openai', model='text-3-small', dim=1536)
+        fp = Fingerprint(model='text-3-small', dim=1536)
         blob = fp.to_json()
         parsed = json.loads(blob)
-        assert parsed == {
-            'provider': 'openai', 'model': 'text-3-small', 'dim': 1536}
+        assert parsed == {'model': 'text-3-small', 'dim': 1536}
         assert Fingerprint.from_json(blob) == fp
 
     def test_fingerprint_from_json_malformed(self):
@@ -113,10 +105,10 @@ class TestFingerprintRegistry:
 
         Mutation: from_json dropping KeyError from its except clause, or
             defaulting the missing model and dim.
-        Oracle: pytest.raises on JSON that holds only `provider`.
+        Oracle: pytest.raises on JSON that holds only `model`.
         """
         with pytest.raises(EmbedFingerprintError):
-            Fingerprint.from_json('{"provider": "voyage"}')
+            Fingerprint.from_json('{"model": "voyage-3-lite"}')
 
 
 class TestFingerprintConsistency:
@@ -149,7 +141,7 @@ class TestFingerprintConsistency:
         finally:
             db.close()
         assert stored is not None
-        assert stored.provider == 'voyage'
+        assert stored.model == 'voyageai/voyage-4-lite'
         assert stored.dim == 512
 
 
@@ -178,8 +170,12 @@ class TestReembed:
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
-            _seed_row_with_embedding(db, id='r1', content='hello')
-            _seed_row_with_embedding(db, id='r2', content='world')
+            _seed_row_with_embedding(
+                db, id='r1', content='hello',
+                model='voyageai/voyage-4-lite')
+            _seed_row_with_embedding(
+                db, id='r2', content='world',
+                model='voyageai/voyage-4-lite')
         finally:
             db.close()
 
@@ -189,7 +185,7 @@ class TestReembed:
         out = json.loads(result.output)
         assert out['total_scanned'] == 2
         assert out['total_reembedded'] == 0
-        assert out['fingerprint']['provider'] == 'voyage'
+        assert out['fingerprint']['model'] == 'voyageai/voyage-4-lite'
         assert len(out['stores']) == 1
         assert out['stores'][0]['store'] == 'default'
 
@@ -197,7 +193,7 @@ class TestReembed:
         try:
             stored = stored_fingerprint(SqliteBackend(db))
             assert stored is not None
-            assert stored.provider == 'voyage'
+            assert stored.model == 'voyageai/voyage-4-lite'
             assert get_meta(db, 'embed_reembed_state') == 'idle'
             assert (
                 (get_meta(db, 'embed_reembed_cursor') or '') == '')
@@ -349,16 +345,16 @@ class TestReembed:
 
         Mutation: seed_if_fresh swallowing the unavailable-client error and
             falling through to the corrupted-store message.
-        Oracle: The Voyage-specific `not available` text, and no `embed
+        Oracle: The client's `is not reachable` text, and no `embed
             reembed` hint.
         """
         monkeypatch.setattr(
-            'memman.embed.voyage.Client.available', lambda self: False)
+            'memman.embed.client.Client.available', lambda self: False)
         data_dir = str(tmp_path / 'memman')
         result = _invoke([
             '--data-dir', data_dir, 'recall', 'x'])
         assert result.exit_code != 0
-        assert 'Voyage not available' in result.output
+        assert 'is not reachable' in result.output
         assert 'embed reembed' not in result.output
 
     @pytest.mark.no_autoseed_fingerprint
@@ -382,13 +378,13 @@ class TestReembed:
         assert result.exit_code != 0
         assert 'embed reembed' in result.output
 
-    def test_converges_after_provider_swap(
+    def test_converges_after_model_swap(
             self, tmp_path, _scheduler_stopped, monkeypatch, env_file):
-        """Verify reembed after a provider swap converges every row.
+        """Verify reembed after a model swap converges every row.
 
         Mutation: The match test treating rows with a different model or dim as
             current, or the fingerprint not advancing.
-        Oracle: Two rows re-embedded, stored provider stub, and each blob 1024
+        Oracle: Two rows re-embedded, stored model stub-1024, and each blob 1024
             * 8 bytes.
         """
         data_dir = str(tmp_path / 'memman')
@@ -402,7 +398,6 @@ class TestReembed:
             db.close()
 
         class _StubClient:
-            name = 'stub'
             model = 'stub-1024'
             dim = 1024
 
@@ -415,9 +410,7 @@ class TestReembed:
             def unavailable_message(self):
                 return 'stub down'
 
-        monkeypatch.setitem(
-            embed_mod.PROVIDERS, 'stub', _StubClient)
-        env_file('MEMMAN_EMBED_PROVIDER', 'stub')
+        monkeypatch.setattr('memman.cli.get_client', _StubClient)
 
         result = _invoke([
             '--data-dir', data_dir, 'embed', 'reembed'])
@@ -425,13 +418,13 @@ class TestReembed:
         out = json.loads(result.output)
         assert out['total_scanned'] == 2
         assert out['total_reembedded'] == 2
-        assert out['fingerprint']['provider'] == 'stub'
+        assert out['fingerprint']['model'] == 'stub-1024'
         assert out['fingerprint']['dim'] == 1024
 
         db = open_db(sdir)
         try:
             stored = stored_fingerprint(SqliteBackend(db))
-            assert stored.provider == 'stub'
+            assert stored.model == 'stub-1024'
             assert stored.dim == 1024
             rows = db._query(
                 'select id, length(embedding) from insights'
@@ -449,20 +442,19 @@ class TestReembed:
         The store fingerprint is the runtime authority for which client embeds.
 
         Mutation: _StoreContext binding get_client() instead of bound_embedder.
-        Oracle: A stored openai/other fingerprint against the voyage env
+        Oracle: A stored `other` fingerprint against the voyage env
             default.
         """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
             write_fingerprint(SqliteBackend(db), Fingerprint(
-                    provider='openai', model='other', dim=1024))
+                    model='other', dim=1024))
         finally:
             db.close()
 
         ctx = _StoreContext('default', str(tmp_path))
         try:
-            assert ctx.ec.name == 'openai'
             assert ctx.ec.model == 'other'
         finally:
             ctx.close()
@@ -472,7 +464,7 @@ class TestReembed:
 
         Mutation: embed_status reading the env-active fingerprint, or omitting
             credentials_available.
-        Oracle: Seeded voyage/512 values and credentials_available True.
+        Oracle: Seeded voyage-3-lite/512 values and credentials_available True.
         """
         data_dir = str(tmp_path / 'memman')
         sdir = store_dir(data_dir, 'default')
@@ -486,7 +478,7 @@ class TestReembed:
             '--data-dir', data_dir, 'embed', 'status'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
-        assert out['stored']['provider'] == 'voyage'
+        assert out['stored']['model'] == 'voyage-3-lite'
         assert out['stored']['dim'] == 512
         assert out['credentials_available'] is True
 
@@ -512,7 +504,7 @@ class TestReembed:
         """Verify the doctor check passes with a fingerprint and creds.
 
         Mutation: The check reporting fail or dropping the stored detail.
-        Oracle: Status pass, the seeded voyage provider, and credentials True.
+        Oracle: Status pass, the seeded voyage model, and credentials True.
         """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
@@ -522,7 +514,7 @@ class TestReembed:
         finally:
             db.close()
         assert result['status'] == 'pass'
-        assert result['detail']['stored']['provider'] == 'voyage'
+        assert result['detail']['stored']['model'] == 'voyage-3-lite'
         assert result['detail']['credentials_available'] is True
 
     @pytest.mark.no_autoseed_fingerprint
@@ -565,7 +557,7 @@ class TestReembed:
         assert 'embed reembed' in result['detail']['error']
 
     def test_idempotent_on_repeat(self, tmp_path, _scheduler_stopped):
-        """Verify a second reembed with the same provider re-embeds nothing.
+        """Verify a second reembed with the same model re-embeds nothing.
 
         Mutation: The first run not persisting the new model on each row, so
             the second run re-embeds again.
@@ -592,7 +584,7 @@ class TestReembed:
         second_out = json.loads(second.output)
         assert second_out['total_reembedded'] == 0
 
-    def test_blocks_when_provider_unavailable(
+    def test_blocks_when_client_unavailable(
             self, tmp_path, _scheduler_stopped, monkeypatch, env_file):
         """Verify reembed refuses to run when the client is unavailable.
 
@@ -600,7 +592,6 @@ class TestReembed:
         Oracle: Non-zero exit and the client unavailable_message text.
         """
         class _UnavailableClient:
-            name = 'fake'
             model = 'fake-model'
             dim = 1
 
@@ -613,9 +604,7 @@ class TestReembed:
             def unavailable_message(self):
                 return 'fake provider down: set FAKE_API_KEY'
 
-        monkeypatch.setitem(
-            embed_mod.PROVIDERS, 'fake', _UnavailableClient)
-        env_file('MEMMAN_EMBED_PROVIDER', 'fake')
+        monkeypatch.setattr('memman.cli.get_client', _UnavailableClient)
 
         result = _invoke([
             '--data-dir', str(tmp_path / 'memman'), 'embed', 'reembed'])
@@ -648,7 +637,6 @@ class TestReembed:
         embed_calls = []
 
         class _StubClient:
-            name = 'voyage'
             model = 'voyage-3-lite'
             dim = 512
 
@@ -662,8 +650,7 @@ class TestReembed:
             def unavailable_message(self):
                 return 'down'
 
-        monkeypatch.setitem(
-            embed_mod.PROVIDERS, 'voyage', _StubClient)
+        monkeypatch.setattr('memman.cli.get_client', _StubClient)
 
         result = _invoke([
             '--data-dir', data_dir, 'embed', 'reembed'])
@@ -674,18 +661,17 @@ class TestReembed:
         """Verify _StoreContext binds the stored fingerprint.
 
         Mutation: _StoreContext binding get_client() instead of bound_embedder.
-        Oracle: A stored openai/m fingerprint against the voyage env default.
+        Oracle: A stored `m` fingerprint against the voyage env default.
         """
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
-            write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
+            write_fingerprint(SqliteBackend(db), Fingerprint(model='m', dim=1024))
         finally:
             db.close()
 
         ctx = _StoreContext('default', str(tmp_path))
         try:
-            assert ctx.ec.name == 'openai'
             assert ctx.ec.model == 'm'
         finally:
             ctx.close()

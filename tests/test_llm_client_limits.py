@@ -6,7 +6,7 @@ a long read timeout.
 """
 
 import pytest
-from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL
+from memman.config import API_KEY, ENDPOINT, LLM_MODEL
 from memman.exceptions import ConfigError
 from memman.llm.client import get_llm_client, reset_client_cache
 
@@ -32,8 +32,8 @@ def test_unset_model_var_raises(env_file):
         model the operator never chose.
     Oracle: `ConfigError` raised with the model var cleared.
     """
-    env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
-    env_file(LLM_API_KEY, 'k')
+    env_file(ENDPOINT, 'https://openrouter.ai/api/v1')
+    env_file(API_KEY, 'k')
     env_file(LLM_MODEL, None)
     reset_client_cache()
     with pytest.raises(ConfigError):

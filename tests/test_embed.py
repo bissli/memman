@@ -4,19 +4,14 @@
 import math
 
 import pytest
-from memman import _http, config
-from memman.embed import PROVIDERS
-from memman.embed import openrouter as orem
-from memman.embed import voyage
-from memman.embed.openrouter import Client as OpenRouterClient
+from memman import _http
+from memman.embed import client as embed_client
+from memman.embed.client import Client
 from memman.embed.vector import deserialize_vector, serialize_vector
-from memman.embed.voyage import EMBEDDING_DIM
-from memman.embed.voyage import Client as VoyageClient
 from memman.exceptions import ConfigError
 
-_original_voyage_embed = VoyageClient.embed
-_original_voyage_embed_batch = VoyageClient.embed_batch
-_original_voyage_available = VoyageClient.available
+EMBEDDING_DIM = 512
+MODEL = 'voyageai/voyage-4-lite'
 
 
 class TestEmbedUtils:
@@ -71,19 +66,18 @@ class TestEmbedUtils:
         assert deserialize_vector(bytes(7)) is None
 
 
-class TestVoyageClient:
-    """Voyage AI embedding client -- init, availability, embed, headers.
+def _stub_session(monkeypatch, post_fn):
+    """Replace the embed client's HTTP session with a fake.
     """
+    monkeypatch.setitem(
+        _http._SESSIONS, embed_client.__name__,
+        type('FakeClient', (), {'post': staticmethod(post_fn)})())
 
-    @pytest.fixture
-    def real_client(self, monkeypatch):
-        """Client with real methods restored (undo autouse mock).
-        """
-        monkeypatch.setattr(VoyageClient, 'embed', _original_voyage_embed)
-        monkeypatch.setattr(VoyageClient, 'embed_batch', _original_voyage_embed_batch)
-        monkeypatch.setattr(VoyageClient, 'available', _original_voyage_available)
-        monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'test-key-123')
-        return VoyageClient()
+
+@pytest.mark.no_mock_embed
+class TestEmbedClient:
+    """Embed client -- init, availability, embed, headers.
+    """
 
     def test_api_key_from_env_file(self, env_file):
         """Verify the client takes its key from the env file.
@@ -93,23 +87,51 @@ class TestVoyageClient:
         Oracle: a distinctive key written to the env file and read back from
             the client.
         """
-        env_file('MEMMAN_VOYAGE_API_KEY', 'real-test-key')
-        client = VoyageClient()
+        env_file('MEMMAN_API_KEY', 'real-test-key')
+        client = Client(MODEL)
         assert client._api_key == 'real-test-key'
+
+    def test_constructor_reads_config(self, env_file):
+        """Verify the client binds the endpoint and the model it is given.
+
+        Mutation: swapping two config keys, reading the model from config
+            instead of the argument, or starting with a non-zero dim.
+        Oracle: the distinct literals written to the env file and passed in,
+            and dim 0 before any embed.
+        """
+        env_file('MEMMAN_ENDPOINT', 'https://example.test/v1/')
+        client = Client('some/other-model')
+        assert client.endpoint == 'https://example.test/v1'
+        assert client.model == 'some/other-model'
+        assert client.dim == 0
 
     @pytest.mark.no_default_env
     def test_missing_api_key_raises(self, env_file):
-        """Verify construction raises ConfigError naming the missing Voyage key.
+        """Verify construction raises ConfigError naming the missing key.
 
-        Mutation: reading the key with config.get in place of config.require,
-            so a keyless client builds; or moving the key check out of
-            __init__ into available() or embed().
-        Oracle: ConfigError, whose message contains MEMMAN_VOYAGE_API_KEY,
-            raised by VoyageClient() itself.
+        Mutation: reading the key with config.get in place of
+            config.api_key_for, so a keyless client builds; or moving the
+            key check out of __init__ into available() or embed().
+        Oracle: ConfigError, whose message contains MEMMAN_API_KEY, raised
+            by Client() itself on a non-loopback endpoint.
         """
-        env_file('MEMMAN_VOYAGE_API_KEY', None)
-        with pytest.raises(ConfigError, match='MEMMAN_VOYAGE_API_KEY'):
-            VoyageClient()
+        env_file('MEMMAN_ENDPOINT', 'https://openrouter.ai/api/v1')
+        env_file('MEMMAN_API_KEY', None)
+        with pytest.raises(ConfigError, match='MEMMAN_API_KEY'):
+            Client(MODEL)
+
+    @pytest.mark.no_default_env
+    def test_missing_endpoint_raises(self, env_file):
+        """Verify construction raises ConfigError when the endpoint is unset.
+
+        Mutation: reading the endpoint with config.get in place of
+            config.require.
+        Oracle: ConfigError naming MEMMAN_ENDPOINT.
+        """
+        env_file('MEMMAN_ENDPOINT', None)
+        env_file('MEMMAN_API_KEY', 'k')
+        with pytest.raises(ConfigError, match='MEMMAN_ENDPOINT'):
+            Client(MODEL)
 
     def test_available_is_memoized(self, monkeypatch):
         """Verify available() probes the HTTP endpoint once per instance.
@@ -119,8 +141,6 @@ class TestVoyageClient:
         Oracle: a call counter on the stubbed session equals 1 after three
             calls.
         """
-        monkeypatch.setattr(VoyageClient, 'available', _original_voyage_available)
-        monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'probe-key')
         calls = {'n': 0}
 
         def _mock_post(url, headers=None, json=None, timeout=None):
@@ -128,18 +148,35 @@ class TestVoyageClient:
 
             class Resp:
                 status_code = 200
+
+                def json(self_inner):
+                    return {'data': [{'embedding': [0.1] * 4}]}
             return Resp()
 
-        monkeypatch.setitem(
-            _http._SESSIONS, voyage.__name__,
-            type('FakeClient', (), {'post': staticmethod(_mock_post)})())
-        client = VoyageClient()
+        _stub_session(monkeypatch, _mock_post)
+        client = Client(MODEL)
         assert client.available() is True
         assert client.available() is True
         assert client.available() is True
         assert calls['n'] == 1
 
-    def test_embed_returns_vector(self, real_client, monkeypatch):
+    def test_available_returns_false_on_probe_failure(self, monkeypatch):
+        """Verify available() returns False when the probe gets a 401.
+
+        Mutation: letting the probe's RuntimeError escape, or returning True
+            regardless of the probe.
+        Oracle: a stubbed 401 response and the literal False.
+        """
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class Resp:
+                status_code = 401
+            return Resp()
+
+        _stub_session(monkeypatch, fake_post)
+        assert Client(MODEL).available() is False
+
+    def test_embed_returns_vector(self, monkeypatch):
         """Verify embed() returns the vector from the API response.
 
         Mutation: returning the whole response, or the wrong element of `data`,
@@ -158,14 +195,60 @@ class TestVoyageClient:
                     return {'data': [{'embedding': expected_vec}]}
             return Resp()
 
-        monkeypatch.setitem(
-            _http._SESSIONS, voyage.__name__,
-            type('FakeClient', (), {'post': staticmethod(mock_post)})())
-        vec = real_client.embed('test text')
+        _stub_session(monkeypatch, mock_post)
+        vec = Client(MODEL).embed('test text')
         assert len(vec) == EMBEDDING_DIM
         assert vec == expected_vec
 
-    def test_embed_raises_on_error_status(self, real_client, monkeypatch):
+    def test_embed_records_dim(self, monkeypatch):
+        """Verify embed() records the response width as dim.
+
+        Mutation: leaving dim at 0 after the first embed.
+        Oracle: dim equal to the stub vector length (1024).
+        """
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class Resp:
+                status_code = 200
+
+                def json(self):
+                    return {'data': [{'embedding': [0.5] * 1024}]}
+            return Resp()
+
+        _stub_session(monkeypatch, fake_post)
+        client = Client(MODEL)
+        client.embed('hello')
+        assert client.dim == 1024
+
+    def test_embed_batch_returns_one_vector_per_input(self, monkeypatch):
+        """Verify embed_batch() returns one vector per input text.
+
+        Mutation: sending only the first text, or returning fewer vectors than
+            inputs.
+        Oracle: the stub answers with one vector per posted text, so a count of
+            3 at width 768 shows all three texts were sent.
+        """
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            n = len(json['input'])
+
+            class Resp:
+                status_code = 200
+
+                def json(self):
+                    return {'data': [
+                        {'embedding': [float(i)] * 768} for i in range(n)
+                        ]}
+            return Resp()
+
+        _stub_session(monkeypatch, fake_post)
+        client = Client(MODEL)
+        vectors = client.embed_batch(['a', 'b', 'c'])
+        assert len(vectors) == 3
+        assert all(len(v) == 768 for v in vectors)
+        assert client.dim == 768
+
+    def test_embed_raises_on_error_status(self, monkeypatch):
         """Verify embed() raises RuntimeError naming a non-200 status.
 
         Mutation: dropping the status check, so a 401 body is parsed as an
@@ -179,13 +262,11 @@ class TestVoyageClient:
                 status_code = 401
             return Resp()
 
-        monkeypatch.setitem(
-            _http._SESSIONS, voyage.__name__,
-            type('FakeClient', (), {'post': staticmethod(mock_post)})())
+        _stub_session(monkeypatch, mock_post)
         with pytest.raises(RuntimeError, match='401'):
-            real_client.embed('test')
+            Client(MODEL).embed('test')
 
-    def test_embed_raises_on_empty_data(self, real_client, monkeypatch):
+    def test_embed_raises_on_empty_data(self, monkeypatch):
         """Verify embed() raises RuntimeError when the API returns no vectors.
 
         Mutation: dropping the length check, so an empty `data` array surfaces
@@ -202,181 +283,102 @@ class TestVoyageClient:
                     return {'data': []}
             return Resp()
 
-        monkeypatch.setitem(
-            _http._SESSIONS, voyage.__name__,
-            type('FakeClient', (), {'post': staticmethod(mock_post)})())
+        _stub_session(monkeypatch, mock_post)
         with pytest.raises(RuntimeError, match='0 vectors'):
-            real_client.embed('test')
+            Client(MODEL).embed('test')
 
-    def test_bearer_token(self, env_file):
-        """Verify _headers() sends the key as a Bearer token with a JSON type.
+    def test_embed_raises_on_null_embedding(self, monkeypatch):
+        """Verify embed() raises RuntimeError for a row with no embedding.
+
+        Mutation: dropping the None check, so a null row reaches the caller
+            as a vector.
+        Oracle: RuntimeError whose message contains 'no embedding'.
+        """
+
+        def mock_post(url, headers=None, json=None, timeout=None):
+            class Resp:
+                status_code = 200
+
+                def json(self_inner):
+                    return {'data': [{'embedding': None}]}
+            return Resp()
+
+        _stub_session(monkeypatch, mock_post)
+        with pytest.raises(RuntimeError, match='no embedding'):
+            Client(MODEL).embed('test')
+
+    def test_bearer_token(self, monkeypatch, env_file):
+        """Verify the request sends the key as a Bearer token with a JSON type.
 
         Mutation: a different auth scheme, or a dropped Content-Type header.
         Oracle: the literal header values for the key written to the env file.
         """
-        env_file('MEMMAN_VOYAGE_API_KEY', 'my-key')
-        client = VoyageClient()
-        headers = client._headers()
-        assert headers['Authorization'] == 'Bearer my-key'
-        assert headers['Content-Type'] == 'application/json'
+        env_file('MEMMAN_API_KEY', 'my-key')
+        captured = {}
+
+        def mock_post(url, headers=None, json=None, timeout=None):
+            captured['headers'] = headers
+
+            class Resp:
+                status_code = 200
+
+                def json(self_inner):
+                    return {'data': [{'embedding': [0.1]}]}
+            return Resp()
+
+        _stub_session(monkeypatch, mock_post)
+        Client(MODEL).embed('x')
+        assert captured['headers']['Authorization'] == 'Bearer my-key'
+        assert captured['headers']['Content-Type'] == 'application/json'
 
     def test_unavailable_message_includes_env_var(self):
         """Verify unavailable_message() names the env var that fixes it.
 
-        Mutation: a message that omits config.VOYAGE_API_KEY, leaving the user
+        Mutation: a message that omits config.API_KEY, leaving the user
             no fix.
-        Oracle: the literal variable name MEMMAN_VOYAGE_API_KEY.
+        Oracle: the literal variable name MEMMAN_API_KEY.
         """
-        client = VoyageClient()
-        assert 'MEMMAN_VOYAGE_API_KEY' in client.unavailable_message()
+        client = Client(MODEL)
+        assert 'MEMMAN_API_KEY' in client.unavailable_message()
 
 
-def _seed_openrouter_keys(env_file):
-    """Write the three env vars the OpenRouter provider requires.
-    """
-    env_file(config.OPENROUTER_API_KEY, 'sk-or-test')
-    env_file(config.OPENROUTER_ENDPOINT, 'https://openrouter.ai/api/v1')
-    env_file(config.OPENROUTER_EMBED_MODEL, 'baai/bge-m3')
-
-
-def _stub_openrouter_session(monkeypatch, post_fn):
-    """Replace the OpenRouter HTTP session with a fake.
-    """
-    monkeypatch.setitem(
-        _http._SESSIONS, orem.__name__,
-        type('FakeClient', (), {'post': staticmethod(post_fn)})())
-
-
-class TestOpenRouterClient:
-    """OpenRouter embedding provider -- config, embed, availability.
+@pytest.mark.no_mock_embed
+class TestPrepare:
+    """prepare() learns dim with one probe.
     """
 
-    def test_constructor_reads_config(self, env_file):
-        """Verify the OpenRouter client reads endpoint, model and key from config.
+    def test_prepare_sets_dim(self, monkeypatch):
+        """prepare() probes the endpoint and caches dim on the client.
 
-        Mutation: swapping two config keys, or starting with a non-zero dim.
-        Oracle: the distinct literals written to the env file, and dim 0 before
-            any embed.
+        Mutation: `prepare()` not storing the probed length in `dim`.
+        Oracle: the 1536-length vector the stubbed `embed` returns.
         """
-        _seed_openrouter_keys(env_file)
-        client = OpenRouterClient()
-        assert client.endpoint == 'https://openrouter.ai/api/v1'
-        assert client.model == 'baai/bge-m3'
-        assert client.dim == 0
-        assert client._api_key == 'sk-or-test'
 
-    @pytest.mark.no_default_env
-    @pytest.mark.parametrize(('missing_attr', 'match'), [
-        ('OPENROUTER_ENDPOINT', 'OPENROUTER_ENDPOINT'),
-        ('OPENROUTER_EMBED_MODEL', 'OPENROUTER_EMBED_MODEL'),
-    ])
-    def test_raises_when_required_config_missing(
-            self, env_file, missing_attr, match):
-        """Verify construction raises ConfigError for each missing required key.
+        def _fake_embed(self, text):
+            return [0.1] * 1536
 
-        Mutation: reading the endpoint or the embed model with config.get in
-            place of config.require.
-        Oracle: ConfigError naming the one key removed, for each parametrized
-            key.
+        monkeypatch.setattr(Client, 'embed', _fake_embed)
+        ec = Client(MODEL)
+        assert ec.dim == 0
+        ec.prepare()
+        assert ec.dim == 1536
+
+    def test_prepare_idempotent(self, monkeypatch):
+        """Subsequent prepare() calls do not re-probe.
+
+        Mutation: `prepare()` calling `embed` on every call, paying a
+            network probe each time.
+        Oracle: a counting stub that must see exactly one call.
         """
-        present = {
-            'OPENROUTER_ENDPOINT': 'https://x',
-            'OPENROUTER_EMBED_MODEL': 'm',
-            'OPENROUTER_API_KEY': 'k',
-        }
-        for key, value in present.items():
-            env_file(getattr(config, key),
-                     None if key == missing_attr else value)
-        with pytest.raises(ConfigError, match=match):
-            OpenRouterClient()
 
-    def test_embed_returns_vector(self, monkeypatch, env_file):
-        """Verify embed() returns the response vector and records its width.
+        call_count = {'n': 0}
 
-        Mutation: returning the wrong element, or leaving dim at 0 after the
-            first embed.
-        Oracle: the vector the stub returns, and dim equal to its length
-            (1024).
-        """
-        _seed_openrouter_keys(env_file)
-        expected = [0.5] * 1024
+        def _counting_embed(self, text):
+            call_count['n'] += 1
+            return [0.2] * 8
 
-        def fake_post(url, headers=None, json=None, timeout=None):
-            class Resp:
-                status_code = 200
-
-                def json(self):
-                    return {'data': [{'embedding': expected}]}
-            return Resp()
-
-        _stub_openrouter_session(monkeypatch, fake_post)
-        client = OpenRouterClient()
-        vec = client.embed('hello')
-        assert vec == expected
-        assert client.dim == 1024
-
-    def test_embed_batch_returns_one_vector_per_input(self, monkeypatch, env_file):
-        """Verify embed_batch() returns one vector per input text.
-
-        Mutation: sending only the first text, or returning fewer vectors than
-            inputs.
-        Oracle: the stub answers with one vector per posted text, so a count of
-            3 at width 768 shows all three texts were sent.
-        """
-        _seed_openrouter_keys(env_file)
-
-        def fake_post(url, headers=None, json=None, timeout=None):
-            n = len(json['input'])
-
-            class Resp:
-                status_code = 200
-
-                def json(self):
-                    return {'data': [
-                        {'embedding': [float(i)] * 768} for i in range(n)
-                        ]}
-            return Resp()
-
-        _stub_openrouter_session(monkeypatch, fake_post)
-        client = OpenRouterClient()
-        vectors = client.embed_batch(['a', 'b', 'c'])
-        assert len(vectors) == 3
-        assert all(len(v) == 768 for v in vectors)
-        assert client.dim == 768
-
-    def test_available_returns_false_on_probe_failure(self, monkeypatch, env_file):
-        """Verify available() returns False when the probe gets a 401.
-
-        Mutation: letting the probe's RuntimeError escape, or returning True
-            regardless of the probe.
-        Oracle: a stubbed 401 response and the literal False.
-        """
-        _seed_openrouter_keys(env_file)
-
-        def fake_post(url, headers=None, json=None, timeout=None):
-            class Resp:
-                status_code = 401
-            return Resp()
-
-        _stub_openrouter_session(monkeypatch, fake_post)
-        client = OpenRouterClient()
-        assert client.available() is False
-
-    def test_provider_registered(self):
-        """Verify openrouter is registered in PROVIDERS.
-
-        Mutation: dropping the 'openrouter' entry, so the provider cannot be
-            selected.
-        Oracle: the literal key 'openrouter'.
-        """
-        assert 'openrouter' in PROVIDERS
-
-    def test_provider_factory_returns_client(self, monkeypatch, env_file):
-        """Verify the openrouter factory builds the OpenRouter client.
-
-        Mutation: registering another provider's class under 'openrouter'.
-        Oracle: the literal client name 'openrouter'.
-        """
-        _seed_openrouter_keys(env_file)
-        client = PROVIDERS['openrouter']()
-        assert client.name == 'openrouter'
+        monkeypatch.setattr(Client, 'embed', _counting_embed)
+        ec = Client(MODEL)
+        ec.prepare()
+        ec.prepare()
+        assert call_count['n'] == 1

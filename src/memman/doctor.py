@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from memman import config, extras
-from memman.embed import PROVIDER_REQUIRED_KEYS, get_client
+from memman.embed import get_client
 from memman.embed import registry as _ec_registry
 from memman.embed.fingerprint import stored_fingerprint
 from memman.exceptions import ConfigError
@@ -285,33 +285,15 @@ def check_env_completeness() -> dict[str, Any]:
 
     Notes
     -----
-    - A provider key counts as missing only when a configured provider
-      reads it: the embed provider's own keys, and the Voyage key
-      whenever reranking is on for any store. The LLM key is never
-      flagged, since a loopback endpoint needs none.
-    - Reranking is on for a store as recall reads it: the store's
-      `MEMMAN_RERANK_ENABLED_<store>` when set, else the global
-      `MEMMAN_RERANK_ENABLED`, which counts as on when unset or empty.
+    - `MEMMAN_API_KEY` counts as missing only off a loopback endpoint,
+      since a loopback endpoint needs none.
     """
     path = config.env_file_path()
     parsed = config.parse_env_file(path)
 
-    used_provider_keys = set(PROVIDER_REQUIRED_KEYS.get(
-        parsed.get(config.EMBED_PROVIDER, ''), ()))
-    rerank_switches = [
-        value for key, value in parsed.items()
-        if key.startswith(config.RERANK_ENABLED_FOR(''))
-        ]
-    rerank_switches.append(parsed.get(config.RERANK_ENABLED) or 'true')
-    if any(value.strip().lower() in config.TRUTHY
-           for value in rerank_switches):
-        used_provider_keys.add(config.VOYAGE_API_KEY)
-    optional_secrets = {
-        config.OPENROUTER_API_KEY,
-        config.VOYAGE_API_KEY,
-        config.OPENAI_EMBED_API_KEY,
-        config.LLM_API_KEY,
-        } - used_provider_keys
+    optional_secrets = set()
+    if config.is_loopback_endpoint(parsed.get(config.ENDPOINT, '')):
+        optional_secrets.add(config.API_KEY)
     default_backend = parsed.get(config.DEFAULT_BACKEND, 'sqlite')
     optional_unless_default_postgres = set()
     if default_backend != 'postgres':
@@ -829,7 +811,6 @@ def check_embed_probe() -> dict[str, Any]:
     """Probe the embedding endpoint with one minimal call.
     """
     detail: dict[str, Any] = {
-        'provider': None,
         'model': None,
         'elapsed_ms': None,
         'dim': None,
@@ -838,7 +819,6 @@ def check_embed_probe() -> dict[str, Any]:
     t0 = time.monotonic()
     try:
         ec = get_client()
-        detail['provider'] = ec.name
         detail['model'] = ec.model
         if not ec.available():
             detail['error'] = ec.unavailable_message()
@@ -861,8 +841,9 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
     """Report the store's stored fingerprint and credential availability.
 
     Each store carries its own embedder, so no env-level fingerprint
-    exists to compare against. Missing credentials for the stored
-    provider fail the check, since recall on the store cannot proceed.
+    exists to compare against. An endpoint that does not serve the
+    stored model fails the check, since recall on the store cannot
+    proceed.
     """
     detail: dict[str, Any] = {
         'stored': None,
@@ -883,12 +864,8 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
 
-    detail['stored'] = {
-        'provider': stored.provider,
-        'model': stored.model,
-        'dim': stored.dim,
-        }
-    ec = _ec_registry.get_for(stored.provider, stored.model)
+    detail['stored'] = {'model': stored.model, 'dim': stored.dim}
+    ec = _ec_registry.get_for(stored.model)
     detail['credentials_available'] = ec.available()
     if not detail['credentials_available']:
         detail['error'] = ec.unavailable_message()

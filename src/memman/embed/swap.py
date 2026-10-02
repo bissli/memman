@@ -45,19 +45,17 @@ DEFAULT_BATCH_SIZE = 200
 
 META_STATE = 'embed_swap_state'
 META_CURSOR = 'embed_swap_cursor'
-META_PROVIDER = 'embed_swap_target_provider'
 META_MODEL = 'embed_swap_target_model'
 META_DIM = 'embed_swap_target_dim'
 
 _META_KEYS = (
-    META_STATE, META_CURSOR, META_PROVIDER, META_MODEL, META_DIM)
+    META_STATE, META_CURSOR, META_MODEL, META_DIM)
 
 
 @dataclass
 class SwapPlan:
     """Target embedder fingerprint for a swap.
     """
-    target_provider: str
     target_model: str
     target_dim: int
 
@@ -68,7 +66,6 @@ class SwapProgress:
     """
     state: str
     cursor: str
-    target_provider: str
     target_model: str
     target_dim: int
 
@@ -98,7 +95,6 @@ def read_progress(backend: Backend) -> SwapProgress:
     return SwapProgress(
         state=meta.get(META_STATE) or '',
         cursor=meta.get(META_CURSOR) or '',
-        target_provider=meta.get(META_PROVIDER) or '',
         target_model=meta.get(META_MODEL) or '',
         target_dim=dim)
 
@@ -182,14 +178,10 @@ def run_swap(
     """
     batch_size = batch_size_from_env()
     progress = read_progress(backend)
-    target = Fingerprint(
-        provider=plan.target_provider,
-        model=plan.target_model,
-        dim=plan.target_dim)
+    target = Fingerprint(model=plan.target_model, dim=plan.target_dim)
     done = SwapProgress(
         state=STATE_DONE,
         cursor='',
-        target_provider=plan.target_provider,
         target_model=plan.target_model,
         target_dim=plan.target_dim)
     if progress.state == '':
@@ -199,21 +191,17 @@ def run_swap(
         with backend.transaction():
             backend.meta.set(META_STATE, STATE_BACKFILLING)
             backend.meta.set(META_CURSOR, '')
-            backend.meta.set(META_PROVIDER, plan.target_provider)
             backend.meta.set(META_MODEL, plan.target_model)
             backend.meta.set(META_DIM, str(plan.target_dim))
     elif progress.state == STATE_BACKFILLING:
-        if (progress.target_provider != plan.target_provider
-                or progress.target_model != plan.target_model
+        if (progress.target_model != plan.target_model
                 or progress.target_dim != plan.target_dim):
             raise RuntimeError(
                 f'in-flight swap target'
-                f' ({progress.target_provider}/'
-                f'{progress.target_model}/dim={progress.target_dim})'
+                f' ({progress.target_model}/dim={progress.target_dim})'
                 f' does not match requested target'
-                f' ({plan.target_provider}/{plan.target_model}/'
-                f'dim={plan.target_dim}); abort first or pass --resume'
-                ' without --to')
+                f' ({plan.target_model}/dim={plan.target_dim});'
+                ' abort first or pass --resume without --to')
     elif progress.state == STATE_CUTOVER:
         pass
     else:

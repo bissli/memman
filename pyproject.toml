@@ -95,7 +95,8 @@ norecursedirs = [
 ]
 markers = [
   "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
-  "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
+  "no_mock_embed: skip the autouse embed client stubs; the test drives the real HTTP request",
+  "no_mock_rerank: skip the autouse rerank passthrough; the test drives the real client method",
   "no_mock_catalog: skip the autouse OpenRouter catalog stub; the test drives the real model-check fetch",
   "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as enrich that require a stopped drain",
   "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
@@ -103,6 +104,6 @@ markers = [
   "no_default_env: skip the autouse env-file seed; config.get returns None for unset keys",
   "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
   "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
-  "requires_live_keys: tests requiring real MEMMAN_OPENROUTER_API_KEY + MEMMAN_VOYAGE_API_KEY; fail loud under MEMMAN_E2E_REQUIRE_LIVE=1",
+  "requires_live_keys: tests requiring a real MEMMAN_API_KEY; fail loud under MEMMAN_E2E_REQUIRE_LIVE=1",
   "postgres: tests requiring the pgvector testcontainer (install via memman[postgres])",
 ]

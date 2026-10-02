@@ -37,7 +37,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
         insert_insight(db, ins)
         set_meta(
             db, 'embed_fingerprint',
-            '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
+            '{"model":"voyage-3-lite","dim":512}')
     finally:
         db.close()
     return Path(sdir)

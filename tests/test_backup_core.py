@@ -19,7 +19,7 @@ from memman.store.db import read_active, store_dir, write_active
 from memman.store.sqlite import open_sqlite_backend
 from tests.conftest import make_insight
 
-_FP = Fingerprint('voyage', 'voyage-3-lite', 512)
+_FP = Fingerprint('voyage-3-lite', 512)
 
 
 def _data_dir() -> str:
@@ -126,8 +126,7 @@ class TestBuildBundle:
         assert 'MEMMAN_BACKEND_s1=sqlite' in env_text
         assert 'MEMMAN_POSTGRES_DSN_s1' not in env_text
         assert 'MEMMAN_DEFAULT_POSTGRES_DSN' not in env_text
-        assert 'MEMMAN_OPENROUTER_API_KEY' not in env_text
-        assert 'MEMMAN_VOYAGE_API_KEY' not in env_text
+        assert 'MEMMAN_API_KEY' not in env_text
 
     def test_partial_store_failure_does_not_abort(self, tmp_path, monkeypatch):
         """A failing store snapshot is marked failed; the bundle completes.
@@ -309,14 +308,14 @@ class TestRestore:
 
         Mutation: secret_keys_needed built from the bundle rather than the
             target env.
-        Oracle: the voyage API key name, absent from the fresh target env.
+        Oracle: the shared API key name, absent from the fresh target env.
         """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
         target = tmp_path / 'archive_sec2'
         bundle = build_bundle(data_dir, str(target))['bundle']
         result = restore(bundle, str(tmp_path / 'fresh2'))
-        assert config.VOYAGE_API_KEY in result['secret_keys_needed']
+        assert config.API_KEY in result['secret_keys_needed']
 
     def test_preserves_existing_host_secret(self, tmp_path):
         """Restore merges non-secret config without clobbering host secrets.
@@ -331,10 +330,10 @@ class TestRestore:
         bundle = build_bundle(data_dir, str(target))['bundle']
         fresh = str(tmp_path / 'fresh3')
         _write_env_keys(
-            {config.VOYAGE_API_KEY: 'host-secret'}, data_dir=fresh)
+            {config.API_KEY: 'host-secret'}, data_dir=fresh)
         restore(bundle, fresh)
         env = config.parse_env_file(config.env_file_path(fresh))
-        assert env[config.VOYAGE_API_KEY] == 'host-secret'
+        assert env[config.API_KEY] == 'host-secret'
 
     def test_partial_failure_isolated(self, tmp_path, monkeypatch):
         """A per-store restore failure is isolated; other stores restore.
@@ -370,7 +369,7 @@ class TestRestore:
         """
         data_dir = _data_dir()
         _seed_store(data_dir, 'default', n=1)
-        env_file('MEMMAN_VOYAGE_EMBED_MODEL', 'voyage-3-large')
+        env_file('MEMMAN_EMBED_MODEL', 'voyage-3-large')
         bundle = build_bundle(data_dir, str(tmp_path / 'archive_em'))['bundle']
         result = restore(bundle, str(tmp_path / 'fresh_em'))
         assert 'default' in result['embed_mismatch']

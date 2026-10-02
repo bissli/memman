@@ -38,7 +38,7 @@ def _seed_with_fingerprint_only(store_dir: Path, dim: int = 512) -> None:
         conn.execute(
             'insert into meta (key, value) values (?, ?)',
             ('embed_fingerprint',
-             '{"provider":"fixture","model":"fixture","dim":'
+             '{"model":"fixture","dim":'
              + str(dim) + '}'))
         conn.commit()
     finally:

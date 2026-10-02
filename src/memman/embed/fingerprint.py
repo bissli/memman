@@ -1,6 +1,6 @@
 """Embed-fingerprint canonical state for a store.
 
-`Fingerprint` records which provider/model/dim produced the vectors
+`Fingerprint` records which model and dim produced the vectors
 stored in a memman DB. The canonical value lives in
 `meta.embed_fingerprint`; reads and writes compare the active
 client's fingerprint to the stored one and raise
@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from memman.embed import get_client
+from memman import config
 from memman.embed import registry as _ec_registry
 from memman.exceptions import EmbedFingerprintError
 
@@ -24,10 +24,9 @@ META_KEY = 'embed_fingerprint'
 
 @dataclass(frozen=True)
 class Fingerprint:
-    """Canonical (provider, model, dim) tuple for embedded vectors.
+    """Canonical (model, dim) pair for embedded vectors.
     """
 
-    provider: str
     model: str
     dim: int
 
@@ -35,10 +34,7 @@ class Fingerprint:
         """Serialize to a stable JSON string.
         """
         return json.dumps(
-            {'provider': self.provider,
-             'model': self.model,
-             'dim': self.dim},
-            sort_keys=True)
+            {'model': self.model, 'dim': self.dim}, sort_keys=True)
 
     @classmethod
     def from_json(cls, s: str) -> 'Fingerprint':
@@ -51,7 +47,6 @@ class Fingerprint:
         try:
             d = json.loads(s)
             return cls(
-                provider=str(d['provider']),
                 model=str(d['model']),
                 dim=int(d['dim']))
         except (json.JSONDecodeError, KeyError, TypeError,
@@ -64,10 +59,9 @@ class Fingerprint:
     @classmethod
     def from_client(
             cls, client: 'EmbeddingProvider') -> 'Fingerprint':
-        """Build from any embed client exposing name/model/dim.
+        """Build from any embed client exposing model/dim.
         """
         return cls(
-            provider=str(client.name),
             model=str(client.model),
             dim=int(client.dim))
 
@@ -78,9 +72,11 @@ def seed_default_fingerprint() -> Fingerprint:
     Seeds a brand-new store's `meta.embed_fingerprint` (via
     `seed_if_fresh`) or a fresh Postgres `vector(N)` column. For an
     existing store, resolve via `stored_fingerprint` / `bound_embedder`
-    instead: each store keeps its own embedder.
+    instead: each store keeps its own embedder. The registry client has
+    probed its dim, so a fresh `vector(N)` column matches the model.
     """
-    return Fingerprint.from_client(get_client())
+    return Fingerprint.from_client(
+        _ec_registry.get_for(config.require(config.EMBED_MODEL)))
 
 
 def stored_fingerprint(backend: 'Backend') -> Fingerprint | None:
@@ -133,7 +129,7 @@ def seed_if_fresh(
     target = Fingerprint.from_client(ec)
     if target.dim <= 0:
         raise EmbedFingerprintError(
-            f'embed provider {target.provider} returned'
+            f'embed model {target.model!r} returned'
             f' dim={target.dim}; cannot seed fingerprint')
     write_fingerprint(backend, target)
     return True
@@ -143,7 +139,7 @@ def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
     """Return the embed client cached for this store's stored fingerprint.
 
     Resolves `meta.embed_fingerprint` and dispatches to
-    `embed.registry.get_for(provider, model)`. Raises
+    `embed.registry.get_for(model, dim)`. Raises
     `EmbedFingerprintError` if the store has no fingerprint yet --
     callers that may face a fresh store must run `seed_if_fresh`
     first.
@@ -153,4 +149,4 @@ def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
         raise EmbedFingerprintError(
             'store has no embed fingerprint;'
             " run 'memman embed reembed' to initialize.")
-    return _ec_registry.get_for(fp.provider, fp.model)
+    return _ec_registry.get_for(fp.model, fp.dim)

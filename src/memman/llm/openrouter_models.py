@@ -182,7 +182,7 @@ def refresh_model_state(data_dir: str, *, force: bool) -> str | None:
     RuntimeError
         When a catalog carries no `data` list, raised the same way.
     """
-    endpoint = config.get_scoped(config.LLM_ENDPOINT, data_dir) or ''
+    endpoint = config.get_scoped(config.ENDPOINT, data_dir) or ''
     model = config.get_scoped(config.LLM_MODEL, data_dir)
     if not config.is_openrouter_endpoint(endpoint) or not model:
         return None

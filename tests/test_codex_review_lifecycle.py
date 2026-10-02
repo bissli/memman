@@ -20,14 +20,14 @@ def lifecycle(monkeypatch, tmp_path):
     codex_env = detect.detect_codex()
     install_codex(codex_env)
     data_dir = str(tmp_path / 'lifecycle-data')
-    scheduler._write_env_keys({config.LLM_API_KEY: 'test-retained-secret'},
+    scheduler._write_env_keys({config.API_KEY: 'test-retained-secret'},
                               data_dir=data_dir)
     removed = []
 
     def remove_scheduler(**kwargs):
         assert kwargs['data_dir'] == data_dir
         removed.append('scheduler')
-        scheduler._write_env_keys({}, removes={config.LLM_API_KEY},
+        scheduler._write_env_keys({}, removes={config.API_KEY},
                                   data_dir=data_dir)
         return {}
 
@@ -75,7 +75,7 @@ def test_codex_uninstall_ignores_unrelated_claude_directories(
         assert (unrelated / 'SKILL.md').read_text() == (
             'An unrelated user skill.\n')
     assert lifecycle['removed'] == ['scheduler', 'backup']
-    assert config.get_scoped(config.LLM_API_KEY, lifecycle['data_dir']) is None
+    assert config.get_scoped(config.API_KEY, lifecycle['data_dir']) is None
 
 
 @pytest.mark.parametrize('stale', [False, True])
@@ -102,7 +102,7 @@ def test_codex_uninstall_retains_services_for_claude_hook_only(
     assert not lifecycle['codex_link'].is_symlink()
     assert hook.is_symlink()
     assert lifecycle['removed'] == []
-    assert config.get_scoped(config.LLM_API_KEY, lifecycle['data_dir']) == (
+    assert config.get_scoped(config.API_KEY, lifecycle['data_dir']) == (
         'test-retained-secret')
 
 
@@ -128,7 +128,7 @@ def test_failed_claude_settings_cleanup_keeps_shared_services(
     assert settings.read_text() == '{invalid JSON'
     assert not lifecycle['codex_link'].is_symlink()
     assert lifecycle['removed'] == []
-    assert config.get_scoped(config.LLM_API_KEY, lifecycle['data_dir']) == (
+    assert config.get_scoped(config.API_KEY, lifecycle['data_dir']) == (
         'test-retained-secret')
 
 
@@ -165,7 +165,7 @@ def test_claude_asset_removal_failure_keeps_shared_services(
     assert failed_path.exists()
     assert not lifecycle['codex_link'].is_symlink()
     assert lifecycle['removed'] == []
-    assert config.get_scoped(config.LLM_API_KEY, lifecycle['data_dir']) == (
+    assert config.get_scoped(config.API_KEY, lifecycle['data_dir']) == (
         'test-retained-secret')
 
 
@@ -237,5 +237,5 @@ def test_unreadable_claude_settings_are_preserved(
     assert original_read_text(settings) == original_contents
     assert not lifecycle['codex_link'].is_symlink()
     assert lifecycle['removed'] == []
-    assert config.get_scoped(config.LLM_API_KEY, lifecycle['data_dir']) == (
+    assert config.get_scoped(config.API_KEY, lifecycle['data_dir']) == (
         'test-retained-secret')

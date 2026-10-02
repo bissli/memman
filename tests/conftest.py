@@ -3,9 +3,9 @@
 Dual-mode API mocking: mocked by default, real APIs with --live flag.
 
     pytest                    # fast, mocked LLM + embeddings
-    pytest --live             # real Haiku + Voyage APIs (slow, needs keys)
+    pytest --live             # real LLM, embed, and rerank APIs (needs keys)
 
-Mock mode patches `MemmanLLMClient.complete` and `voyage.Client.embed`
+Mock mode patches `MemmanLLMClient.complete` and `embed.client.Client.embed`
 at the HTTP layer, so all enrichment logic still runs with realistic
 canned responses. This exercises the real code paths.
 """
@@ -117,11 +117,7 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     live_mode = request.config.getoption('--live')
     real_secrets = {}
     if live_mode:
-        live_keys = (
-            'MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
-            'MEMMAN_OPENAI_EMBED_API_KEY',
-            'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT',
-            )
+        live_keys = ('MEMMAN_API_KEY', 'MEMMAN_ENDPOINT')
         for key in live_keys:
             val = os.environ.get(key)
             if val:
@@ -146,14 +142,9 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)
     monkeypatch.delenv('MEMMAN_SCHEDULER_KIND', raising=False)
     monkeypatch.delenv('MEMMAN_AUTHOR', raising=False)
-    monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
-    monkeypatch.delenv('MEMMAN_VOYAGE_API_KEY', raising=False)
-    monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
-    monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
-    monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+    monkeypatch.delenv('MEMMAN_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_ENDPOINT', raising=False)
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
-    monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     # `remember` sets a PGCONNECT_TIMEOUT default in-process. The set
     # records the prior state, so teardown clears what a test leaves.
     monkeypatch.setenv('PGCONNECT_TIMEOUT', '3')
@@ -171,9 +162,7 @@ def _isolate_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 
 
 _TEST_MOCK_SECRETS = {
-    'MEMMAN_OPENROUTER_API_KEY': 'mock-key-for-testing',
-    'MEMMAN_VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
-    'MEMMAN_LLM_API_KEY': 'mock-llm-api-key-for-testing',
+    'MEMMAN_API_KEY': 'mock-api-key-for-testing',
     }
 
 
@@ -226,13 +215,7 @@ def _write_default_env_file(
     path = data_dir / config.ENV_FILENAME
     secrets = dict(_TEST_MOCK_SECRETS)
     if real_secrets:
-        if (config.LLM_API_KEY not in real_secrets
-                and 'MEMMAN_OPENROUTER_API_KEY' in real_secrets):
-            secrets.pop(config.LLM_API_KEY, None)
         secrets.update(real_secrets)
-    if (config.LLM_API_KEY not in secrets
-            and 'MEMMAN_OPENROUTER_API_KEY' in secrets):
-        secrets[config.LLM_API_KEY] = secrets['MEMMAN_OPENROUTER_API_KEY']
     rows = list(config.INSTALL_DEFAULTS.items()) + list(secrets.items())
     contents = '\n'.join(f'{k}={v}' for k, v in rows) + '\n'
     path.write_text(contents)
@@ -406,7 +389,7 @@ def _mock_apis(request: pytest.FixtureRequest,
     should mark themselves with `@pytest.mark.no_mock_llm` to skip
     the method-level patch while keeping the embedding stubs in
     place.
-    Tests that exercise the real `rerank.voyage.Client.rerank` method
+    Tests that exercise the real `rerank.client.Client.rerank` method
     mark themselves `@pytest.mark.no_mock_rerank` the same way.
     The OpenRouter catalog fetch behind the model check returns a clean
     verdict, so no drain or install GETs openrouter.ai; a test driving
@@ -422,15 +405,16 @@ def _mock_apis(request: pytest.FixtureRequest,
             'memman.llm.client.MemmanLLMClient.complete',
             _mock_llm_complete)
 
-    monkeypatch.setattr(
-        'memman.embed.voyage.Client.embed', _mock_embed)
-    monkeypatch.setattr(
-        'memman.embed.voyage.Client.embed_batch', _mock_embed_batch)
-    monkeypatch.setattr(
-        'memman.embed.voyage.Client.available', lambda self: True)
+    if 'no_mock_embed' not in request.keywords:
+        monkeypatch.setattr(
+            'memman.embed.client.Client.embed', _mock_embed)
+        monkeypatch.setattr(
+            'memman.embed.client.Client.embed_batch', _mock_embed_batch)
+        monkeypatch.setattr(
+            'memman.embed.client.Client.available', _mock_available)
     if 'no_mock_rerank' not in request.keywords:
         monkeypatch.setattr(
-            'memman.rerank.voyage.Client.rerank', _mock_rerank)
+            'memman.rerank.client.Client.rerank', _mock_rerank)
     if 'no_mock_catalog' not in request.keywords:
         monkeypatch.setattr(
             'memman.llm.openrouter_models.fetch_model_notice',
@@ -475,16 +459,23 @@ def _mock_enrichment(content: str) -> str:
 
 
 def _mock_rerank(self: Any, query: str, documents: list[str],
-                 top_k: int | None = None) -> list[tuple[int, float]]:
+                 top_n: int | None = None) -> list[tuple[int, float]]:
     """Passthrough reranker: input order preserved, scores descending.
 
     The write path's shortlist reranks its cosine pool on every fact, so
-    without this stub every pipeline test would post to Voyage. Keeping
+    without this stub every pipeline test would post to the endpoint. Keeping
     the input order means a test that plants rows by cosine sees the
     rerank slots filled in that same order unless it installs its own
     stub.
     """
     return [(i, 1.0 - i / max(1, len(documents))) for i in range(len(documents))]
+
+
+def _mock_available(self: Any) -> bool:
+    """Report the endpoint reachable and learn `dim` as a real probe does.
+    """
+    self.dim = self.dim or EMBEDDING_DIM
+    return True
 
 
 def _mock_embed_batch(
@@ -763,13 +754,10 @@ def install_env_factory(data_dir: str | Path, **keys: str | None) -> None:
     """Seed an env file at `data_dir` with selected keys.
 
     Pass key=value to write a row; pass key=None to omit it.
-    Recognized convenience aliases: ``openrouter`` -> OPENROUTER_API_KEY,
-    ``voyage`` -> VOYAGE_API_KEY. Other kwargs are written as-is.
+    Recognized convenience alias: ``api_key`` -> MEMMAN_API_KEY. Other
+    kwargs are written as-is.
     """
-    aliases = {
-        'openrouter': config.OPENROUTER_API_KEY,
-        'voyage': config.VOYAGE_API_KEY,
-        }
+    aliases = {'api_key': config.API_KEY}
     p = Path(data_dir)
     p.mkdir(parents=True, exist_ok=True)
     rows = []

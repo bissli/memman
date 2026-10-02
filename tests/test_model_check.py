@@ -273,7 +273,7 @@ def test_a_loopback_endpoint_is_never_checked(env_file, fetches):
         openrouter.ai.
     Oracle: a loopback Ollama endpoint and a forced refresh.
     """
-    env_file(config.LLM_ENDPOINT, 'http://localhost:11434/v1')
+    env_file(config.ENDPOINT, 'http://localhost:11434/v1')
     assert om.refresh_model_state(_data_dir(), force=True) is None
     assert fetches == []
 

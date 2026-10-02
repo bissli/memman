@@ -53,15 +53,15 @@ from memman.exceptions import ConfigError
 
 DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
-LLM_ENDPOINT = 'MEMMAN_LLM_ENDPOINT'
-LLM_API_KEY = 'MEMMAN_LLM_API_KEY'
+ENDPOINT = 'MEMMAN_ENDPOINT'
+API_KEY = 'MEMMAN_API_KEY'
+ZDR = 'MEMMAN_ZDR'
+DATA_COLLECTION = 'MEMMAN_DATA_COLLECTION'
 LLM_MODEL = 'MEMMAN_LLM_MODEL'
 LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
-LLM_DATA_COLLECTION = 'MEMMAN_LLM_DATA_COLLECTION'
-LLM_ZDR = 'MEMMAN_LLM_ZDR'
-EMBED_PROVIDER = 'MEMMAN_EMBED_PROVIDER'
+EMBED_MODEL = 'MEMMAN_EMBED_MODEL'
+RERANK_MODEL = 'MEMMAN_RERANK_MODEL'
 RERANK_ENABLED = 'MEMMAN_RERANK_ENABLED'
-OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
 SCHEDULER_KIND = 'MEMMAN_SCHEDULER_KIND'
@@ -121,53 +121,28 @@ PER_STORE_KEY_SPECS: tuple[tuple[str, bool], ...] = (
     )
 
 
-OPENROUTER_API_KEY = 'MEMMAN_OPENROUTER_API_KEY'
-VOYAGE_API_KEY = 'MEMMAN_VOYAGE_API_KEY'
-
-OPENAI_EMBED_API_KEY = 'MEMMAN_OPENAI_EMBED_API_KEY'
-OPENAI_EMBED_ENDPOINT = 'MEMMAN_OPENAI_EMBED_ENDPOINT'
-OPENAI_EMBED_MODEL = 'MEMMAN_OPENAI_EMBED_MODEL'
-OLLAMA_HOST = 'MEMMAN_OLLAMA_HOST'
-OLLAMA_EMBED_MODEL = 'MEMMAN_OLLAMA_EMBED_MODEL'
-OLLAMA_MAX_INPUT_CHARS = 'MEMMAN_OLLAMA_MAX_INPUT_CHARS'
-OPENROUTER_EMBED_MODEL = 'MEMMAN_OPENROUTER_EMBED_MODEL'
-VOYAGE_EMBED_MODEL = 'MEMMAN_VOYAGE_EMBED_MODEL'
-VOYAGE_RERANK_MODEL = 'MEMMAN_VOYAGE_RERANK_MODEL'
+OPENROUTER_NATIVE_API_KEY = 'OPENROUTER_API_KEY'
 
 ENV_FILENAME = 'env'
 
 TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
 
 SECRET_VARS = frozenset({
-    OPENROUTER_API_KEY,
-    VOYAGE_API_KEY,
-    LLM_API_KEY,
-    OPENAI_EMBED_API_KEY,
+    API_KEY,
     DEFAULT_PG_DSN,
     })
 
 INSTALLABLE_KEYS = (
-    LLM_ENDPOINT,
-    LLM_API_KEY,
+    ENDPOINT,
+    API_KEY,
+    ZDR,
+    DATA_COLLECTION,
     LLM_MODEL,
     LLM_PROVIDER_ONLY,
-    LLM_DATA_COLLECTION,
-    LLM_ZDR,
-    EMBED_PROVIDER,
+    EMBED_MODEL,
+    RERANK_MODEL,
     RERANK_ENABLED,
-    OPENROUTER_ENDPOINT,
     LOG_LEVEL,
-    OPENAI_EMBED_API_KEY,
-    OPENAI_EMBED_ENDPOINT,
-    OPENAI_EMBED_MODEL,
-    OLLAMA_HOST,
-    OLLAMA_EMBED_MODEL,
-    OLLAMA_MAX_INPUT_CHARS,
-    OPENROUTER_EMBED_MODEL,
-    VOYAGE_EMBED_MODEL,
-    VOYAGE_RERANK_MODEL,
-    OPENROUTER_API_KEY,
-    VOYAGE_API_KEY,
     DEFAULT_BACKEND,
     DEFAULT_PG_DSN,
     INTERVAL,
@@ -175,45 +150,6 @@ INSTALLABLE_KEYS = (
     BACKUP_TARGET,
     BACKUP_KEEP,
     )
-
-
-NATIVE_INSTALL_KEY_FALLBACKS: dict[str, str] = {
-    OPENROUTER_API_KEY: 'OPENROUTER_API_KEY',
-    VOYAGE_API_KEY: 'VOYAGE_API_KEY',
-    OPENAI_EMBED_API_KEY: 'OPENAI_API_KEY',
-    }
-
-
-def _shell_seed_value(key: str) -> str:
-    """Install-time shell lookup with vendor-native-name fallback.
-
-    Checks `os.environ[key]` (memman-prefixed) first; if empty, falls
-    back to the vendor's documented native name (e.g. `VOYAGE_API_KEY`)
-    via `NATIVE_INSTALL_KEY_FALLBACKS`. Returns the stripped string, or
-    '' when neither is set.
-
-    Do NOT call from runtime paths: runtime resolution is file-only
-    via `config.get`.
-    """
-    value = os.environ.get(key, '').strip()
-    if value:
-        return value
-    fallback = NATIVE_INSTALL_KEY_FALLBACKS.get(key)
-    if not fallback:
-        return ''
-    return os.environ.get(fallback, '').strip()
-
-
-def required_install_keys(embed: str) -> set[str]:
-    """API-key env vars install must populate for an embed provider.
-
-    LLM-side authentication is endpoint-driven; the wizard enforces the
-    "API key required for non-loopback endpoints" rule directly during
-    install rather than at this config layer. Experimental embed
-    providers return an empty set (doctor warns separately).
-    """
-    from memman.embed import PROVIDER_REQUIRED_KEYS
-    return set(PROVIDER_REQUIRED_KEYS.get(embed, ()))
 
 
 def is_openrouter_endpoint(url: str) -> bool:
@@ -232,9 +168,8 @@ def is_openrouter_endpoint(url: str) -> bool:
 def is_loopback_endpoint(url: str) -> bool:
     """Return True when `url` resolves to the local machine.
 
-    Used by the wizard to decide whether to require `MEMMAN_LLM_API_KEY`
-    on install: loopback endpoints (Ollama, local vLLM, LiteLLM proxy)
-    typically do not need auth.
+    Loopback endpoints (Ollama, local vLLM, LiteLLM proxy) typically do
+    not need auth, so `MEMMAN_API_KEY` may stay blank for them.
     """
     host = (urlparse(url).hostname or '').lower()
     if host in {'localhost', '127.0.0.1', '::1'}:
@@ -242,24 +177,41 @@ def is_loopback_endpoint(url: str) -> bool:
     return host.endswith('.localhost')
 
 
+def api_key_for(endpoint: str) -> str:
+    """`MEMMAN_API_KEY` for a request to `endpoint`.
+
+    Parameters
+    ----------
+    endpoint : str
+        The URL the request goes to.
+
+    Returns
+    -------
+    str
+        The key, or '' when it is blank and `endpoint` is loopback.
+
+    Raises
+    ------
+    ConfigError
+        The key is blank and `endpoint` is not loopback.
+    """
+    key = get(API_KEY) or ''
+    if not key and not is_loopback_endpoint(endpoint):
+        raise ConfigError(
+            f'{API_KEY} is not set; run `memman config set {API_KEY} <key>`')
+    return key
+
+
 INSTALL_DEFAULTS: dict[str, str] = {
-    LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
+    ENDPOINT: 'https://openrouter.ai/api/v1',
+    ZDR: 'true',
+    DATA_COLLECTION: 'deny',
     LLM_MODEL: 'qwen/qwen3-235b-a22b-2507',
     LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
-    LLM_DATA_COLLECTION: 'deny',
-    LLM_ZDR: 'true',
-    EMBED_PROVIDER: 'voyage',
+    EMBED_MODEL: 'voyageai/voyage-4-lite',
+    RERANK_MODEL: 'voyageai/rerank-3-lite',
     RERANK_ENABLED: 'true',
-    OPENROUTER_ENDPOINT: 'https://openrouter.ai/api/v1',
     LOG_LEVEL: 'WARNING',
-    OPENAI_EMBED_ENDPOINT: 'https://api.openai.com',
-    OPENAI_EMBED_MODEL: 'text-embedding-3-small',
-    OLLAMA_HOST: 'http://localhost:11434',
-    OLLAMA_EMBED_MODEL: 'nomic-embed-text',
-    OLLAMA_MAX_INPUT_CHARS: '1500',
-    OPENROUTER_EMBED_MODEL: 'baai/bge-m3',
-    VOYAGE_EMBED_MODEL: 'voyage-3-lite',
-    VOYAGE_RERANK_MODEL: 'rerank-3-lite',
     DEFAULT_BACKEND: 'sqlite',
     INTERVAL: '60',
     BACKUP_KEEP: '7',
@@ -503,12 +455,13 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
     existing file values are sticky and a later shell export never
     overrides them. Once written, runtime resolution reads only the
     file (`config.get` does not consult `os.environ` for installable
-    keys).
+    keys). On an OpenRouter endpoint a blank `MEMMAN_API_KEY` is seeded
+    from the vendor-native `OPENROUTER_API_KEY` export.
 
-    Raises `ConfigError` (via the caller's import) when a mandatory
-    secret is missing from both the file and the shell env, or when
-    a non-OpenRouter endpoint has no `MEMMAN_LLM_MODEL`: the shipped
-    default is an OpenRouter id that endpoint would reject.
+    Raises `ConfigError` (via the caller's import) when `MEMMAN_API_KEY`
+    is missing for a non-loopback endpoint, or when a non-OpenRouter
+    endpoint lacks a model key: the shipped defaults are OpenRouter ids
+    that endpoint would reject.
     """
 
     file_values = parse_env_file(env_file_path(data_dir))
@@ -520,33 +473,33 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
         if file_value:
             knobs[key] = file_value
             continue
-        env_value = _shell_seed_value(key)
+        env_value = os.environ.get(key, '').strip()
         if env_value:
             knobs[key] = env_value
             continue
         needs_resolve.add(key)
 
-    endpoint = knobs.get(LLM_ENDPOINT) or INSTALL_DEFAULTS[LLM_ENDPOINT]
-    if LLM_MODEL in needs_resolve and not is_openrouter_endpoint(endpoint):
-        raise ConfigError(
-            f'{LLM_MODEL} is required for the non-OpenRouter endpoint'
-            f' {endpoint}; export it or add it to'
-            f' {env_file_path(data_dir)} and re-run install')
+    endpoint = knobs.get(ENDPOINT) or INSTALL_DEFAULTS[ENDPOINT]
+    if not is_openrouter_endpoint(endpoint):
+        for key in (LLM_MODEL, EMBED_MODEL, RERANK_MODEL):
+            if key in needs_resolve:
+                raise ConfigError(
+                    f'{key} is required for the non-OpenRouter endpoint'
+                    f' {endpoint}; export it or add it to'
+                    f' {env_file_path(data_dir)} and re-run install')
 
     for key in needs_resolve:
         if key in INSTALL_DEFAULTS:
             knobs[key] = INSTALL_DEFAULTS[key]
 
-    if (not knobs.get(LLM_API_KEY)
-            and is_openrouter_endpoint(knobs.get(LLM_ENDPOINT, ''))
-            and knobs.get(OPENROUTER_API_KEY)):
-        knobs[LLM_API_KEY] = knobs[OPENROUTER_API_KEY]
+    if not knobs.get(API_KEY) and is_openrouter_endpoint(endpoint):
+        native = os.environ.get(OPENROUTER_NATIVE_API_KEY, '').strip()
+        if native:
+            knobs[API_KEY] = native
 
-    chosen_embed = knobs.get(EMBED_PROVIDER) or INSTALL_DEFAULTS[EMBED_PROVIDER]
-    for required in sorted(required_install_keys(chosen_embed)):
-        if not knobs.get(required):
-            raise ConfigError(
-                f'{required} is required; export it or add it to'
-                f' {env_file_path(data_dir)} and re-run install')
+    if not knobs.get(API_KEY) and not is_loopback_endpoint(endpoint):
+        raise ConfigError(
+            f'{API_KEY} is required; export it or add it to'
+            f' {env_file_path(data_dir)} and re-run install')
 
     return knobs

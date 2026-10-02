@@ -20,7 +20,7 @@ def _seed_store(data_dir: str, store: str = 'default') -> None:
     """Materialize a sqlite store with a fingerprint and one insight.
     """
     backend = open_sqlite_backend(store, data_dir)
-    write_fingerprint(backend, Fingerprint('voyage', 'voyage-3-lite', 512))
+    write_fingerprint(backend, Fingerprint('voyage-3-lite', 512))
     backend.nodes.insert(make_insight(id='k1', content='hi'))
     backend.close()
     write_active(data_dir, store)
