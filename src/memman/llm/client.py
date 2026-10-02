@@ -20,7 +20,6 @@ from memman import config, trace
 from memman._http import ENRICHMENT_TIMEOUT, MAX_RETRIES
 from memman._http import OPENROUTER_ATTRIBUTION_HEADERS, RETRY_BACKOFF
 from memman._http import RETRYABLE_STATUS_CODES, WORKER_TIMEOUT, get_session
-from memman._http import privacy_routing
 from memman.exceptions import ConfigError
 from memman.llm import usage as llm_usage
 from memman.llm.shared import safe_json
@@ -48,7 +47,6 @@ class MemmanLLMClient:
             max_tokens: int = 1024,
             timeout: float = ENRICHMENT_TIMEOUT,
             extra_headers: dict[str, str] | None = None,
-            provider_routing: dict | None = None,
             ) -> None:
         """Bind the client to an endpoint, API key, and model id.
 
@@ -67,12 +65,7 @@ class MemmanLLMClient:
             Per-request timeout in seconds.
         extra_headers : dict[str, str] or None, default None
             Merged over the standard headers (OpenRouter attribution).
-        provider_routing : dict or None, default None
-            Sent verbatim as the body's `provider` field, and omitted
-            when None. Only an OpenRouter endpoint is given one, since
-            a vendor-neutral shim rejects an unknown key.
         """
-        self.provider_routing = provider_routing
         if not model:
             raise ConfigError(
                 'model is empty; run `memman install` to populate'
@@ -138,8 +131,6 @@ class MemmanLLMClient:
                 {'role': 'user', 'content': user},
                 ],
             }
-        if self.provider_routing:
-            body['provider'] = self.provider_routing
 
         url = f'{self.endpoint}/chat/completions'
         for attempt in range(MAX_RETRIES):
@@ -264,10 +255,8 @@ def get_llm_client() -> MemmanLLMClient:
 
     Reads `MEMMAN_ENDPOINT`, `MEMMAN_API_KEY`, and `MEMMAN_LLM_MODEL`
     from the canonical env file. Raises `ConfigError` when a required
-    value is missing. OpenRouter endpoints automatically receive
-    memman's attribution headers and a provider-routing block: the
-    shared privacy pin plus the LLM-only vendor pin from
-    `MEMMAN_LLM_PROVIDER_ONLY`; other endpoints receive neither.
+    value is missing. OpenRouter endpoints also receive memman's
+    attribution headers.
     """
     global _CLIENT
     if _CLIENT is not None:
@@ -284,25 +273,11 @@ def get_llm_client() -> MemmanLLMClient:
             ' to persist the model id')
     api_key = config.get(config.API_KEY) or ''
     extra: dict[str, str] = {}
-    routing = privacy_routing(endpoint)
     if config.is_openrouter_endpoint(endpoint):
         extra.update(OPENROUTER_ATTRIBUTION_HEADERS)
-        # Notes:
-        # - An empty allowlist sends no pin, so OpenRouter picks any
-        #   provider serving the model.
-        # - A pin that no provider satisfies fails the call outright:
-        #   a refusal is recoverable, a silent route to an unapproved
-        #   host is not.
-        only = [
-            name.strip()
-            for name in (config.get(config.LLM_PROVIDER_ONLY) or '').split(',')
-            if name.strip()]
-        if only:
-            routing['only'] = only
     _CLIENT = MemmanLLMClient(
         endpoint, api_key, model, max_tokens=WORKER_MAX_TOKENS,
-        timeout=WORKER_TIMEOUT, extra_headers=extra or None,
-        provider_routing=routing or None)
+        timeout=WORKER_TIMEOUT, extra_headers=extra or None)
     return _CLIENT
 
 

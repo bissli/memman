@@ -1,8 +1,6 @@
 """One request path each for the LLM, embeddings, and rerank.
 
-All three read the shared `MEMMAN_ENDPOINT` and `MEMMAN_API_KEY`. On
-an OpenRouter endpoint every request carries the privacy pin, and only
-the LLM carries the vendor pin.
+All three read the shared `MEMMAN_ENDPOINT` and `MEMMAN_API_KEY`.
 """
 
 import httpx
@@ -16,7 +14,6 @@ from memman.search.recall import run_recall
 from tests.conftest import make_insight
 
 ENDPOINT = 'https://openrouter.ai/api/v1'
-PRIVACY_PIN = {'zdr': True, 'data_collection': 'deny'}
 
 
 @pytest.fixture
@@ -25,9 +22,6 @@ def shared_env(env_file):
     """
     env_file('MEMMAN_ENDPOINT', ENDPOINT)
     env_file('MEMMAN_API_KEY', 'sk-or-shared')
-    env_file('MEMMAN_ZDR', 'true')
-    env_file('MEMMAN_DATA_COLLECTION', 'deny')
-    env_file('MEMMAN_LLM_PROVIDER_ONLY', 'amazon-bedrock')
     env_file('MEMMAN_EMBED_MODEL', 'voyageai/voyage-4-lite')
     env_file('MEMMAN_RERANK_MODEL', 'voyageai/rerank-3-lite')
 
@@ -37,8 +31,9 @@ def posts(monkeypatch):
     """Record every httpx POST and answer it with a canned body.
 
     Returns the list of `(url, headers, json)` tuples. An embeddings
-    request gets one 4-dim vector per input; a rerank request gets
-    its documents ranked last-first under `results`.
+    request gets one 4-dim vector per input, a chat request one fixed
+    completion, and a rerank request its documents ranked last-first
+    under `results`.
     """
     sent = []
 
@@ -47,6 +42,8 @@ def posts(monkeypatch):
         if url.endswith('/embeddings'):
             body = {'data': [
                 {'embedding': [0.5, 0.5, 0.5, 0.5]} for _ in json['input']]}
+        elif url.endswith('/chat/completions'):
+            body = {'choices': [{'message': {'content': '{"ok": true}'}}]}
         else:
             n = len(json['documents'])
             body = {'results': [
@@ -60,14 +57,15 @@ def posts(monkeypatch):
 
 
 @pytest.mark.no_mock_embed
-def test_embed_posts_to_shared_endpoint_with_privacy_pin(shared_env, posts):
-    """Verify embeddings go to the shared endpoint with the privacy pin.
+def test_embed_posts_to_shared_endpoint_with_no_provider_block(
+        shared_env, posts):
+    """Verify embeddings go to the shared endpoint with no `provider` block.
 
     Mutation: the embed client reading a provider-specific endpoint or
-        key, or carrying the LLM vendor pin (`only`), which makes
-        OpenRouter refuse a voyageai model.
-    Oracle: the captured request against the literal endpoint, key,
-        model, and pin the env file names.
+        key, or sending a `provider` block whose pin can make
+        OpenRouter refuse a voyageai model the account allows.
+    Oracle: the captured request against the literal endpoint, key, and
+        model the env file names.
     """
     vectors = get_client().embed_batch(['alpha', 'beta'])
     url, headers, body = posts[-1]
@@ -75,7 +73,7 @@ def test_embed_posts_to_shared_endpoint_with_privacy_pin(shared_env, posts):
     assert url == f'{ENDPOINT}/embeddings'
     assert headers['Authorization'] == 'Bearer sk-or-shared'
     assert body['model'] == 'voyageai/voyage-4-lite'
-    assert body['provider'] == PRIVACY_PIN
+    assert 'provider' not in body
 
 
 @pytest.mark.no_mock_rerank
@@ -85,8 +83,8 @@ def test_recall_rerank_posts_top_n_and_reads_results(
 
     Mutation: posting `top_k` or to the Voyage host, reading the
         ranking from `data` (OpenRouter answers under `results`, so
-        recall silently keeps its baseline order), or dropping the
-        privacy pin.
+        recall silently keeps its baseline order), or sending a
+        `provider` block.
     Oracle: a stub that ranks the last shortlisted document first; that
         document must lead the recall results.
     """
@@ -101,23 +99,26 @@ def test_recall_rerank_posts_top_n_and_reads_results(
     assert body['model'] == 'voyageai/rerank-3-lite'
     assert body['top_n'] == 3
     assert 'top_k' not in body
-    assert body['provider'] == PRIVACY_PIN
+    assert 'provider' not in body
     assert resp['meta']['reranked'] is True
     assert resp['results'][0]['insight'].content == body['documents'][-1]
 
 
-def test_llm_reads_shared_endpoint_and_adds_vendor_pin(shared_env):
-    """Verify the LLM client reads the shared pair and pins vendors.
+@pytest.mark.no_mock_llm
+def test_llm_posts_to_shared_endpoint_with_no_provider_block(
+        shared_env, posts):
+    """Verify a completion goes to the shared pair with no `provider` block.
 
-    Mutation: the LLM reading a separate endpoint or key, or losing the
-        vendor pin that keeps it on US ZDR vendors.
-    Oracle: the literal values the env file names.
+    Mutation: the LLM reading a separate endpoint or key, or sending a
+        vendor pin that refuses a host the account allows.
+    Oracle: the captured request against the literal endpoint and key
+        the env file names.
     """
-    client = get_llm_client()
-    assert client.endpoint == ENDPOINT
-    assert client.api_key == 'sk-or-shared'
-    assert client.provider_routing == {
-        'only': ['amazon-bedrock'], **PRIVACY_PIN}
+    get_llm_client().complete('sys', 'user', stage='enrichment')
+    url, headers, body = posts[-1]
+    assert url == f'{ENDPOINT}/chat/completions'
+    assert headers['Authorization'] == 'Bearer sk-or-shared'
+    assert 'provider' not in body
 
 
 def test_fingerprint_names_model_and_dim_only():
@@ -136,7 +137,8 @@ def test_install_seeds_shared_key_and_latest_models(monkeypatch, tmp_path):
     """Verify install seeds one key and the default models.
 
     Mutation: install still demanding a provider-specific key such as
-        `MEMMAN_VOYAGE_API_KEY`, or persisting a removed provider knob.
+        `MEMMAN_VOYAGE_API_KEY`, or persisting a removed provider or
+        routing knob such as `MEMMAN_ZDR`.
     Oracle: the vendor-native `OPENROUTER_API_KEY` export and the
         model ids OpenRouter serves.
     """
@@ -147,8 +149,8 @@ def test_install_seeds_shared_key_and_latest_models(monkeypatch, tmp_path):
     assert knobs['MEMMAN_RERANK_MODEL'] == 'voyageai/rerank-3-lite'
     assert not [
         key for key in knobs
-        if 'VOYAGE' in key or 'OPENROUTER' in key
-        or ('PROVIDER' in key and key != 'MEMMAN_LLM_PROVIDER_ONLY')]
+        if 'VOYAGE' in key or 'OPENROUTER' in key or 'PROVIDER' in key
+        or key in {'MEMMAN_ZDR', 'MEMMAN_DATA_COLLECTION'}]
 
 
 @pytest.mark.no_mock_embed

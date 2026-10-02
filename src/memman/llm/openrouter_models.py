@@ -20,9 +20,8 @@ FETCH_TIMEOUT_SECONDS = 10.0
 CHECK_INTERVAL_SECONDS = 86_400
 MODEL_STATE_FILENAME = 'model.state'
 UNROUTABLE_NOTICE = (
-    'LLM model {model} has no ZDR endpoint on a vendor in'
-    ' MEMMAN_LLM_PROVIDER_ONLY, so enrichment fails; the user picks a'
-    ' replacement: memman config set MEMMAN_LLM_MODEL <id>')
+    'LLM model {model} has no ZDR endpoint, so enrichment fails; the'
+    ' user picks a replacement: memman config set MEMMAN_LLM_MODEL <id>')
 RETIRING_NOTICE = (
     'LLM model {model} retires on {date}; the user picks a replacement:'
     ' memman config set MEMMAN_LLM_MODEL <id>')
@@ -32,8 +31,7 @@ def model_notice(
         models: list[dict],
         zdr_endpoints: list[dict],
         *,
-        model: str,
-        vendors: frozenset[str]) -> str:
+        model: str) -> str:
     """The notice `model` earns against both catalogs, '' when it routes.
 
     Parameters
@@ -44,25 +42,15 @@ def model_notice(
         The `data` rows of `GET /endpoints/zdr`.
     model : str
         The configured `MEMMAN_LLM_MODEL`, matched exactly.
-    vendors : frozenset[str]
-        Vendor slugs allowed to serve: the provider pin. Empty admits
-        every vendor.
 
     Returns
     -------
     str
-        `UNROUTABLE_NOTICE` when no ZDR endpoint on a pinned vendor
-        serves `model`; else `RETIRING_NOTICE` when `/models` carries an
-        `expiration_date` for it; else ''.
+        `UNROUTABLE_NOTICE` when no ZDR endpoint serves `model`; else
+        `RETIRING_NOTICE` when `/models` carries an `expiration_date`
+        for it; else ''.
     """
-    # A vendor slug is the ZDR tag before its first `/`, so
-    # `google-vertex/us-south1` is `google-vertex`. An empty pin admits
-    # every vendor because the runtime client then sends no `only` list.
-    routed = any(
-        endpoint['model_id'] == model
-        and (not vendors or endpoint['tag'].split('/', 1)[0] in vendors)
-        for endpoint in zdr_endpoints)
-    if not routed:
+    if not any(endpoint['model_id'] == model for endpoint in zdr_endpoints):
         return UNROUTABLE_NOTICE.format(model=model)
     for entry in models:
         if entry['id'] == model and entry.get('expiration_date'):
@@ -114,8 +102,7 @@ def _fetch_rows(client: httpx.Client, url: str) -> list[dict]:
     return rows
 
 
-def fetch_model_notice(
-        endpoint: str, *, model: str, vendors: frozenset[str]) -> str:
+def fetch_model_notice(endpoint: str, *, model: str) -> str:
     """Read both public catalogs under `endpoint` and check `model`.
 
     Parameters
@@ -123,8 +110,6 @@ def fetch_model_notice(
     endpoint : str
         OpenRouter API base, e.g. `https://openrouter.ai/api/v1`.
     model : str
-        As `model_notice`.
-    vendors : frozenset[str]
         As `model_notice`.
 
     Returns
@@ -143,7 +128,7 @@ def fetch_model_notice(
     with httpx.Client() as client:
         zdr_endpoints = _fetch_rows(client, f'{base}/endpoints/zdr')
         models = _fetch_rows(client, f'{base}/models')
-    return model_notice(models, zdr_endpoints, model=model, vendors=vendors)
+    return model_notice(models, zdr_endpoints, model=model)
 
 
 def _read_state(data_dir: str) -> dict:
@@ -161,7 +146,7 @@ def refresh_model_state(data_dir: str, *, force: bool) -> str | None:
     Parameters
     ----------
     data_dir : str
-        Holds the env file that names the endpoint, model and pin, and
+        Holds the env file that names the endpoint and model, and
         the `model.state` file this writes.
     force : bool
         Check even when the recorded check of this model is younger
@@ -192,15 +177,12 @@ def refresh_model_state(data_dir: str, *, force: bool) -> str | None:
     if (not force and same_model
             and now - state.get('checked_at', 0) < CHECK_INTERVAL_SECONDS):
         return None
-    pin = config.get_scoped(config.LLM_PROVIDER_ONLY, data_dir) or ''
-    vendors = frozenset(
-        name.strip() for name in pin.split(',') if name.strip())
     # A failed fetch still restarts the clock, so an outage costs one
     # attempt per interval rather than one per drain. It keeps the
     # standing notice for this model and records '' for a new one.
     notice = state.get('notice', '') if same_model else ''
     try:
-        notice = fetch_model_notice(endpoint, model=model, vendors=vendors)
+        notice = fetch_model_notice(endpoint, model=model)
     finally:
         atomic_write_secure(
             Path(data_dir) / MODEL_STATE_FILENAME,

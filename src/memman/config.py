@@ -55,10 +55,7 @@ DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
 ENDPOINT = 'MEMMAN_ENDPOINT'
 API_KEY = 'MEMMAN_API_KEY'
-ZDR = 'MEMMAN_ZDR'
-DATA_COLLECTION = 'MEMMAN_DATA_COLLECTION'
 LLM_MODEL = 'MEMMAN_LLM_MODEL'
-LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
 EMBED_MODEL = 'MEMMAN_EMBED_MODEL'
 RERANK_MODEL = 'MEMMAN_RERANK_MODEL'
 RERANK_ENABLED = 'MEMMAN_RERANK_ENABLED'
@@ -135,10 +132,7 @@ SECRET_VARS = frozenset({
 INSTALLABLE_KEYS = (
     ENDPOINT,
     API_KEY,
-    ZDR,
-    DATA_COLLECTION,
     LLM_MODEL,
-    LLM_PROVIDER_ONLY,
     EMBED_MODEL,
     RERANK_MODEL,
     RERANK_ENABLED,
@@ -204,10 +198,7 @@ def api_key_for(endpoint: str) -> str:
 
 INSTALL_DEFAULTS: dict[str, str] = {
     ENDPOINT: 'https://openrouter.ai/api/v1',
-    ZDR: 'true',
-    DATA_COLLECTION: 'deny',
     LLM_MODEL: 'qwen/qwen3-235b-a22b-2507',
-    LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
     EMBED_MODEL: 'voyageai/voyage-4-lite',
     RERANK_MODEL: 'voyageai/rerank-3-lite',
     RERANK_ENABLED: 'true',

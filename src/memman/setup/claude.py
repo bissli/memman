@@ -486,7 +486,7 @@ def _run_install_flow(env: dict, claude_code: bool,
         status_error('openrouter', notice)
     else:
         model = config.get_scoped(config.LLM_MODEL, data_dir)
-        status_ok('openrouter', f'{model} routes under the provider pin')
+        status_ok('openrouter', f'{model} has a ZDR endpoint')
 
 
 def _run_uninstall_flow(env: dict, claude_code: bool,

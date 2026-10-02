@@ -8,7 +8,6 @@ import time
 
 from memman import config, trace
 from memman._http import api_headers, get_session, post_with_retry
-from memman._http import privacy_routing
 
 
 class Client:
@@ -59,9 +58,6 @@ class Client:
             'model': self.model, 'query': query, 'documents': documents}
         if top_n is not None:
             body['top_n'] = top_n
-        routing = privacy_routing(self.endpoint)
-        if routing:
-            body['provider'] = routing
         trace.event(
             'rerank_request',
             url=url,

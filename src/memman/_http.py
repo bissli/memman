@@ -4,8 +4,8 @@ Per-subsystem `httpx.Client` pools (`get_session`) so each client gets
 its own connection pool; debug tracing keys events by subsystem name
 and one client's 429 should not wedge another. `post_with_retry`
 implements the retry policy the embed and rerank clients use.
-`api_headers` and `privacy_routing` build what every request to the
-shared endpoint carries.
+`api_headers` builds the headers every request to the shared endpoint
+carries.
 """
 
 import logging
@@ -53,32 +53,6 @@ def api_headers(endpoint: str, api_key: str) -> dict[str, str]:
     if config.is_openrouter_endpoint(endpoint):
         headers.update(OPENROUTER_ATTRIBUTION_HEADERS)
     return headers
-
-
-def privacy_routing(endpoint: str) -> dict:
-    """OpenRouter `provider` fields every request carries.
-
-    Parameters
-    ----------
-    endpoint : str
-        The URL the request goes to; any other host gets `{}`.
-
-    Returns
-    -------
-    dict
-        `zdr` from `MEMMAN_ZDR` and `data_collection` from
-        `MEMMAN_DATA_COLLECTION`, each only when set. The LLM adds its
-        vendor pin on top.
-    """
-    if not config.is_openrouter_endpoint(endpoint):
-        return {}
-    routing: dict = {}
-    collection = (config.get(config.DATA_COLLECTION) or '').strip()
-    if collection:
-        routing['data_collection'] = collection.lower()
-    if (config.get(config.ZDR) or '').strip().lower() in config.TRUTHY:
-        routing['zdr'] = True
-    return routing
 
 
 def get_session(name: str) -> httpx.Client:

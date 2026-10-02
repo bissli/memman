@@ -13,7 +13,6 @@ from memman.cli import cli
 from memman.llm import openrouter_models as om
 from memman.setup import claude
 
-PINNED_VENDORS = frozenset({'amazon-bedrock', 'azure', 'google-vertex'})
 MODEL = 'qwen/qwen3-235b-a22b-2507'
 ENDPOINT = 'https://openrouter.ai/api/v1'
 
@@ -30,14 +29,14 @@ def _zdr(model_id, tag='google-vertex/us-south1'):
     return {'model_id': model_id, 'tag': tag}
 
 
-def _notice(models, zdr_rows, vendors=PINNED_VENDORS):
-    """Check MODEL against the two catalogs under `vendors`.
+def _notice(models, zdr_rows):
+    """Check MODEL against the two catalogs.
     """
-    return om.model_notice(models, zdr_rows, model=MODEL, vendors=vendors)
+    return om.model_notice(models, zdr_rows, model=MODEL)
 
 
 def _unroutable():
-    """The notice for MODEL finding no pinned ZDR endpoint.
+    """The notice for MODEL finding no ZDR endpoint.
     """
     return om.UNROUTABLE_NOTICE.format(model=MODEL)
 
@@ -71,8 +70,8 @@ def fetches(monkeypatch):
     """
     calls = []
 
-    def _fetch(endpoint, *, model, vendors):
-        calls.append((endpoint, model, vendors))
+    def _fetch(endpoint, *, model):
+        calls.append((endpoint, model))
         return 'fresh notice'
 
     monkeypatch.setattr(
@@ -80,24 +79,25 @@ def fetches(monkeypatch):
     return calls
 
 
-def test_a_pinned_zdr_endpoint_routes_the_model():
-    """A ZDR row on a pinned vendor leaves no notice.
+def test_a_zdr_endpoint_on_any_vendor_routes_the_model():
+    """A ZDR row on any vendor leaves no notice.
 
-    Mutation: the vendor read from the whole tag, so
-        `google-vertex/us-south1` misses the pin.
-    Oracle: the model's real Vertex ZDR tag.
-    """
-    assert _notice([_model(MODEL)], [_zdr(MODEL)]) == ''
-
-
-def test_an_off_pin_endpoint_alone_leaves_the_model_unroutable():
-    """A ZDR row on a vendor outside the pin does not route the model.
-
-    Mutation: the vendor filter dropped, so a model only DeepInfra
-        serves reads as routed.
-    Oracle: the model's real DeepInfra ZDR tag, off the shipped pin.
+    Mutation: a vendor filter kept in the check, so a model only
+        DeepInfra serves reads as unroutable though the account routes it.
+    Oracle: the model's real DeepInfra ZDR tag.
     """
     zdr_rows = [_zdr(MODEL, tag='deepinfra/fp8')]
+    assert _notice([_model(MODEL)], zdr_rows) == ''
+
+
+def test_no_zdr_endpoint_leaves_the_model_unroutable():
+    """A model absent from the ZDR catalog gets the unroutable notice.
+
+    Mutation: the routed test inverted or dropped, so a model the
+        account's ZDR setting refuses reads as routed.
+    Oracle: a ZDR catalog that lists only another model.
+    """
+    zdr_rows = [_zdr('qwen/qwen3-max')]
     assert _notice([_model(MODEL)], zdr_rows) == _unroutable()
 
 
@@ -106,7 +106,7 @@ def test_a_longer_id_sharing_the_prefix_does_not_route_the_model():
 
     Mutation: a prefix match, so the `-thinking` sibling routes the
         configured id.
-    Oracle: catalogs that list only the sibling, on a pinned vendor.
+    Oracle: catalogs that list only the sibling.
     """
     sibling = MODEL + '-thinking'
     assert _notice([_model(sibling)], [_zdr(sibling)]) == _unroutable()
@@ -126,17 +126,6 @@ def test_a_retirement_date_yields_the_retiring_notice():
         ]
     expected = om.RETIRING_NOTICE.format(model=MODEL, date='2026-10-09')
     assert _notice(models, [_zdr(MODEL)]) == expected
-
-
-def test_an_empty_pin_routes_through_any_zdr_vendor():
-    """With no vendor pin, any ZDR endpoint routes the model.
-
-    Mutation: an empty pin matches nothing, so clearing
-        MEMMAN_LLM_PROVIDER_ONLY reports every model unroutable.
-    Oracle: the runtime client sends no `only` list for an empty pin.
-    """
-    zdr_rows = [_zdr(MODEL, tag='deepinfra/fp8')]
-    assert _notice([_model(MODEL)], zdr_rows, vendors=frozenset()) == ''
 
 
 @pytest.mark.no_mock_catalog
@@ -185,8 +174,7 @@ def test_fetch_reads_only_the_two_public_catalogs(monkeypatch):
     monkeypatch.setattr(
         'memman.llm.client.MemmanLLMClient.complete',
         lambda *a, **k: chat_calls.append(a))
-    notice = om.fetch_model_notice(
-        ENDPOINT, model=MODEL, vendors=PINNED_VENDORS)
+    notice = om.fetch_model_notice(ENDPOINT, model=MODEL)
     assert sorted(url for url, _ in requests) == sorted(payloads)
     assert all('Authorization' not in headers for _, headers in requests)
     assert chat_calls == []
@@ -211,11 +199,11 @@ def test_a_state_past_the_interval_refetches(fetches):
     Mutation: the age compared in milliseconds, or the new notice
         returned but never written.
     Oracle: a state one minute past the interval, and the seeded
-        endpoint, model and pin.
+        endpoint and model.
     """
     _write_state(MODEL, om.CHECK_INTERVAL_SECONDS + 60, '')
     assert om.refresh_model_state(_data_dir(), force=False) == 'fresh notice'
-    assert fetches == [(ENDPOINT, MODEL, PINNED_VENDORS)]
+    assert fetches == [(ENDPOINT, MODEL)]
     assert _read_state()['notice'] == 'fresh notice'
 
 
@@ -252,7 +240,7 @@ def test_a_failed_fetch_keeps_the_notice_and_reraises(monkeypatch):
     Oracle: a standing notice two days old and a fetch raising
         `httpx.ConnectError`.
     """
-    def _unreachable(endpoint, *, model, vendors):
+    def _unreachable(endpoint, *, model):
         raise httpx.ConnectError('no route')
 
     monkeypatch.setattr(

@@ -160,10 +160,6 @@ memman config set MEMMAN_RERANK_MODEL <model-id>
 
 At install on an OpenRouter endpoint, a blank `MEMMAN_API_KEY` is seeded from the shell's `OPENROUTER_API_KEY`.
 
-### OpenRouter routing
-
-On an OpenRouter endpoint, every LLM, embedding, and rerank request carries a `provider` routing field built from `MEMMAN_ZDR` (default `true`) and `MEMMAN_DATA_COLLECTION` (default `deny`). `MEMMAN_LLM_PROVIDER_ONLY` (default `amazon-bedrock,azure,google-vertex`) pins the vendor on LLM requests only, because OpenRouter refuses `voyageai` models under a vendor pin. The [routing reference](design/03-pipelines.md#llm-routing) documents these defaults and the daily availability check.
-
 ### Voyage models through OpenRouter
 
 OpenRouter runs Voyage models on the operator's own key (OpenRouter BYOK). OpenRouter's Voyage provider calls MongoDB's Atlas Embedding and Reranking API, so the BYOK key must be a MongoDB Atlas model API key (Atlas project, AI Model APIs). A voyageai.com dashboard key does not work. Atlas has its own training opt-out, the organization setting "Help Improve Voyage AI Models", which is on by default.

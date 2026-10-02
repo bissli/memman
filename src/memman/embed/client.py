@@ -9,7 +9,6 @@ import time
 
 from memman import config, trace
 from memman._http import api_headers, get_session, post_with_retry
-from memman._http import privacy_routing
 
 logger = logging.getLogger('memman')
 
@@ -94,9 +93,6 @@ class Client:
             'input': texts,
             'encoding_format': 'float',
             }
-        routing = privacy_routing(self.endpoint)
-        if routing:
-            body['provider'] = routing
         trace.event(
             'embed_request',
             url=url,

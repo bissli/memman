@@ -418,7 +418,7 @@ def _mock_apis(request: pytest.FixtureRequest,
     if 'no_mock_catalog' not in request.keywords:
         monkeypatch.setattr(
             'memman.llm.openrouter_models.fetch_model_notice',
-            lambda endpoint, *, model, vendors: '')
+            lambda endpoint, *, model: '')
     config.reset_file_cache()
     llm_client_mod.reset_client_cache()
 

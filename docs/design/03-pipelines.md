@@ -98,15 +98,7 @@ The systemd/launchd interval is written into the installed unit. The serve loop 
 
 Each request allows up to 4,096 output tokens and has a 60-second timeout. The client makes up to three attempts. Retriable HTTP responses (429, 500, 502, 503, 504, 529) use one- and two-second waits; empty replies use a 0.1-second wait. The enrichment parser's extra request is separate from these transport retries.
 
-On OpenRouter, the client adds attribution headers and provider routing. The embed and rerank clients send `data_collection` and `zdr` in the same `provider` field. They omit `only`, because OpenRouter refuses Voyage models under a vendor pin.
-
-| Setting                    | Install default                      | Request field     | Sent on                |
-| -------------------------- | ------------------------------------ | ----------------- | ---------------------- |
-| `MEMMAN_LLM_PROVIDER_ONLY` | `amazon-bedrock,azure,google-vertex` | `only`            | LLM requests           |
-| `MEMMAN_DATA_COLLECTION`   | `deny`                               | `data_collection` | LLM, embed, and rerank |
-| `MEMMAN_ZDR`               | `true`                               | `zdr`             | LLM, embed, and rerank |
-
-No eligible provider means the request fails. An empty provider list removes the `only` restriction. Other endpoints receive neither OpenRouter headers nor routing fields.
+On OpenRouter, the client adds attribution headers. Other endpoints receive none.
 
 The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints require an explicit model ID, because the installed default is an OpenRouter model ID that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
 
@@ -114,7 +106,7 @@ The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints r
 
 For OpenRouter, installation and the worker check public catalogs without an API key or an LLM request:
 
-- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id on a vendor in `MEMMAN_LLM_PROVIDER_ONLY`. The vendor is the endpoint tag before its first `/`, and an empty provider list allows every vendor.
+- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id, on any vendor.
 - `/models` must not list an expiration date for it.
 
 The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). A model change therefore triggers a check on the next drain. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.
