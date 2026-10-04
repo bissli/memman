@@ -181,7 +181,7 @@ Reranking changes what the blend weights decide:
 - With 100 or fewer candidates, the reranker rescores all of them, and the weights have no effect on the final order.
 - When reranking does not run (a query of two or fewer words, reranking disabled for the store, or a failed request), the weights set the final order.
 
-A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
+The limit is `--limit`, then `MEMMAN_RECALL_LIMIT`, then 20. A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
 
 ### Recall trace events
 

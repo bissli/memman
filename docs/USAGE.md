@@ -278,6 +278,12 @@ A score ranks a row against its siblings in one response and means nothing acros
 
 `--limit 0` means unlimited results on the scored path but no results with `--basic`. A scored limit over 100 may include both reranked and remaining candidates; their scores use different scales.
 
+Without `--limit`, recall prints up to `MEMMAN_RECALL_LIMIT` lines, or 20 when the key is unset. A smaller value shortens every page an agent reads into its context. The key takes the same values as `--limit`, and an explicit `--limit` overrides it. A non-integer value stops recall with an error that names the key:
+
+```bash
+memman config set MEMMAN_RECALL_LIMIT 8
+```
+
 `--basic` requires every query word to appear as a substring of the content and returns newest memories first. It skips query embedding and reranking. Store-opening checks still run, so it can require credentials or an embedding probe; see [credential requirements](#credential-requirements).
 
 **Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker uses `MEMMAN_RERANK_MODEL` (default `voyageai/rerank-3-lite`) on the shared endpoint with `MEMMAN_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
