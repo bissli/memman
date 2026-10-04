@@ -446,6 +446,62 @@ class TestRecall:
             'fixture must under-fill the page so the two cannot be '
             'confused')
 
+    def test_recall_limit_key_caps_the_page(self, runner, env_file):
+        """MEMMAN_RECALL_LIMIT caps a recall run without `--limit`.
+
+        Mutation: the `--limit` default staying a hardcoded 20 that
+            never reads the env file.
+        Oracle: four stored rows against a key of 2, so the default
+            page and the capped page differ.
+        """
+        for fact in [
+                'Zulu retry cap stays at three',
+                'Zulu drain interval is sixty seconds',
+                'Zulu backups keep seven bundles',
+                'Zulu rerank runs on long queries']:
+            invoke(runner, ['remember', fact])
+        env_file('MEMMAN_RECALL_LIMIT', '2')
+
+        result = invoke(runner, ['recall', 'zulu'])
+
+        assert result.exit_code == 0
+        assert len(result.output.splitlines()) == 2
+
+    def test_recall_limit_flag_beats_the_key(self, runner, env_file):
+        """An explicit `--limit` wins over MEMMAN_RECALL_LIMIT.
+
+        Mutation: the env key read ahead of the flag, so the flag is
+            ignored whenever the key is set.
+        Oracle: four stored rows, a key of 2 and a flag of 3.
+        """
+        for fact in [
+                'Zulu retry cap stays at three',
+                'Zulu drain interval is sixty seconds',
+                'Zulu backups keep seven bundles',
+                'Zulu rerank runs on long queries']:
+            invoke(runner, ['remember', fact])
+        env_file('MEMMAN_RECALL_LIMIT', '2')
+
+        result = invoke(runner, ['recall', 'zulu', '--limit', '3'])
+
+        assert result.exit_code == 0
+        assert len(result.output.splitlines()) == 3
+
+    def test_recall_limit_key_rejects_a_non_integer(self, runner, env_file):
+        """A non-integer MEMMAN_RECALL_LIMIT fails with a named error.
+
+        Mutation: a bad value falling back to 20 without a word, or
+            raising a bare ValueError traceback.
+        Oracle: the key name and the bad value in the error text.
+        """
+        env_file('MEMMAN_RECALL_LIMIT', 'five')
+
+        result = invoke(runner, ['recall', 'zulu'])
+
+        assert result.exit_code != 0
+        assert "MEMMAN_RECALL_LIMIT must be an integer, got 'five'" in (
+            result.output)
+
 
 class TestForget:
     """`memman forget` happy paths and missing-id error.

@@ -280,11 +280,11 @@ else:
 
 The page is for choosing which row to open, not for reading the rows
 themselves: `memman insights show <id8>` reads the rest of any row
-worth more than a scan. `--limit` defaults to 20. A wide page costs
-little and carries more relevant material than a narrow one, so scan
-the wide page and open the rows worth reading. Rows come back in
-relevance order at every `--limit`, so the first `n` of a page of `m`
-are exactly a page of `n`.
+worth more than a scan. `--limit` defaults to `MEMMAN_RECALL_LIMIT`,
+or 20 when unset. A wide page costs little and carries more relevant
+material than a narrow one, so scan the wide page and open the rows
+worth reading. Rows come back in relevance order at every `--limit`,
+so the first `n` of a page of `m` are exactly a page of `n`.
 
 Recall prints rows even when nothing matches: a recency channel adds
 the newest rows as anchors whatever the query. A scored page with no

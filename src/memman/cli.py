@@ -1612,10 +1612,11 @@ def _process_queue_row(
 @claude_callable
 @cli.command()
 @click.argument('keyword', nargs=-1, required=True)
-@click.option('--limit', default=20, type=int, help='Max results')
+@click.option('--limit', default=None, type=int,
+              help='Max results (default MEMMAN_RECALL_LIMIT, then 20)')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
 @click.pass_context
-def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
+def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int | None,
            basic: bool) -> None:
     """Print the insights matching a query, one line each, best first.
 
@@ -1630,11 +1631,18 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
     ----------
     keyword : tuple[str, ...]
         Query words, joined by single spaces.
-    limit : int
-        Maximum lines printed.
+    limit : int or None
+        Maximum lines printed. None reads `MEMMAN_RECALL_LIMIT` from
+        the env file, then falls back to 20.
     basic : bool
         SQL LIKE matching over content, newest first; computes no
         score.
+
+    \b
+    Raises
+    ------
+    click.ClickException
+        `MEMMAN_RECALL_LIMIT` is set to a non-integer.
 
     \b
     Notes
@@ -1651,6 +1659,16 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
     memman recall "retry" --basic
     """  # noqa: D301, D410, D411
     from memman.search.recall import run_recall
+    if limit is None:
+        raw = config.get(config.RECALL_LIMIT)
+        if raw is None or raw.strip() == '':
+            limit = 20
+        else:
+            try:
+                limit = int(raw)
+            except ValueError:
+                raise click.ClickException(
+                    f'MEMMAN_RECALL_LIMIT must be an integer, got {raw!r}')
     keyword_str = ' '.join(keyword)
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)

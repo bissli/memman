@@ -261,10 +261,10 @@ Both commands check the text in this order and report the first problem:
 
 ### recall
 
-| Flag      | Default | Description                                                |
-| --------- | ------- | ---------------------------------------------------------- |
-| `--limit` | `20`    | Maximum lines printed.                                     |
-| `--basic` | off     | SQL `LIKE` matching with no ranking. Lines carry no score. |
+| Flag      | Default                          | Description                                                |
+| --------- | -------------------------------- | ---------------------------------------------------------- |
+| `--limit` | `MEMMAN_RECALL_LIMIT`, else `20` | Maximum lines printed.                                     |
+| `--basic` | off                              | SQL `LIKE` matching with no ranking. Lines carry no score. |
 
 Recall prints one line per memory, best first, and prints nothing for an empty result:
 
