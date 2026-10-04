@@ -11,7 +11,7 @@ Storing and recalling 1,000 memories costs **under $1** on the default models ([
 
 ## Install
 
-memman needs Python 3.11+ on Linux or macOS. The default setup uses SQLite for storage, and one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the install asks for one key.
+memman needs Python 3.11+ on Linux, macOS, or Windows under WSL2. The default setup uses SQLite for storage, and one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the install asks for one key.
 
 ```bash
 pipx install memman
@@ -23,6 +23,8 @@ In a terminal, `memman install` runs a wizard that configures the providers, sav
 For Codex, installation adds a memory skill at `~/.agents/skills/memman` and a rules file that lets Codex run the memory commands without a prompt. `memman install --codex` selects Codex explicitly. In Codex, `$memman` invokes the skill. Codex gets no lifecycle hooks, so the skill alone tells the agent when to recall and save. [Codex setup](docs/USAGE.md#codex) covers detection and permissions.
 
 The worker runs as a systemd timer on Linux or a launchd agent on macOS. On a host with neither, the operator sets `MEMMAN_SCHEDULER_KIND=serve` and runs `memman scheduler serve`. [Installation](docs/USAGE.md#install-and-uninstall) covers headless installs and the optional Postgres backend, and [Provider setup](docs/USAGE.md#provider-setup) covers other providers.
+
+On Windows, pipx installs memman inside a WSL2 distribution, and Claude Code or Codex runs in that same distribution. The worker needs systemd, which the distribution turns on with `systemd=true` under `[boot]` in `/etc/wsl.conf`. The data directory stays on the Linux filesystem, because SQLite file locking is unreliable on a `/mnt/c` path. WSL shuts an idle distribution down after the `instanceIdleTimeout` in `%UserProfile%\.wslconfig`, which stops the worker. Queued writes then wait until the next session starts it, and `instanceIdleTimeout=-1` under `[general]` keeps the distribution running.
 
 ## Usage
 
