@@ -117,6 +117,13 @@ class NodeStore(Protocol):
         """
         ...
 
+    def soft_delete_current(self, id: Id) -> bool:
+        """Soft-delete a current insight: neither deleted nor replaced.
+
+        Returns False when the row is missing, deleted, or replaced.
+        """
+        ...
+
     def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         """Point a current insight at its successor.
 
@@ -271,6 +278,11 @@ class NodeStore(Protocol):
 
     def get_active_ids(self) -> list[Id]:
         """Return all active insight ids in creation order.
+        """
+        ...
+
+    def get_all_ids(self) -> set[Id]:
+        """Every insight id, current and retired, in one query.
         """
         ...
 

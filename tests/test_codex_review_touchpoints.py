@@ -11,7 +11,8 @@ from memman.cli import cli
 from memman.queue import queue_db
 from memman.setup.codex import install_codex
 from memman.store.db import store_dir
-from tests.conftest import force_drain, invoke
+from memman.store.sqlite import drop_sqlite_store
+from tests.conftest import _create_seeded_store, force_drain, invoke
 
 
 @pytest.mark.no_auto_drain
@@ -126,9 +127,11 @@ def test_data_dir_flag_overrides_environment_without_cross_store_writes(
     recall in the custom dir must find the saved id.
     """
     runner, original = mm_runner
+    drop_sqlite_store('default', original)
     custom = tmp_path / 'custom installation'
     custom.mkdir()
     (custom / 'env').write_text((Path(original) / 'env').read_text())
+    _create_seeded_store('default', str(custom))
     monkeypatch.setenv(config.DATA_DIR, original)
     saved = runner.invoke(cli, ['--data-dir', str(custom), 'remember',
                                 'The quartz retry cap is four.'])

@@ -25,7 +25,7 @@ from memman.store.db import write_active
 from memman.store.errors import BackendError
 from memman.store.node import insert_insight, update_embedding
 from memman.store.node import update_enrichment
-from memman.store.sqlite import SqliteBackend
+from memman.store.sqlite import SqliteBackend, open_sqlite_backend
 from tests.conftest import invoke, make_insight, parse_remember
 
 _SCORED_LINE = re.compile(
@@ -724,29 +724,6 @@ class TestStore:
         payload = json.loads(result.output[payload_start:])
         assert payload['action'] == 'removed'
 
-    def test_store_auto_create_from_env(self, runner, monkeypatch):
-        """Verify MEMMAN_STORE creates a missing store on first use.
-
-        Mutation: failing on an unknown store name from the env var, or
-            creating no directory.
-        Oracle: the store directory on disk and the name in `store list`.
-        """
-        r, data_dir = runner
-        monkeypatch.setenv('MEMMAN_STORE', 'auto-created')
-
-        result = r.invoke(cli, ['--data-dir', data_dir, 'recall', 'test',
-                                '--limit', '1'])
-        assert result.exit_code == 0, result.output
-
-        store_path = pathlib.Path(data_dir) / 'data' / 'auto-created'
-        assert store_path.is_dir(), 'store directory should be auto-created'
-
-        monkeypatch.delenv('MEMMAN_STORE')
-        list_result = r.invoke(cli, ['--data-dir', data_dir, 'store', 'list'])
-        assert 'auto-created' in list_result.output
-
-        r.invoke(cli, ['--data-dir', data_dir, 'store', 'remove', 'auto-created'])
-
 
 class TestStatus:
     """`memman status` and `memman doctor` smoke.
@@ -1084,6 +1061,7 @@ def test_data_dir_flag_moves_implicit_env_resolution(tmp_path):
     (other_dir / config.ENV_FILENAME).write_text(
         '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n')
 
+    open_sqlite_backend('default', str(other_dir), create=True).close()
     result = CliRunner().invoke(cli, [
         '--data-dir', str(other_dir), 'status'])
     assert result.exit_code != 0, result.output
@@ -1101,6 +1079,7 @@ def test_enrich_is_top_level_and_graph_rebuild_is_gone(tmp_path):
         rebuild`, against `enrich --dry-run`'s exit code (0).
     """
     data_dir = str(tmp_path / 'memman')
+    open_sqlite_backend('default', data_dir, create=True).close()
     old = CliRunner().invoke(cli, [
         '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
     assert old.exit_code == 2, old.output

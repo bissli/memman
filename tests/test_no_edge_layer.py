@@ -144,7 +144,9 @@ def test_opening_a_store_writes_no_constants_hash(tmp_path):
         hash on a fresh store's first open.
     Oracle: the meta key read inside the same open.
     """
-    with active_store(data_dir=str(tmp_path), store='default') as backend:
+    with active_store(
+            data_dir=str(tmp_path), store='default',
+            create=True) as backend:
         assert backend.meta.get('constants_hash') is None
 
 
@@ -449,6 +451,7 @@ def test_a_maintenance_pass_opens_no_untouched_store(mm_runner, monkeypatch):
     """
     _, data_dir = mm_runner
     _remember(mm_runner, 'first store row')
+    assert invoke(mm_runner, ['store', 'create', 'quiet']).exit_code == 0
     assert invoke(mm_runner, [
         '--store', 'quiet', 'remember', 'quiet store row']).exit_code == 0
     opened = []

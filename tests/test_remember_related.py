@@ -140,21 +140,6 @@ def test_related_leaves_out_the_write_itself(mm_runner, monkeypatch):
 
 
 @pytest.mark.no_auto_drain
-def test_first_remember_on_a_new_store_lists_nothing(mm_runner):
-    """Verify a store with no database yet gives an empty related list.
-
-    Mutation: opening a store that has no database, which reports
-        `database not found` as `related_error` on every first write.
-    Oracle: an empty `related` and no `related_error` key.
-    """
-    result = invoke(mm_runner, ['remember', _CORRECTION])
-
-    reply = json.loads(result.output)
-    assert reply['related'] == []
-    assert 'related_error' not in reply
-
-
-@pytest.mark.no_auto_drain
 def test_remember_queues_and_reports_a_corrupt_store(mm_runner):
     """Verify a store that cannot be read still takes the write.
 

@@ -17,6 +17,7 @@ import pytest
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.setup import scheduler as sched_mod
+from tests.conftest import _create_seeded_store
 
 
 @pytest.fixture
@@ -25,7 +26,9 @@ def runner(tmp_path, monkeypatch):
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     (tmp_path / 'home').mkdir()
-    return CliRunner(), str(tmp_path / 'memman')
+    data_dir = str(tmp_path / 'memman')
+    _create_seeded_store('default', data_dir)
+    return CliRunner(), data_dir
 
 
 def test_serve_once_drains_and_exits(runner, monkeypatch):

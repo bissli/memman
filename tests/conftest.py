@@ -34,8 +34,8 @@ from memman.llm import client as llm_client_mod
 from memman.queue import open_queue_db, queue_db
 from memman.setup import scheduler as sched_mod
 from memman.store.db import open_db, open_read_only, read_active, store_dir
-from memman.store.factory import drop_store, resolve_store_backend
-from memman.store.factory import resolve_store_pg_dsn
+from memman.store.factory import drop_store, open_backend
+from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
 from memman.store.model import Insight, format_timestamp
 from memman.store.node import insert_insight
 from memman.store.sqlite import SqliteBackend, drop_sqlite_store
@@ -608,6 +608,8 @@ def cross_backend_runner(
     Path(data_dir).mkdir(parents=True, exist_ok=True)
 
     env_file('MEMMAN_DEFAULT_BACKEND', runner_kind)
+    if runner_kind == 'sqlite':
+        _create_seeded_store('default', data_dir)
     if runner_kind == 'postgres':
         pg_dsn = request.getfixturevalue('pg_dsn')
         store_name = _safe_store_name(request.node.name)
@@ -619,6 +621,7 @@ def cross_backend_runner(
         def _drop_postgres_schema() -> None:
             drop_store(store_name, data_dir)
         request.addfinalizer(_drop_postgres_schema)
+        open_backend(store_name, data_dir, create=True).close()
     return r, data_dir
 
 
@@ -641,14 +644,14 @@ def backend(request: pytest.FixtureRequest, backend_kind: str,
     if backend_kind == 'sqlite':
         data_dir = str(tmp_path / 'memman')
         store_name = 'test'
-        b = open_sqlite_backend(store_name, data_dir)
+        b = open_sqlite_backend(store_name, data_dir, create=True)
     else:
         pg_dsn = request.getfixturevalue('pg_dsn')
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
         store_name = _safe_store_name(request.node.name)
         drop_postgres_store(store_name, pg_dsn)
-        b = open_postgres_backend(store_name, pg_dsn)
+        b = open_postgres_backend(store_name, pg_dsn, create=True)
     b.meta.set(META_KEY, seed_default_fingerprint().to_json())
     try:
         yield b
@@ -797,18 +800,26 @@ def fake_subprocess(monkeypatch: pytest.MonkeyPatch, target_module: Any,
     monkeypatch.setattr(target_module, 'subprocess', fake)
 
 
+def _create_seeded_store(store: str, data_dir: str) -> None:
+    """Create a SQLite store with the env-active fingerprint, as install does.
+    """
+    with open_sqlite_backend(store, data_dir, create=True) as backend:
+        write_fingerprint(backend, seed_default_fingerprint())
+
+
 def make_cli_runner(tmp_path: Path, *, subdir: str = 'mm') -> tuple:
     """Build a `(CliRunner, data_dir)` tuple.
 
     The data_dir matches `MEMMAN_DATA_DIR` set by the autouse
     `_isolate_env` fixture so that env-file reads keyed off the CLI
     `--data-dir` arg find the seeded keys (per-store routing reads
-    `<data_dir>/env` directly).
+    `<data_dir>/env` directly). Creates the `default` store as
+    install does, since opening a missing store refuses.
     """
     r = CliRunner()
     env_data_dir = os.environ.get('MEMMAN_DATA_DIR')
     data_dir = env_data_dir or str(tmp_path / subdir)
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    _create_seeded_store('default', data_dir)
     return r, data_dir
 
 

@@ -13,13 +13,16 @@ import json
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
+from tests.conftest import _create_seeded_store
 
 
 @pytest.fixture
 def runner(tmp_path, monkeypatch):
     """Fresh CliRunner and an isolated data dir.
     """
-    return CliRunner(), str(tmp_path / 'memman')
+    data_dir = str(tmp_path / 'memman')
+    _create_seeded_store('default', data_dir)
+    return CliRunner(), data_dir
 
 
 def _invoke(r, data_dir, *args):

@@ -25,7 +25,7 @@ import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable
-from contextlib import AbstractContextManager, ExitStack
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from datetime import datetime, timedelta, timezone
 from importlib.resources import files as pkg_files
 from types import TracebackType
@@ -35,6 +35,7 @@ from urllib.parse import quote
 import click
 import memman
 from memman import config
+from memman import fork as fork_mod
 from memman.drain_lock import DrainLockBusy, acquire, release
 from memman.embed import fingerprint, get_client
 from memman.embed import registry as _ec_registry
@@ -57,6 +58,7 @@ from memman.store.db import store_dir, store_exists, valid_store_name
 from memman.store.db import write_active
 from memman.store.errors import BackendError
 from memman.store.errors import ConfigError as StoreConfigError
+from memman.store.errors import StoreMissingError
 from memman.store.factory import known_backends, list_stores
 from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
 from memman.store.model import Insight, format_timestamp
@@ -370,6 +372,71 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     _write_env_keys_with_flock(updates, data_dir=data_dir)
 
 
+def _enqueue_into_existing_store(
+        conn: sqlite3.Connection, data_dir: str, name: str, content: str,
+        *, replaced_id: str | None = None,
+        author: str | None = None) -> tuple[int, str]:
+    """Queue a write for `name` after checking the store exists.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open queue.db connection in autocommit mode.
+    data_dir : str
+        Base data directory.
+    name : str
+        Resolved store name.
+    content : str
+        The memory text.
+    replaced_id : str or None, default None
+        Id the write replaces, as `memman.queue.enqueue` takes it.
+    author : str or None, default None
+        Resolved author.
+
+    Returns
+    -------
+    tuple[int, str]
+        `enqueue`'s `(row_id, queue_uuid)`.
+
+    Raises
+    ------
+    click.ClickException
+        The store does not exist, or its config cannot reach it (no
+        DSN, no postgres extra). Nothing is queued. A Postgres
+        connection error is no answer, so that write queues.
+    """
+    if resolve_store_backend(name, data_dir) == 'sqlite':
+        # Pairs with `fork._remove_fork`, so a write cannot outlive a drop.
+        conn.execute('begin immediate')
+        try:
+            if not store_exists(data_dir, name):
+                raise click.ClickException(str(StoreMissingError(name)))
+            queued = enqueue(
+                conn, store=name, content=content,
+                replaced_id=replaced_id, author=author)
+        except BaseException:
+            conn.execute('rollback')
+            raise
+        conn.execute('commit')
+        return queued
+    # libpq reads this at each connect and a DSN's own connect_timeout
+    # wins. psycopg's default outlasts an agent's tool timeout, which
+    # then retries the write.
+    os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
+    try:
+        exists = factory.store_exists(name, data_dir)
+    except StoreConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except BackendError as exc:
+        logger.debug(f'store check for {name!r} failed, queuing: {exc}')
+        exists = True
+    if not exists:
+        raise click.ClickException(str(StoreMissingError(name)))
+    return enqueue(
+        conn, store=name, content=content,
+        replaced_id=replaced_id, author=author)
+
+
 def _get_llm_client_or_fail() -> 'MemmanLLMClient':
     """Return the LLM client, re-wrapping ConfigError as ClickException.
 
@@ -569,17 +636,26 @@ def _call_log_path(data_dir: str) -> pathlib.Path:
     return pathlib.Path(data_dir) / 'logs' / 'calls.log'
 
 
-def claude_callable(cmd: click.Command) -> click.Command:
+def claude_callable(
+        cmd: click.Command | None = None, *,
+        store_option: bool = True) -> Any:
     """Mark a Click command as agent-callable and log each of its calls.
 
     `memman install` walks the CLI tree and emits a `permissions.allow`
     entry in `~/.claude/settings.json` for every command marked with
-    this decorator.
+    this decorator. Use it bare, or as `@claude_callable(store_option=
+    False)`.
 
     Parameters
     ----------
-    cmd : click.Command
-        The command to mark. Its callback is wrapped in place.
+    cmd : click.Command or None, default None
+        The command to mark. Its callback is wrapped in place. None
+        returns the decorator.
+    store_option : bool, default True
+        Add a per-verb `--store`, which routes like the group flag, so
+        `memman recall --store X` matches the `memman recall` allow
+        rule. Giving both flags with different values is a usage
+        error.
 
     Returns
     -------
@@ -600,12 +676,27 @@ def claude_callable(cmd: click.Command) -> click.Command:
       A failed append logs a warning and leaves the call's outcome
       unchanged.
     """
+    if cmd is None:
+        return functools.partial(claude_callable, store_option=store_option)
     cmd.claude_callable = True
     callback = cmd.callback
+    if store_option:
+        cmd.params.append(click.Option(
+            ['--store', 'verb_store'], default='',
+            help='Named memory store, as the group --store flag'))
 
     @functools.wraps(callback)
     def logged_callback(*args: Any, **kwargs: Any) -> Any:
         ctx = click.get_current_context()
+        if store_option:
+            verb_store = kwargs.pop('verb_store')
+            group_store = ctx.obj['store']
+            if verb_store and group_store and verb_store != group_store:
+                raise click.UsageError(
+                    f'--store given twice: {group_store!r} before the'
+                    f' verb and {verb_store!r} after it')
+            if verb_store:
+                ctx.obj['store'] = verb_store
         started_at = format_timestamp(datetime.now(timezone.utc))
         started = time.monotonic()
         exit_code = 1
@@ -897,7 +988,8 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
       lands it, and `related`: up to three current rows of at most
       1,000 bytes, as `<id8> <content>`, ranked by shared words
       divided by the square root of the row's distinct words.
-    - The write is queued before the store is read. A read that fails
+    - A store that does not exist is refused before anything queues.
+      The write is queued before the store is read. A read that fails
       gives `related_error` in place of `related`, and the command
       still exits 0.
     - Refused when the scheduler is stopped, and for text the
@@ -922,9 +1014,8 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
     with queue_db(data_dir_val) as conn:
-        row_id, queue_uuid = enqueue(
-            conn, store=name, content=content_str,
-            author=author)
+        row_id, queue_uuid = _enqueue_into_existing_store(
+            conn, data_dir_val, name, content_str, author=author)
     reply = {
         'action': 'queued',
         'id': queue_uuid,
@@ -938,31 +1029,23 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     # The write is already queued, so no failure of this read may fail
     # the command: an agent that sees exit 1 writes the memory again.
     try:
-        if (factory.resolve_store_backend(name, data_dir_val) == 'sqlite'
-                and not store_exists(data_dir_val, name)):
-            related_rows = []
-        else:
-            # libpq reads this at each connect and a DSN's own
-            # connect_timeout wins. psycopg's default outlasts an
-            # agent's tool timeout, which then retries the write.
-            os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
-            with factory.open_backend(
-                    name, data_dir_val, read_only=True) as backend:
-                with backend.recall_session() as session:
-                    counts = session.keyword_counts(tokenize(content_str))
-                # A timer drain can land this write before the read,
-                # and a row shares every word with itself.
-                related_rows = [
-                    ins for ins in backend.nodes.get_all_active()
-                    if ins.id in counts and ins.id != queue_uuid
-                    and len(ins.content.encode('utf-8')) <= _MAX_CONTENT_BYTES
-                    ]
-            # A row whose words the ASCII tokenizer drops can still
-            # match the store's own index, so its length floors at one.
-            related_rows.sort(
-                key=lambda ins: counts[ins.id] / math.sqrt(
-                    max(len(insight_tokens(ins)), 1)),
-                reverse=True)
+        with factory.open_backend(
+                name, data_dir_val, read_only=True) as backend:
+            with backend.recall_session() as session:
+                counts = session.keyword_counts(tokenize(content_str))
+            # A timer drain can land this write before the read, and a
+            # row shares every word with itself.
+            related_rows = [
+                ins for ins in backend.nodes.get_all_active()
+                if ins.id in counts and ins.id != queue_uuid
+                and len(ins.content.encode('utf-8')) <= _MAX_CONTENT_BYTES
+                ]
+        # A row whose words the ASCII tokenizer drops can still match
+        # the store's own index, so its length floors at one.
+        related_rows.sort(
+            key=lambda ins: counts[ins.id] / math.sqrt(
+                max(len(insight_tokens(ins)), 1)),
+            reverse=True)
         reply['related'] = [
             f"{ins.id[:8]} {' '.join(ins.content.split())}"
             for ins in related_rows[:3]
@@ -1437,13 +1520,15 @@ class _StoreContext:
 
         Raises
         ------
+        StoreMissingError
+            The store does not exist. Its backend key stays unwritten.
         EmbedFingerprintError
             The store holds data but has no embed fingerprint.
         """
         self.store_name = store_name
         self.data_dir = data_dir
-        _ensure_store_backend_key(store_name, data_dir)
         self.backend = factory.open_backend(store_name, data_dir)
+        _ensure_store_backend_key(store_name, data_dir)
         fingerprint.seed_if_fresh(self.backend, get_client())
         stored = fingerprint.stored_fingerprint(self.backend)
         if stored is None:
@@ -1929,10 +2014,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
                 f'insight {id} already has a replace pending as'
                 f' {pending_id}: "{pending_text}"; replace {pending_id}'
                 ' with text that keeps it and adds yours')
-        row_id, queue_uuid = enqueue(
-            conn, store=name, content=content_str,
-            replaced_id=id,
-            author=author)
+        row_id, queue_uuid = _enqueue_into_existing_store(
+            conn, data_dir_val, name, content_str,
+            replaced_id=id, author=author)
     _json_out({
         'action': 'queued',
         'id': queue_uuid,
@@ -2288,12 +2372,21 @@ def store(ctx: click.Context) -> None:
 @store.command('list')
 @click.pass_context
 def store_list(ctx: click.Context) -> None:
-    """List all stores as JSON (stores[], active).
+    """List all stores as JSON (stores[], active, forks{name: info}).
     """
     data_dir = ctx.obj['data_dir']
     stores = list_stores(data_dir)
     active = _resolve_store_name(data_dir, ctx.obj['store']) if stores else None
-    _json_out({'stores': stores, 'active': active})
+    forks = {}
+    for name in list_local_store_dirs(data_dir):
+        try:
+            info = fork_mod.read_fork_info(name, data_dir)
+        except BackendError as exc:
+            logger.debug(f'store list skips fork info for {name!r}: {exc}')
+            continue
+        if info is not None:
+            forks[name] = info
+    _json_out({'stores': stores, 'active': active, 'forks': forks})
 
 
 @store.command('create')
@@ -2306,12 +2399,16 @@ def store_create(ctx: click.Context, name: str) -> None:
     if not valid_store_name(name):
         raise click.ClickException(
             f'invalid store name {name!r}')
+    if '__' in name:
+        raise click.ClickException(
+            f'invalid store name {name!r}: `__` is reserved for forks')
     if name in factory.list_stores(data_dir):
         raise click.ClickException(
             f'store "{name}" already exists')
     from memman.session import active_store
-    with active_store(data_dir=data_dir, store=name) as backend:
+    with active_store(data_dir=data_dir, store=name, create=True) as backend:
         path = backend.path
+    _ensure_store_backend_key(name, data_dir)
     _json_out({'action': 'created', 'store': name, 'path': path})
 
 
@@ -2325,9 +2422,12 @@ def store_use(ctx: click.Context, name: str) -> None:
     if not valid_store_name(name):
         raise click.ClickException(f'invalid store name {name!r}')
     if name not in factory.list_stores(data_dir):
+        raise click.ClickException(str(StoreMissingError(name)))
+    if fork_mod.read_fork_info(name, data_dir) is not None:
         raise click.ClickException(
-            f"store \"{name}\" does not exist"
-            f" (use 'memman store create {name}' first)")
+            f'store {name!r} is a fork, and the active file routes every'
+            f' session on this host; pass --store {name} to each memory'
+            ' verb instead')
     write_active(data_dir, name)
     _json_out({'action': 'set', 'store': name})
 
@@ -2346,9 +2446,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     """
     data_dir = ctx.obj['data_dir']
     if name not in factory.list_stores(data_dir):
-        raise click.ClickException(
-            f"store \"{name}\" does not exist"
-            f" (use 'memman store create {name}' first)")
+        raise click.ClickException(str(StoreMissingError(name)))
     active = read_active(data_dir)
     if name == active:
         raise click.ClickException(
@@ -2383,6 +2481,107 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         'store': name,
         'env_keys_removed': sorted(stale),
         })
+
+
+@claude_callable(store_option=False)
+@store.command('fork')
+@click.argument('parent')
+@click.argument('label')
+@click.pass_context
+def store_fork(ctx: click.Context, parent: str, label: str) -> None:
+    """Start an experiment fork: a local copy of PARENT's current rows.
+
+    \b
+    Parameters
+    ----------
+    parent : str
+        Store to copy, on any backend. It is only read.
+    label : str
+        Name part for the fork, without `__`. The fork is named
+        `<parent>__<label>_<4 hex>`.
+
+    \b
+    Notes
+    -----
+    - Only on the user's request. The JSON reply carries
+      `instruction`, the line to paste into the thread's HANDOFF.md,
+      CLAUDE.md or AGENTS.md.
+    - Ends with `memman store merge` or `memman store drop`.
+
+    \b
+    Examples
+    --------
+    memman store fork memman rearch
+    """  # noqa: D301, D410, D411
+    _json_out(fork_mod.create_fork(ctx.obj['data_dir'], parent, label))
+
+
+@claude_callable(store_option=False)
+@store.command('merge')
+@click.argument('fork')
+@click.pass_context
+def store_merge(ctx: click.Context, fork: str) -> None:
+    """Keep an experiment fork: replay it into its parent, then delete it.
+
+    \b
+    Parameters
+    ----------
+    fork : str
+        A store made by `memman store fork`. Any other store is refused.
+
+    \b
+    Notes
+    -----
+    - Only on the user's request. The parent is the fork's own
+      `fork_parent`, never the active store or `--store`.
+    - Rows written in the fork are copied with their dates, summaries
+      and embeddings. A replace or forget the fork made on an inherited
+      row is repeated in the parent.
+    - Each entry of `conflicts` is an inherited row the fork and the
+      parent retired differently. The parent keeps its own state;
+      settle each with replace or forget in the parent.
+    - Refused while the fork has queued writes, and while either store
+      is mid embed swap or re-embed. A run that stops part way says to
+      re-run, which finishes it.
+
+    \b
+    Examples
+    --------
+    memman store merge memman__rearch_7f3a
+    """  # noqa: D301, D410, D411
+    _json_out(fork_mod.merge_fork(ctx.obj['data_dir'], fork))
+
+
+@claude_callable(store_option=False)
+@store.command('drop')
+@click.argument('fork')
+@click.pass_context
+def store_drop(ctx: click.Context, fork: str) -> None:
+    """Throw an experiment fork away, listing the rows written in it.
+
+    \b
+    Parameters
+    ----------
+    fork : str
+        A store made by `memman store fork`. Any other store is refused.
+
+    \b
+    Notes
+    -----
+    - Only on the user's request. Nothing reaches the parent.
+    - `dropped` holds `{id, content}` for each current fork row the
+      parent lacks. Re-save each claim unrelated to the thread with
+      `memman remember --store <parent>`, then a closing row saying
+      why the thread was dropped.
+    - Refused while the fork has queued writes, and after a merge that
+      stopped part way, which only a re-run of merge ends.
+
+    \b
+    Examples
+    --------
+    memman store drop memman__rearch_7f3a
+    """  # noqa: D301, D410, D411
+    _json_out(fork_mod.drop_fork(ctx.obj['data_dir'], fork))
 
 
 @cli.group(invoke_without_command=True)
@@ -2649,6 +2848,11 @@ def status(ctx: click.Context) -> None:
             'oplog_count': node_stats.oplog_count,
             'storage_path': backend.path,
             }
+        fork_parent = backend.meta.get(fork_mod.FORK_PARENT)
+        if fork_parent is not None:
+            out['fork_parent'] = fork_parent
+            out['fork_created_at'] = backend.meta.get(
+                fork_mod.FORK_CREATED_AT)
         _json_out(out)
 
 
@@ -2664,12 +2868,18 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
     """
     from memman.doctor import run_all_checks
 
-    with _active_backend(ctx, unchecked=True) as backend:
-        store_name = _resolve_store_name(
-            ctx.obj['data_dir'], ctx.obj['store'])
-        result = run_all_checks(backend, data_dir=ctx.obj['data_dir'])
+    data_dir = ctx.obj['data_dir']
+    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
+    try:
+        backend = factory.open_backend(store_name, data_dir)
+    except StoreMissingError:
+        backend = None
+    except (ConfigError, BackendError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    with backend or nullcontext():
+        result = run_all_checks(backend, data_dir=data_dir)
         result['store'] = store_name
-        result['db_path'] = backend.path
+        result['db_path'] = backend.path if backend else None
         if text_output:
             _doctor_text_report(result)
         else:
@@ -3256,6 +3466,13 @@ def migrate(
     skipped: list[str] = []
     for s in stores_all:
         current = resolve_store_backend(s, data_dir)
+        if fork_mod.read_fork_info(s, data_dir) is not None:
+            click.echo(
+                f'Skipping {s!r}: it is a fork, which stays local; end it'
+                f' with memman store merge {s} or memman store drop {s}.',
+                err=True)
+            skipped.append(s)
+            continue
         if current == target_backend:
             click.echo(
                 f'Store {s!r} is already on {target_backend} backend.'
@@ -3634,19 +3851,19 @@ def prime() -> None:
         name = _resolve_store_name(data_dir, '')
         backend_name = resolve_store_backend(name, data_dir)
         if backend_name == 'sqlite':
-            if store_exists(data_dir, name):
-                with open_read_only(store_dir(data_dir, name)) as db:
-                    stats = get_stats(db)
-                status_line = (f"[memman] Memory active "
-                               f"({stats['total_insights']} insights).")
+            if not store_exists(data_dir, name):
+                raise StoreMissingError(name)
+            with open_read_only(store_dir(data_dir, name)) as db:
+                stats = get_stats(db)
+            status_line = (f"[memman] Memory active "
+                           f"({stats['total_insights']} insights).")
         else:
-            from memman.session import active_store
-            with active_store(
-                    data_dir=data_dir, store=name,
-                    unchecked=True) as backend:
+            with factory.open_backend(name, data_dir) as backend:
                 s = backend.nodes.stats()
                 status_line = (f'[memman] Memory active '
                                f'({s.total_insights} insights).')
+    except StoreMissingError as exc:
+        status_line = f'[memman] Memory unavailable: {exc}'
     except Exception as exc:
         logger.debug('prime status fallback: %s', exc)
     click.echo(status_line)

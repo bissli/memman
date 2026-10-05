@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import httpx
 from memman import config
-from memman.cli import list_claude_permissions
+from memman.cli import _ensure_store_backend_key, list_claude_permissions
 from memman.embed import get_client
 from memman.embed.fingerprint import seed_if_fresh
 from memman.exceptions import ConfigError, EmbedFingerprintError
@@ -33,8 +33,9 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file, write_or_remove_json_file
-from memman.store.db import store_dir, store_exists
-from memman.store.factory import open_backend, resolve_store_backend
+from memman.store.db import read_active
+from memman.store.errors import BackendError
+from memman.store.factory import open_backend, store_exists
 
 
 def check_prereqs(data_dir: str) -> dict[str, str]:
@@ -196,20 +197,30 @@ def _claude_integration_installed(config_dir: str) -> bool:
 
 
 def _init_default_store(data_dir: str) -> None:
-    """Ensure the default store exists with a seeded embed fingerprint.
+    """Create the store the `active` file names, with a seeded fingerprint.
 
-    Delegates to `seed_if_fresh` so the install-time and lazy
-    first-open paths share a single seed implementation, including
-    the unavailable-client and dim>0 validation.
+    Parameters
+    ----------
+    data_dir : str
+        Holds the env file and the `active` file.
+
+    Raises
+    ------
+    click.ClickException
+        The embed client cannot give a fingerprint, or the store's
+        backend cannot be reached.
     """
-    backend_kind = resolve_store_backend('default', data_dir)
-    if backend_kind == 'sqlite' and not store_exists(data_dir, 'default'):
-        with open_backend('default', data_dir) as backend:
-            try:
-                seed_if_fresh(backend, get_client())
-            except (EmbedFingerprintError, ConfigError) as exc:
-                raise click.ClickException(str(exc)) from exc
-        print(f'  Initialized default store at {store_dir(data_dir, "default")}')
+    name = read_active(data_dir)
+    try:
+        if store_exists(name, data_dir):
+            return
+        with open_backend(name, data_dir, create=True) as backend:
+            seed_if_fresh(backend, get_client())
+            path = backend.path
+        _ensure_store_backend_key(name, data_dir)
+    except (EmbedFingerprintError, ConfigError, BackendError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    print(f'  Initialized store {name} at {path}')
 
 
 def _install_claude_code(env: dict, data_dir: str,
@@ -465,10 +476,9 @@ def _run_install_flow(env: dict, claude_code: bool,
     result = install_scheduler(data_dir, knobs)
     for action in result.get('env_actions', []) + result.get('actions', []):
         status_ok(result['platform'], action)
-    if use_claude or use_codex:
-        # The scheduler install persists the provider defaults first.
-        # Initializing in an agent installer fails on a fresh env file.
-        _init_default_store(data_dir)
+    # The scheduler install persists the provider defaults first.
+    # Initializing in an agent installer fails on a fresh env file.
+    _init_default_store(data_dir)
 
     # Runs once the env file is final. A catalog outage prints an error
     # and the install still finishes.

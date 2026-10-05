@@ -17,7 +17,7 @@ from click.testing import CliRunner
 from memman import cli as memman_cli
 from memman import config
 from memman.cli import _ensure_store_backend_key, cli
-from memman.store.factory import resolve_store_backend
+from memman.store.factory import open_backend, resolve_store_backend
 
 
 def _seed_sqlite_dir(data_dir: str, store: str) -> None:
@@ -161,6 +161,7 @@ def test_drain_processes_mixed_backends_in_one_batch(
     try:
         r = CliRunner()
         for store_name in (sqlite_store, pg_store):
+            r.invoke(cli, ['--data-dir', data_dir, 'store', 'create', store_name])
             out = r.invoke(
                 cli,
                 ['--data-dir', data_dir, '--store', store_name,
@@ -234,6 +235,7 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
             'memman.cli._process_queue_row', flaky_process)
 
         r = CliRunner()
+        r.invoke(cli, ['--data-dir', data_dir, 'store', 'create', store])
         out = r.invoke(
             cli, ['--data-dir', data_dir, '--store', store,
                   'remember', 'cross-backend retry note'])
@@ -250,6 +252,7 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
         env_file(config.BACKEND_FOR(store), 'postgres')
         env_file(config.POSTGRES_DSN_FOR(store), pg_dsn)
         config.reset_file_cache()
+        open_backend(store, data_dir, create=True).close()
 
         clock[0] += 65
 
@@ -301,6 +304,8 @@ def test_default_sqlite_with_work_postgres(
 
     try:
         r = CliRunner()
+        r.invoke(cli, ['--data-dir', data_dir, 'store', 'create', 'default'])
+        r.invoke(cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
         r.invoke(
             cli, ['--data-dir', data_dir, '--store', 'default',
                   'remember', 'sqlite-side fact'])

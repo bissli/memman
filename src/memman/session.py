@@ -40,7 +40,8 @@ from memman.store.errors import BackendError
 @contextmanager
 def active_store(
         *, data_dir: str, store: str,
-        unchecked: bool = False) -> Iterator[Backend]:
+        unchecked: bool = False,
+        create: bool = False) -> Iterator[Backend]:
     """Yield the active Backend for one operation.
 
     Opens the backend by the per-store keys (`MEMMAN_BACKEND_<store>`,
@@ -59,6 +60,9 @@ def active_store(
     unchecked : bool, default False
         When True, skip the seed/assert. Used by diagnostics that
         must run against a stale or fresh store.
+    create : bool, default False
+        Create the store when it is missing. Only `memman store create`
+        sets it.
 
     Yields
     ------
@@ -70,14 +74,14 @@ def active_store(
     click.ClickException
         When the fingerprint check or the backend open via
         `factory.open_backend` fails with `ConfigError` (runtime or
-        store layer) or `BackendError`, so an unopenable store exits
-        with a message instead of a traceback.
+        store layer) or `BackendError`, so an unopenable or missing
+        store exits with a message instead of a traceback.
     """
     from memman.embed import fingerprint as fp_mod
     from memman.store.factory import open_backend
 
     try:
-        backend = open_backend(store, data_dir)
+        backend = open_backend(store, data_dir, create=create)
     except (ConfigError, BackendError) as exc:
         raise click.ClickException(str(exc)) from exc
     try:

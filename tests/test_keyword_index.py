@@ -466,7 +466,7 @@ def test_a_row_cannot_exist_without_its_token_set(request, pg_dsn):
 
     store = _safe_store_name(request.node.name)
     drop_postgres_store(store, pg_dsn)
-    backend = open_postgres_backend(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn, create=True)
     table = f'{_store_schema(store)}.insights'
     try:
         _seed(backend)

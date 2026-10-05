@@ -69,7 +69,7 @@ def test_active_store_yields_store_bound_ec_per_store(
     data_dir = str(tmp_path / 'memman')
 
     def _seed(name: str, model: str, dim: int) -> None:
-        backend = open_backend(name, data_dir)
+        backend = open_backend(name, data_dir, create=True)
         try:
             fp_mod.write_fingerprint(
                 backend,

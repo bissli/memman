@@ -968,7 +968,7 @@ class TestDrainHeartbeat:
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         drop_postgres_store(store, pg_dsn)
-        backend = open_postgres_backend(store, pg_dsn)
+        backend = open_postgres_backend(store, pg_dsn, create=True)
         backend.close()
 
         try:
@@ -1003,7 +1003,7 @@ class TestDrainHeartbeat:
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         drop_postgres_store(store, pg_dsn)
-        backend = open_postgres_backend(store, pg_dsn)
+        backend = open_postgres_backend(store, pg_dsn, create=True)
         backend.close()
 
         try:
@@ -1044,7 +1044,7 @@ class TestDrainHeartbeat:
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
         env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         drop_postgres_store(store, pg_dsn)
-        backend = open_postgres_backend(store, pg_dsn)
+        backend = open_postgres_backend(store, pg_dsn, create=True)
         backend.close()
 
         try:
@@ -1134,7 +1134,7 @@ class TestDoctorBackendDispatch:
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
         drop_postgres_store(store, pg_dsn)
-        b = open_postgres_backend(store, pg_dsn)
+        b = open_postgres_backend(store, pg_dsn, create=True)
         b.close()
 
         try:

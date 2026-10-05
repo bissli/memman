@@ -6,11 +6,14 @@
 
 Memories have no expiry date or automatic size cap. A memory stays current until an agent or operator replaces or forgets it.
 
-| Action                  | Stored change                                                                  | Effect on recall                               |
-| ----------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `replace <id> "<text>"` | Create a successor and set the target's `replaced_by` when the worker commits. | Return the successor; exclude the old version. |
-| `forget <id>`           | Set `deleted_at`; keep the row.                                                | Exclude the forgotten memory.                  |
-| `store remove <name>`   | Delete the store and its queued writes.                                        | Remove the entire collection.                  |
+| Action                        | Stored change                                                                                                   | Effect on recall                                                                                                                                                                |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replace <id> "<text>"`       | Create a successor and set the target's `replaced_by` when the worker commits.                                  | Return the successor; exclude the old version.                                                                                                                                  |
+| `forget <id>`                 | Set `deleted_at`; keep the row.                                                                                 | Exclude the forgotten memory.                                                                                                                                                   |
+| `store remove <name>`         | Delete the store and its queued writes.                                                                         | Remove the entire collection.                                                                                                                                                   |
+| `store fork <parent> <label>` | Create a SQLite copy of the parent's current rows, marked with `fork_parent`.                                   | `--store <fork>` recall sees the copy and the fork's own writes; the parent is unchanged.                                                                                       |
+| `store merge <fork>`          | Insert the fork's own rows into the parent, repeat its replaces and forgets on inherited rows, delete the fork. | The parent returns the fork's own current rows and applies the fork's retirements; an inherited row the fork left alone, or a conflicting retirement, keeps the parent's state. |
+| `store drop <fork>`           | Delete the fork and list its current rows the parent lacks.                                                     | Remove the fork; the parent is unchanged.                                                                                                                                       |
 
 No command undoes a forget or makes a replaced row current again. Replacing the successor corrects a wrong correction. `insights show <id> --history` displays the chain; forgotten entries omit their content.
 
@@ -38,11 +41,11 @@ Each store records an **embedding fingerprint** in `meta.embed_fingerprint`: mod
 
 The global `MEMMAN_EMBED_MODEL` setting serves three purposes:
 
-| Role                 | Effect                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| New store            | Supplies the fingerprint when an empty store is first initialized.                                                                    |
-| Model change         | Selects the target for `embed reembed`. Changing it alone does not convert existing vectors.                                          |
-| Store-opening checks | Normal store sessions also construct this model's client. A missing `MEMMAN_API_KEY` can stop the command before retrieval.          |
+| Role                 | Effect                                                                                                                                                                                         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New store            | Supplies the fingerprint when `store create` makes a store. A fork copies its parent's fingerprint instead, and `store merge` refuses a fork whose fingerprint no longer matches the parent's. |
+| Model change         | Selects the target for `embed reembed`. Changing it alone does not convert existing vectors.                                                                                                   |
+| Store-opening checks | Normal store sessions also construct this model's client. A missing `MEMMAN_API_KEY` can stop the command before retrieval.                                                                    |
 
 The diagnostic and maintenance paths for `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` bypass the normal fingerprint initialization check. The related-memory read in `remember` also avoids model clients.
 
@@ -65,12 +68,12 @@ A new Postgres store sizes its vector column from the embedding client. On SQLit
 
 ### Text sent for embedding
 
-| Operation          | Model selection          | Text                    |
-| ------------------ | ------------------------ | ----------------------- |
-| Drain and `enrich` | Store fingerprint        | Original memory content |
-| Recall             | Store fingerprint        | Query                   |
-| `embed swap`       | Explicit target          | Original memory content |
-| `embed reembed`    | Global embed settings    | Original memory content |
+| Operation          | Model selection       | Text                    |
+| ------------------ | --------------------- | ----------------------- |
+| Drain and `enrich` | Store fingerprint     | Original memory content |
+| Recall             | Store fingerprint     | Query                   |
+| `embed swap`       | Explicit target       | Original memory content |
+| `embed reembed`    | Global embed settings | Original memory content |
 
 The worker attempts embedding after enrichment. A handled HTTP or provider runtime failure leaves the memory without a vector; missing credentials fail the queued write. A later enrichment pass can repair incomplete memories, as described in [failure and retry](03-pipelines.md#failure-and-retry).
 

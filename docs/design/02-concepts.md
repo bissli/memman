@@ -6,14 +6,14 @@
 
 A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content; the worker adds a summary and embedding.
 
-| Field        | Meaning                                                                                                                                        |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes.                                                                  |
-| `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.                                                                         |
-| `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.                                                                     |
-| `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.                                                                      |
-| `summary`    | Optional display text from enrichment. Search uses the original content.                                                                       |
-| `created_at` | Time the worker stored the memory.                                                                                                             |
+| Field        | Meaning                                                                       |
+| ------------ | ----------------------------------------------------------------------------- |
+| `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes. |
+| `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.        |
+| `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.    |
+| `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.     |
+| `summary`    | Optional display text from enrichment. Search uses the original content.      |
+| `created_at` | Time the worker stored the memory.                                            |
 
 Every command that takes an id accepts an unambiguous prefix, such as the eight-character prefix that recall prints. The numeric `queue_id` identifies the queue entry, which maintenance deletes shortly after the drain stores the memory. The `id` remains valid after the queue entry is gone.
 
@@ -131,7 +131,7 @@ Generated fields carry markers for later maintenance:
 | Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
 | Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                                  |
 | Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                               |
-| Storage     | `store/`, `migrate/`, `backup/`                                                                                                   | Backend interface, SQLite and Postgres, migration, and snapshots.                                   |
+| Storage     | `store/`, `migrate/`, `backup/`, `fork.py`                                                                                        | Backend interface, SQLite and Postgres, migration, snapshots, and experiment forks.                 |
 | Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                                     |
 | Scripts     | `scripts/enrich_stale.py`                                                                                                         | `enrich --stale-only` over many stores.                                                             |
 
@@ -166,6 +166,8 @@ The default data directory is `~/.memman`:
     +-- default/
     |   +-- memman.db           # one SQLite file per store, WAL mode
     +-- <name>/
+    |   +-- memman.db
+    +-- <parent>__<label>_<id>/ # an experiment fork, always SQLite
         +-- memman.db
 ```
 
@@ -191,6 +193,16 @@ Store selection follows this order:
 --store flag > MEMMAN_STORE environment variable > active-store file > default
 ```
 
-`memman store use work` changes the shared default. `MEMMAN_STORE=work` selects a store for one process and its children, which lets separate agent sessions use different stores.
+`memman store use work` changes the shared default. `MEMMAN_STORE=work` selects a store for one process and its children, which lets separate agent sessions use different stores. The agent verbs also accept `--store` after the verb, which routes like the global flag and matches the `Bash(memman <verb>:*)` allow rules and the Codex rules.
+
+The selected store must already exist. `store create`, `store fork`, `migrate`, `backup restore`, and `memman install` are the only commands that create one. Every other command that opens a store, and `remember` and `replace` before they queue, refuse a missing store and write nothing: no directory, no Postgres schema, and no `MEMMAN_BACKEND_<store>` key. On SQLite a store exists when its directory does; on Postgres, when the `store_<name>` schema does. A Postgres connection error is neither answer, so `remember` and `replace` queue the write, and the drain reports the error.
 
 Changing the data directory also changes the settings file and queue. A scheduler drains only its configured directory, so named stores separate projects within one installation. [Store management](../USAGE.md#store-management) covers the commands and directory-based selection.
+
+### Experiment forks
+
+A fork is a SQLite store that begins as a copy of a parent store's current rows. One research thread writes into it, through a pasted instruction line that adds `--store <fork>` to every memory verb, while other sessions keep writing to the parent. The thread ends with `store merge`, which replays the fork into the parent, or `store drop`, which lists the fork's own rows and deletes it. [Chapter 3](03-pipelines.md#36-experiment-forks) describes the three flows.
+
+A store is a fork exactly when its `meta` table holds `fork_parent`, whose value names the parent. `store fork` also writes `fork_created_at`, the UTC fork time, and `fork_rows`, the count of rows it copied, and copies the parent's `embed_fingerprint`. No code reads the parent from the store name. `merge` and `drop` act only on a store with `fork_parent`, so no agent-callable verb can delete an ordinary store.
+
+The name is `<parent>__<label>_<id>`, where `<id>` is four lowercase hex digits. `__` is reserved: `store create` refuses a name holding it, and a label may not hold it, so an ordinary store never carries the fork shape. The fork takes `MEMMAN_BACKEND_<fork>=sqlite` and copies the parent's `MEMMAN_RERANK_ENABLED_<parent>` when set. A fork of a fork is refused, `store use` refuses a fork because the active-store file would route every session on the host into it, and `migrate` skips a fork. `backup` bundles forks like other stores. A fork exists only on the host that made it.

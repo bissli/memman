@@ -149,7 +149,18 @@ class Migrator(abc.ABC):
 
     @abc.abstractmethod
     def apply(self, store: str, payload: MigrationPayload) -> None:
-        """Write `payload` into a fresh `store` on this backend.
+        """Insert the payload insights `store` lacks, in one transaction.
+
+        Creates the store when it is missing. An insight whose id the
+        store already holds keeps its stored columns. Every payload
+        oplog row is appended and every meta key is written, replacing
+        a stored value, so `store merge` passes an empty oplog and
+        empty meta.
+
+        Raises
+        ------
+        MigrateError
+            The write failed; the transaction rolled back.
         """
 
     @abc.abstractmethod

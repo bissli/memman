@@ -76,7 +76,7 @@ def _seed(backend, n: int) -> list[str]:
 def swap_backend(pg_dsn):
     store_name = 'pg_swap'
     _drop_schema(pg_dsn, store_name)
-    backend = open_postgres_backend(store_name, pg_dsn)
+    backend = open_postgres_backend(store_name, pg_dsn, create=True)
     write_fingerprint(
         backend,
         Fingerprint(

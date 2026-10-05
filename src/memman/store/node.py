@@ -152,6 +152,22 @@ where id = ? and deleted_at is null and replaced_by is null
     return cursor.rowcount != 0
 
 
+def soft_delete_current_insight(db: 'DB', id: str) -> bool:
+    """Set deleted_at on a current insight: neither deleted nor replaced.
+
+    Returns True when the row was soft-deleted, False when it is
+    missing, deleted, or replaced.
+    """
+    now = format_timestamp(datetime.now(timezone.utc))
+    sql = """
+update insights
+set deleted_at = ?, updated_at = ?
+where id = ? and deleted_at is null and replaced_by is null
+"""
+    cursor = db._exec(sql, (now, now, id))
+    return cursor.rowcount != 0
+
+
 def unterminated_chains(pointers: dict[str, str]) -> list[str]:
     """Return the rows whose pointer chain never reaches a row without one.
 
@@ -513,6 +529,12 @@ limit ?
 """
     rows = db._query(sql, (limit,)).fetchall()
     return [r[0] for r in rows]
+
+
+def get_all_insight_ids(db: 'DB') -> set[str]:
+    """Every insight id, current and retired.
+    """
+    return {r[0] for r in db._query('select id from insights').fetchall()}
 
 
 def get_active_insight_ids(db: 'DB') -> list[str]:

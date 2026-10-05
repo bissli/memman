@@ -36,7 +36,7 @@ def twin_backends(request, backend_kind, tmp_path):
     if backend_kind == 'sqlite':
         data_dir = str(tmp_path / 'memman')
         opened.extend(
-            (name, open_sqlite_backend(name, data_dir))
+            (name, open_sqlite_backend(name, data_dir, create=True))
             for name in ('twin_a', 'twin_b'))
         cleanup = [lambda n=n: drop_sqlite_store(n, data_dir) for n, _ in opened]
     else:
@@ -47,7 +47,7 @@ def twin_backends(request, backend_kind, tmp_path):
         for suffix in ('a', 'b'):
             name = f'{base}_{suffix}'
             drop_postgres_store(name, pg_dsn)
-            opened.append((name, open_postgres_backend(name, pg_dsn)))
+            opened.append((name, open_postgres_backend(name, pg_dsn, create=True)))
         cleanup = [lambda n=n: drop_postgres_store(n, pg_dsn) for n, _ in opened]
     for _, b in opened:
         b.meta.set(META_KEY, seed_default_fingerprint().to_json())

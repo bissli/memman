@@ -208,12 +208,12 @@ class TestRecallAt10Gate:
         topic_centers = [_gaussian_unit(seed=i) for i in range(_N_TOPICS)]
 
         sqlite_data_dir = str(tmp_path / 'memman')
-        sqlite_backend = open_sqlite_backend('r10', sqlite_data_dir)
+        sqlite_backend = open_sqlite_backend('r10', sqlite_data_dir, create=True)
         sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(sqlite_backend, topic_centers)
 
         drop_postgres_store('r10_test', pg_dsn)
-        postgres_backend = open_postgres_backend('r10_test', pg_dsn)
+        postgres_backend = open_postgres_backend('r10_test', pg_dsn, create=True)
         postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(postgres_backend, topic_centers)
 

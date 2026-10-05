@@ -40,6 +40,7 @@ from memman.store import oplog as _oplog
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession
 from memman.store.db import DB
+from memman.store.errors import StoreMissingError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
@@ -88,6 +89,9 @@ class SqliteNodeStore(NodeStore):
 
     def soft_delete(self, id: Id) -> bool:
         return _node.soft_delete_insight(self._db, id)
+
+    def soft_delete_current(self, id: Id) -> bool:
+        return _node.soft_delete_current_insight(self._db, id)
 
     def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         return _node.mark_insight_replaced(
@@ -186,6 +190,9 @@ group by length(embedding)
 
     def get_active_ids(self) -> list[Id]:
         return _node.get_active_insight_ids(self._db)
+
+    def get_all_ids(self) -> set[Id]:
+        return _node.get_all_insight_ids(self._db)
 
     def count_pending_enrich(self) -> int:
         return _node.count_pending_enrich(self._db)
@@ -623,14 +630,34 @@ class SqliteBackend(Backend):
 
 def open_sqlite_backend(
         store: str, data_dir: str, *,
-        read_only: bool = False) -> 'SqliteBackend':
-    """Open or create the per-store SQLite backend.
+        read_only: bool = False,
+        create: bool = False) -> 'SqliteBackend':
+    """Open the per-store SQLite backend at `<data_dir>/data/<store>/`.
 
-    Materializes `<data_dir>/data/<store>/memman.db` on demand;
-    `read_only=True` opens the existing DB in `mode=ro` without
-    creating it.
+    Parameters
+    ----------
+    store : str
+        Store name.
+    data_dir : str
+        Base memman data directory.
+    read_only : bool, default False
+        Open the existing DB in `mode=ro`.
+    create : bool, default False
+        Create the store directory and database when missing. Ignored
+        with `read_only`.
+
+    Returns
+    -------
+    SqliteBackend
+
+    Raises
+    ------
+    StoreMissingError
+        The store directory is missing and `create` is False.
     """
     sdir = _db.store_dir(data_dir, store)
+    if not create and not _db.store_exists(data_dir, store):
+        raise StoreMissingError(store)
     if read_only:
         return SqliteBackend(_db.open_read_only(sdir))
     return SqliteBackend(_db.open_db(sdir))
@@ -846,7 +873,7 @@ order by id
                         ins.author))
                 if insight_rows:
                     conn.executemany(
-                        'insert into insights ('
+                        'insert or ignore into insights ('
                         ' id, content, summary,'
                         ' embedding,'
                         ' enrich_attempted_at, enriched_at, created_at,'

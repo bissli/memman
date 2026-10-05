@@ -24,7 +24,7 @@ def test_open_backend_uses_per_store_key_for_sqlite(tmp_path, env_file):
     """
     env_file('MEMMAN_BACKEND_sqlite_only', 'sqlite')
     backend = open_backend(
-        'sqlite_only', os.environ[config.DATA_DIR])
+        'sqlite_only', os.environ[config.DATA_DIR], create=True)
     try:
         assert isinstance(backend, SqliteBackend)
     finally:
@@ -40,7 +40,7 @@ def test_open_backend_falls_back_to_default(tmp_path, env_file):
     """
     env_file('MEMMAN_DEFAULT_BACKEND', 'sqlite')
     backend = open_backend(
-        'fresh_store', os.environ[config.DATA_DIR])
+        'fresh_store', os.environ[config.DATA_DIR], create=True)
     try:
         assert isinstance(backend, SqliteBackend)
     finally:
@@ -83,8 +83,8 @@ def test_open_backend_routes_two_stores_to_two_backends(
             cur.execute(f'drop schema if exists {schema} cascade')
 
     try:
-        local = open_backend('local_one', data_dir)
-        pg = open_backend('pg_one', data_dir)
+        local = open_backend('local_one', data_dir, create=True)
+        pg = open_backend('pg_one', data_dir, create=True)
         try:
             assert isinstance(local, SqliteBackend)
             assert isinstance(pg, PostgresBackend)

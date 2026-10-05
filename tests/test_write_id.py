@@ -123,6 +123,7 @@ def test_replace_refuses_a_write_queued_for_another_store(mm_runner):
         lookup, which links rows across stores.
     Oracle: the refusal, with the other store's write still queued.
     """
+    invoke(mm_runner, ['store', 'create', 'shop'])
     first = json.loads(invoke(mm_runner, [
         '--store', 'shop', 'remember', 'carts expire after a week']).output)
 

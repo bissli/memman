@@ -19,6 +19,7 @@ from memman.store.backend import _check_identifier
 from memman.store.db import _BASELINE_SCHEMA, portable_store_name
 from memman.store.db import valid_store_name
 from memman.store.errors import ConfigError
+from memman.store.sqlite import drop_sqlite_store
 from tests.conftest import _set_env_file_value, invoke
 
 FAKE_DSN = 'postgresql://u:p@h:5432/d'
@@ -187,6 +188,7 @@ def test_migrate_all_with_only_unhostable_stores_exits_clean(
     migration plan header. A dry run never reports "migrated".
     """
     _, data_dir = runner
+    drop_sqlite_store('default', data_dir)
     _seed_store(data_dir, 'demo-v3')
     _stub_postgres(monkeypatch)
 

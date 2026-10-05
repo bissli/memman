@@ -23,7 +23,7 @@ from memman.setup import scheduler as sched_mod
 from memman.setup.claude import _init_default_store
 from memman.store.db import DB, get_meta, open_db, set_meta, store_dir
 from memman.store.node import insert_insight, update_embedding
-from memman.store.sqlite import SqliteBackend
+from memman.store.sqlite import SqliteBackend, open_sqlite_backend
 from tests.conftest import EMBEDDING_DIM, make_insight
 
 
@@ -261,6 +261,7 @@ class TestReembed:
             stderr), and a fingerprint on disk.
         """
         data_dir = str(tmp_path / 'memman')
+        open_sqlite_backend('default', data_dir, create=True).close()
         result = _invoke([
             '--data-dir', data_dir,
             'recall', 'anything', '--limit', '5'])
@@ -284,6 +285,8 @@ class TestReembed:
             never-used store name.
         Oracle: Exit 0 with empty output.
         """
+        open_sqlite_backend(
+            'custom', str(tmp_path / 'memman'), create=True).close()
         result = _invoke([
             '--data-dir', str(tmp_path / 'memman'), '--store', 'custom',
             'recall', 'x', '--limit', '5'])
@@ -301,6 +304,7 @@ class TestReembed:
         Oracle: Exit 0 for remember and for drain, and a stored fingerprint.
         """
         data_dir = str(tmp_path / 'memman')
+        open_sqlite_backend('default', data_dir, create=True).close()
         result = _invoke([
             '--data-dir', data_dir, 'remember', 'a fresh memory'])
         assert result.exit_code == 0, result.output
@@ -348,9 +352,10 @@ class TestReembed:
         Oracle: The client's `is not reachable` text, and no `embed
             reembed` hint.
         """
+        data_dir = str(tmp_path / 'memman')
+        open_sqlite_backend('default', data_dir, create=True).close()
         monkeypatch.setattr(
             'memman.embed.client.Client.available', lambda self: False)
-        data_dir = str(tmp_path / 'memman')
         result = _invoke([
             '--data-dir', data_dir, 'recall', 'x'])
         assert result.exit_code != 0

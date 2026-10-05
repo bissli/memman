@@ -245,7 +245,7 @@ def _pg_store_backend(pg_dsn):
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
-    backend = open_postgres_backend(store_name, pg_dsn)
+    backend = open_postgres_backend(store_name, pg_dsn, create=True)
     try:
         yield backend, pg_dsn, store_name
     finally:
@@ -349,7 +349,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         index answers.
     """
     drop_postgres_store('hnsw_smoke', pg_dsn)
-    backend = open_postgres_backend('hnsw_smoke', pg_dsn)
+    backend = open_postgres_backend('hnsw_smoke', pg_dsn, create=True)
     backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
 
     n_insights = 10
@@ -411,7 +411,7 @@ def test_reembed_lock_session_scoped_and_releases_on_close(
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
-    a = open_postgres_backend(store_name, pg_dsn)
+    a = open_postgres_backend(store_name, pg_dsn, create=True)
     b = open_postgres_backend(store_name, pg_dsn)
     try:
         with a.reembed_lock('reembed') as got_a:
@@ -459,7 +459,7 @@ def test_lock_connection_sets_client_tcp_keepalive(
             sock.detach()
         return conn
 
-    backend = open_postgres_backend(store_name, pg_dsn)
+    backend = open_postgres_backend(store_name, pg_dsn, create=True)
     try:
         monkeypatch.setattr(pg_mod, '_open_connection', spy)
         lock = (backend.reembed_lock('reembed') if lock_name == 'reembed_lock'

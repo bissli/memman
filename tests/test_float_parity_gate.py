@@ -106,12 +106,12 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
 
     sqlite_data_dir = str(tmp_path / 'memman')
-    sqlite_backend = open_sqlite_backend('parity', sqlite_data_dir)
+    sqlite_backend = open_sqlite_backend('parity', sqlite_data_dir, create=True)
     sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
     drop_postgres_store('parity_test', pg_dsn)
-    postgres_backend = open_postgres_backend('parity_test', pg_dsn)
+    postgres_backend = open_postgres_backend('parity_test', pg_dsn, create=True)
     postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
 

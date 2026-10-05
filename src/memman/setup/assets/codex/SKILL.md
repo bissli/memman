@@ -20,10 +20,11 @@ loaded.
 The Codex sandbox blocks memman's writes to its data dir and its
 provider network calls. `memman install --codex` writes allow rules to
 `$CODEX_HOME/rules/memman.rules` for the agent verbs; an allowed verb
-runs outside the sandbox with no approval prompt. Any other command,
-or a call with a global option before the verb (e.g. `memman --store
-NAME recall ...`), matches no rule: the agent requests outside-sandbox
-execution through the shell tool
+runs outside the sandbox with no approval prompt. A `--store` after
+the verb (`memman recall --store NAME ...`) matches the verb's rule.
+Any other command, or a call with a global option before the verb
+(`memman --store NAME recall ...`), matches no rule: the agent
+requests outside-sandbox execution through the shell tool
 (`sandbox_permissions="require_escalated"`), subject to the session's
 approval policy.
 
@@ -139,7 +140,7 @@ id, so a write still queued is forgotten after the drain.
 `remember` replies with `related`: up to three current rows of at
 most 1,000 bytes, each as `<id8> <content>`, ranked by the words they
 share with the new text. On equal overlap a short row outranks a long
-one. A store with no database yet gives an empty list.
+one.
 
 The agent acts on a related row only when one of its sentences is now
 false. A row the new text repeats, narrows, or extends stays. The new
@@ -363,6 +364,58 @@ row it replaced is forgotten, `forget` takes it.
 memman status                         # store, backend, insight counts, stale_insights, oplog size
 memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 ```
+
+Every memory verb refuses a store that does not exist and writes
+nothing. Only `memman store create <name>` or `store fork` makes a
+store.
+
+## Experiment forks
+
+A fork is a local copy of a store's current rows that takes one
+thread's writes while the thread runs; the parent keeps serving every
+other session. A fork starts only when the user asks for one, and
+ends only when the user asks: `store merge` keeps the thread's
+memories, `store drop` discards them.
+
+```bash
+memman store fork <parent> <label>    # <parent>: the `store` field of `memman status`
+memman store merge <fork>
+memman store drop <fork>
+```
+
+`store fork` prints an `instruction` line. Paste it into the thread's
+HANDOFF.md, or into the project AGENTS.md when the user prefers, and
+remove it after the merge or drop. While the line applies, every
+memory verb (`recall`, `remember`, `replace`, `forget`, `insights
+show`) takes `--store <fork>`, and every subagent brief carries the
+line. A call without the flag reads and writes the parent.
+
+The fork holds every row that was current in the parent at fork time.
+For rows the parent gained since, run `memman recall --store <parent>`
+and use only rows dated on or after the fork date in the line; a row
+dated before that day is already in the fork, or was retired there on
+purpose. A parent-only
+row the thread finds wrong is corrected with `memman remember --store
+<fork>`; after the merge, settle the pair in the parent with `replace`
+or `forget`.
+
+`store merge` copies the fork's own rows into the parent with their
+dates and repeats each `replace` and `forget` the fork made on an
+inherited row. Its `conflicts` list holds inherited rows the fork and
+the parent retired differently. The parent keeps its own state for
+each, so settle every entry in the parent with `replace` or `forget`.
+Merge refuses while the fork has queued writes, and after an embed
+model change on the parent until the fork is swapped to the same
+model; each refusal names the fix.
+
+`store drop` prints `dropped`, the fork's rows the parent lacks.
+Re-save each claim unrelated to the thread with `memman remember
+--store <parent>`, taking `<parent>` from the output, then write a
+closing row the same way that says the thread was dropped and why.
+
+A fork lives on the host that made it; the same line on another host
+meets the missing-store refusal. So does a stale line after the merge
+or drop: remove the line.
 
 ## Scheduler controls
 

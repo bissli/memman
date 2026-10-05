@@ -42,7 +42,8 @@ from memman.search.keyword import insight_tokens
 from memman.setup.archive import archive_postgres_schema
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession, _check_identifier
-from memman.store.errors import BackendError, ConfigError, SwapCutoverRefused
+from memman.store.errors import BackendError, ConfigError, StoreMissingError
+from memman.store.errors import SwapCutoverRefused
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
@@ -431,6 +432,16 @@ where id = %s and deleted_at is null
             cur.execute(update_sql, (id,))
             return cur.rowcount != 0
 
+    def soft_delete_current(self, id: Id) -> bool:
+        update_sql = self._q("""
+update {s}.insights
+set deleted_at = now(), updated_at = now(), kw_tokens = '{{}}'
+where id = %s and deleted_at is null and replaced_by is null
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(update_sql, (id,))
+            return cur.rowcount != 0
+
     def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         # `kw_tokens` stays populated, unlike `soft_delete`: the GIN
         # predicate and `keyword_counts` already exclude replaced
@@ -670,6 +681,11 @@ order by created_at asc
         with self._conn.cursor() as cur:
             cur.execute(sql)
             return [r[0] for r in cur.fetchall()]
+
+    def get_all_ids(self) -> set[Id]:
+        with self._conn.cursor() as cur:
+            cur.execute(self._q('select id from {s}.insights'))
+            return {r[0] for r in cur.fetchall()}
 
     def count_pending_enrich(self) -> int:
         sql = self._q("""
@@ -1329,15 +1345,59 @@ def _read_stored_dim(dsn: str, store: str) -> int | None:
         return None
 
 
+def postgres_store_exists(store: str, dsn: str) -> bool:
+    """True when the database at `dsn` holds the store's schema.
+
+    Raises
+    ------
+    BackendError
+        On a connection failure, which answers neither way.
+    """
+    # A database without pgvector holds no memman schema, and type
+    # registration would raise there as if the server were down.
+    with _connection(dsn, autocommit=True, register_vector=False) as conn, \
+            conn.cursor() as cur:
+        cur.execute(
+            'select 1 from pg_namespace where nspname = %s',
+            (_store_schema(store),))
+        return cur.fetchone() is not None
+
+
 def open_postgres_backend(
         store: str, dsn: str, *,
-        read_only: bool = False) -> PostgresBackend:
-    """Open or create the per-store Postgres backend at `dsn`.
+        read_only: bool = False,
+        create: bool = False) -> PostgresBackend:
+    """Open the per-store Postgres backend at `dsn`.
 
     Reads the store's stored fingerprint dim (if any) before
     `_ensure_baseline_schema`, so a freshly discovered Postgres-backed
     store opens at its own dim rather than the env active client's.
+
+    Parameters
+    ----------
+    store : str
+        Store name.
+    dsn : str
+        Connection string.
+    read_only : bool, default False
+        Skip the HNSW index ensure.
+    create : bool, default False
+        Create the schema when it is missing.
+
+    Returns
+    -------
+    PostgresBackend
+
+    Raises
+    ------
+    StoreMissingError
+        The schema is missing and `create` is False. Nothing is
+        written.
+    BackendError
+        On a connection failure.
     """
+    if not create and not postgres_store_exists(store, dsn):
+        raise StoreMissingError(store)
     stored = _read_stored_dim(dsn, store)
     target_dim = _resolve_active_dim(expected_dim=stored)
     _ensure_baseline_schema(dsn, store, dim=target_dim)

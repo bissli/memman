@@ -64,14 +64,14 @@ The event source determines whether the reminder appears. The reminder still app
 
 `memman install` detects Claude Code through a `claude` binary on `PATH` or an existing `~/.claude` directory. `--claude-code` explicitly selects this integration. Without agent flags, installation sets up all detected integrations, or just the scheduler when none are detected.
 
-| Target                                             | Installed content                      |
-| -------------------------------------------------- | -------------------------------------- |
-| `~/.claude/skills/memman/SKILL.md`                 | Symlink to the packaged skill.         |
-| `~/.claude/hooks/memman/*.sh`                      | Symlinks to the five packaged scripts. |
-| `~/.claude/settings.json`, key `hooks`             | Event registrations and matchers.      |
-| `~/.claude/settings.json`, key `permissions.allow` | Eight `Bash(memman <verb>:*)` entries. |
+| Target                                             | Installed content                       |
+| -------------------------------------------------- | --------------------------------------- |
+| `~/.claude/skills/memman/SKILL.md`                 | Symlink to the packaged skill.          |
+| `~/.claude/hooks/memman/*.sh`                      | Symlinks to the five packaged scripts.  |
+| `~/.claude/settings.json`, key `hooks`             | Event registrations and matchers.       |
+| `~/.claude/settings.json`, key `permissions.allow` | Eleven `Bash(memman <verb>:*)` entries. |
 
-The permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, and `status`. In an interactive installation, memman lists the entries and asks before adding them. With `--no-wizard` or no terminal, it adds them without a prompt.
+The permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store drop`, `store fork`, and `store merge`. Each verb other than the three store verbs takes `--store` after the verb, so a call on a named store still matches its entry. In an interactive installation, memman lists the entries and asks before adding them. With `--no-wizard` or no terminal, it adds them without a prompt.
 
 Installation replaces existing hook entries mentioning memman and preserves other hooks. Re-running it leaves one set of registrations. The guide needs no symlink because prime reads it from the package. Installation never moves an existing SQLite store to a newly chosen Postgres backend. `memman migrate` moves a store.
 
@@ -93,7 +93,7 @@ The guide and skill are package assets, so customizing them means editing the pa
 
 `setup/codex.py` installs the packaged Codex skill as a directory symlink at `~/.agents/skills/memman`. The skill teaches recall, memory selection, queued writes, and corrections through the same CLI and stores as Claude Code. Codex gets no lifecycle hooks, so nothing reminds the agent to recall or save outside the skill.
 
-The Codex sandbox blocks writes to the data directory and the provider network calls, so every memman verb needs to run outside it. Installation writes `$CODEX_HOME/rules/memman.rules` with one `prefix_rule(pattern=["memman", <verb>...], decision="allow")` line per verb in `list_agent_commands`, the same eight verbs as the Claude Code `permissions.allow` entries. Codex loads every `*.rules` file in that directory, so memman owns a file of its own and never edits `default.rules`, where Codex appends the user's approvals. The consent prompt follows the Claude Code rule: an interactive installation asks, and `--no-wizard` or no terminal writes without asking.
+The Codex sandbox blocks writes to the data directory and the provider network calls, so every memman verb needs to run outside it. Installation writes `$CODEX_HOME/rules/memman.rules` with one `prefix_rule(pattern=["memman", <verb>...], decision="allow")` line per verb in `list_agent_commands`, the same eleven verbs as the Claude Code `permissions.allow` entries. Codex loads every `*.rules` file in that directory, so memman owns a file of its own and never edits `default.rules`, where Codex appends the user's approvals. The consent prompt follows the Claude Code rule: an interactive installation asks, and `--no-wizard` or no terminal writes without asking.
 
 Detection checks the `codex` binary, `CODEX_HOME` (default `~/.codex`), and the installed skill link. The last check lets uninstall find the integration after Codex itself is gone. `--codex` selects the integration explicitly. Reinstall refreshes the skill link, including a stale link left by an environment upgrade, and rewrites the rules file. A user-created skill named `memman` stays in place and stops the install as a conflict.
 

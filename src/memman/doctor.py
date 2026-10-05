@@ -20,6 +20,7 @@ from memman.embed import get_client
 from memman.embed import registry as _ec_registry
 from memman.embed.fingerprint import stored_fingerprint, swap_command
 from memman.exceptions import ConfigError
+from memman.fork import read_fork_info
 from memman.llm import client as llm_client
 from memman.llm import usage as llm_usage
 from memman.pipeline.remember import compute_prompt_version
@@ -31,6 +32,7 @@ from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import memman_hook_triples, read_json_file
 from memman.store import factory
 from memman.store.backend import Backend
+from memman.store.db import list_local_store_dirs
 
 logger = logging.getLogger('memman')
 
@@ -976,15 +978,52 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
         'detail': detail}
 
 
+def check_forks(data_dir: str) -> dict[str, Any]:
+    """List each open fork with its parent and date.
+
+    Returns
+    -------
+    dict[str, Any]
+        `warn` when a fork's parent does not exist or cannot be
+        checked, else `pass`. `detail.forks` holds `{store, parent,
+        created_at}` per fork, `detail.missing_parent` the forks whose
+        parent is gone, and `detail.errors` the failed checks.
+    """
+    forks: list[dict[str, Any]] = []
+    missing_parent: list[str] = []
+    errors: list[dict[str, str]] = []
+    for store in list_local_store_dirs(data_dir):
+        try:
+            info = read_fork_info(store, data_dir)
+            if info is None:
+                continue
+            forks.append({'store': store, **info})
+            if not factory.store_exists(info['parent'], data_dir):
+                missing_parent.append(store)
+        except Exception as exc:
+            errors.append({
+                'store': store, 'error': f'{type(exc).__name__}: {exc}'})
+    return {
+        'name': 'forks',
+        'status': 'warn' if missing_parent or errors else 'pass',
+        'detail': {
+            'forks': forks,
+            'missing_parent': missing_parent,
+            'errors': errors,
+            },
+        }
+
+
 def run_all_checks(
-        backend: Backend,
+        backend: Backend | None,
         data_dir: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
     Parameters
     ----------
-    backend : Backend
-        The open store.
+    backend : Backend or None
+        The open store. None means the resolved store does not exist:
+        a failed `store_exists` check replaces the per-store checks.
     data_dir : str | None
         Data directory. When None, only the per-store checks run.
 
@@ -995,9 +1034,15 @@ def run_all_checks(
         or `empty` with no checks when the store holds no active row
         and `data_dir` is None. Also `total_active` and `checks`.
     """
-    total = backend.nodes.count_active()
+    total = backend.nodes.count_active() if backend else 0
     checks = []
-    if total > 0:
+    if backend is None:
+        checks.append({
+            'name': 'store_exists',
+            'status': 'fail',
+            'detail': {'error': 'store does not exist'},
+            })
+    elif total > 0:
         checks.extend([
             check_integrity(backend),
             check_enrichment_coverage(backend),
@@ -1021,6 +1066,7 @@ def run_all_checks(
             check_env_completeness(),
             check_per_store_keys(data_dir),
             check_stale_post_migrate_source(data_dir),
+            check_forks(data_dir),
             check_env_permissions(),
             check_claude_hooks(),
             check_codex_skill(),

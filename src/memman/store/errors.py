@@ -31,3 +31,19 @@ class ConfigError(BackendError, _RuntimeConfigError):
     seam catches both runtime config failures and backend dispatch
     failures uniformly).
     """
+
+
+class StoreMissingError(ConfigError):
+    """Raised when a caller opens a store that does not exist.
+
+    Parameters
+    ----------
+    store : str
+        Name of the missing store, quoted in the message.
+    """
+
+    def __init__(self, store: str) -> None:
+        super().__init__(
+            f'store "{store}" does not exist'
+            f' (create it with memman store create {store})')
+        self.store = store

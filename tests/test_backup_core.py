@@ -29,7 +29,7 @@ def _data_dir() -> str:
 def _seed_store(data_dir: str, store: str = 'default', n: int = 3) -> None:
     """Materialize a sqlite store with a fingerprint and `n` insights.
     """
-    backend = open_sqlite_backend(store, data_dir)
+    backend = open_sqlite_backend(store, data_dir, create=True)
     write_fingerprint(backend, _FP)
     for i in range(n):
         backend.nodes.insert(
@@ -66,7 +66,7 @@ class TestSnapshotSqlite:
             copy.
         """
         data_dir = _data_dir()
-        backend = open_sqlite_backend('default', data_dir)
+        backend = open_sqlite_backend('default', data_dir, create=True)
         write_fingerprint(backend, _FP)
         backend.nodes.insert(make_insight(id='a', content='live'))
         write_active(data_dir, 'default')

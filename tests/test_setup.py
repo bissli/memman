@@ -26,7 +26,7 @@ from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
 from memman.store.db import open_db, store_dir, write_active
 from memman.store.node import insert_insight
-from tests.conftest import make_insight
+from tests.conftest import _create_seeded_store, make_insight
 
 # The host truncates hook stdout above this many bytes and persists the
 # remainder to a file it never reads back.
@@ -1148,6 +1148,7 @@ class TestSetupCli:
         Oracle: the guide.md asset read directly.
         """
         monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+        _create_seeded_store('default', os.environ[config.DATA_DIR])
         runner = CliRunner()
         result = runner.invoke(cli, ['prime'], input='{}')
         assert result.exit_code == 0

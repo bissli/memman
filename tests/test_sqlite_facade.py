@@ -140,7 +140,7 @@ def test_open_sqlite_backend_returns_sqlite_backend(tmp_path):
     Mutation: the factory returning the raw `Database` object.
     Oracle: `isinstance` against `SqliteBackend`.
     """
-    bk = open_sqlite_backend('default', str(tmp_path))
+    bk = open_sqlite_backend('default', str(tmp_path), create=True)
     assert isinstance(bk, SqliteBackend)
     bk.close()
 
@@ -152,9 +152,9 @@ def test_list_stores_sqlite(tmp_path):
     store.
     Oracle: the hand-listed `['alpha', 'beta']`.
     """
-    bk = open_sqlite_backend('alpha', str(tmp_path))
+    bk = open_sqlite_backend('alpha', str(tmp_path), create=True)
     bk.close()
-    bk = open_sqlite_backend('beta', str(tmp_path))
+    bk = open_sqlite_backend('beta', str(tmp_path), create=True)
     bk.close()
     assert list_stores(str(tmp_path)) == ['alpha', 'beta']
 
@@ -166,7 +166,7 @@ def test_drop_sqlite_store_removes_dir(tmp_path):
     the directory.
     Oracle: the store directory no longer exists.
     """
-    bk = open_sqlite_backend('gone', str(tmp_path))
+    bk = open_sqlite_backend('gone', str(tmp_path), create=True)
     bk.close()
     drop_sqlite_store('gone', str(tmp_path))
     assert (
@@ -193,7 +193,7 @@ def test_drop_store_dispatches_to_sqlite(tmp_path):
     drop, or to nothing.
     Oracle: the store directory no longer exists.
     """
-    bk = open_sqlite_backend('gone2', str(tmp_path))
+    bk = open_sqlite_backend('gone2', str(tmp_path), create=True)
     bk.close()
     drop_store('gone2', str(tmp_path))
     assert (
@@ -210,7 +210,7 @@ def test_open_read_only_reports_a_missing_database(tmp_path):
     Oracle: `BackendError` sits outside the `OSError` hierarchy, so
         `pytest.raises(BackendError)` discriminates the two.
     """
-    bk = open_sqlite_backend('gone', str(tmp_path))
+    bk = open_sqlite_backend('gone', str(tmp_path), create=True)
     store_dir = pathlib.Path(tmp_path) / 'data' / 'gone'
     try:
         (store_dir / 'memman.db').unlink()
