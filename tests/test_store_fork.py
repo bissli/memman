@@ -16,7 +16,8 @@ from memman import config
 from memman import fork as fork_mod
 from memman.cli import cli, list_agent_commands, list_claude_permissions
 from memman.embed.fingerprint import META_KEY, Fingerprint
-from memman.embed.fingerprint import seed_default_fingerprint, write_fingerprint
+from memman.embed.fingerprint import seed_default_fingerprint
+from memman.embed.fingerprint import write_fingerprint
 from memman.migrate import MigrateError, MigrateInsight, MigrationPayload
 from memman.queue import queue_db
 from memman.setup import claude as claude_setup
@@ -25,8 +26,7 @@ from memman.store.db import list_local_store_dirs, read_active, store_dir
 from memman.store.db import write_active
 from memman.store.errors import StoreMissingError
 from memman.store.sqlite import SqliteMigrator, open_sqlite_backend
-from tests.conftest import EMBEDDING_DIM, force_drain, invoke
-from tests.conftest import queued_contents
+from tests.conftest import EMBEDDING_DIM, force_drain, invoke, queued_contents
 
 
 def _env_keys(data_dir: str) -> dict[str, str]:
@@ -122,6 +122,7 @@ def test_remember_queues_when_the_postgres_check_cannot_connect(
     every write during a database outage.
     Oracle: a DSN on a closed local port, which refuses the connection.
     """
+    pytest.importorskip('psycopg')
     _, data_dir = mm_runner
     env_file('MEMMAN_BACKEND_pgdown', 'postgres')
     env_file(
@@ -816,7 +817,7 @@ def test_merge_refuses_and_changes_nothing(mm_runner, case):
         ]).output)['id']
     force_drain(data_dir)
     fork = _fork(mm_runner, parent='work')['store']
-    if case in ('pending fork row', 'failed fork row'):
+    if case in {'pending fork row', 'failed fork row'}:
         invoke(mm_runner, [
             'remember', '--store', fork, 'The worker splits in two.'])
         if case == 'failed fork row':
@@ -1123,6 +1124,7 @@ def test_drop_refuses_when_the_parent_check_cannot_connect(
     every inherited row as the fork's own.
     Oracle: a parent rerouted to a DSN on a closed local port.
     """
+    pytest.importorskip('psycopg')
     _, data_dir = mm_runner
     invoke(mm_runner, ['store', 'create', 'work'])
     _remember_in(mm_runner, 'work', 'The retry cap for batch jobs is three.')
