@@ -383,9 +383,11 @@ memman store merge <fork>
 memman store drop <fork>
 ```
 
-`store fork` prints an `instruction` line. Paste it into the thread's
-HANDOFF.md, or into the project AGENTS.md when the user prefers, and
-remove it after the merge or drop. While the line applies, every
+`store fork` prints an `instruction` line. Paste it into the notes the
+thread's next session reads, and remove it after the merge or drop.
+With no notes, instruction, or framework saying where the line goes,
+ask the user how to carry it to future sessions, or whether future
+sessions should know of the fork at all. While the line applies, every
 memory verb (`recall`, `remember`, `replace`, `forget`, `insights
 show`) takes `--store <fork>`, and every subagent brief carries the
 line. A call without the flag reads and writes the parent.

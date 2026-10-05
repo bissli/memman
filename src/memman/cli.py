@@ -2504,8 +2504,8 @@ def store_fork(ctx: click.Context, parent: str, label: str) -> None:
     Notes
     -----
     - Only on the user's request. The JSON reply carries
-      `instruction`, the line to paste into the thread's HANDOFF.md,
-      CLAUDE.md or AGENTS.md.
+      `instruction`, the line to paste into the notes the thread's next
+      session reads. With no such notes, ask the user where it goes.
     - Ends with `memman store merge` or `memman store drop`.
 
     \b
