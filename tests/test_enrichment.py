@@ -337,7 +337,7 @@ class _SequenceClient:
 # A body cut mid summary while the provider reported a finish_reason
 # of `stop`, so nothing but the parse failure names it as unusable.
 _CUT_MID_SUMMARY_BODY = (
-    '{\n  "summary": "The handoff names the'
+    '{\n  "summary": "The plan names the'
     ' environment-deployed-resources.')
 
 

@@ -85,7 +85,7 @@ Package upgrades refresh the scripts, skill, and guide. Registration changes, sc
 
 The packaged skill instructs the agent to run `remember` directly through Bash during its own turn. Submission validates and queues the memory, then reads related memories without calling a model. The agent already has the context needed to write a self-contained claim and decide whether a related memory needs correction.
 
-The worker handles summary generation and embedding later. Delegating submission to a subagent would add a handoff without removing any work from the turn, because the model work already runs in the worker.
+The worker handles summary generation and embedding later. Delegating submission to a subagent would add a step without removing any work from the turn, because the model work already runs in the worker.
 
 The guide and skill are package assets, so customizing them means editing the package source. An editable installation picks up those edits immediately. A change to a hook registration still requires `memman install`.
 
