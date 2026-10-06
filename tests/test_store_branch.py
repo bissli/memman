@@ -2018,6 +2018,7 @@ def test_store_remove_refuses_a_branch_and_names_store_drop(mm_runner):
         'The grackle colony nests by the river.']
 
 
+@pytest.mark.postgres
 def test_reembed_follows_the_parent_backend_of_each_branch(
         mm_runner, env_file, pg_dsn, monkeypatch):
     """Verify reembed moves a branch of a SQLite parent, skips a Postgres one.
