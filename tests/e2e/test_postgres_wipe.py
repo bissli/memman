@@ -39,8 +39,8 @@ def test_drop_store_removes_schema(pg_dsn, request):
     for s in (store_a, store_b):
         drop_postgres_store(s, pg_dsn)
 
-    a = open_postgres_backend(store_a, pg_dsn)
-    b = open_postgres_backend(store_b, pg_dsn)
+    a = open_postgres_backend(store_a, pg_dsn, create=True)
+    b = open_postgres_backend(store_b, pg_dsn, create=True)
     a.close()
     b.close()
 
@@ -83,7 +83,7 @@ def test_recreate_after_drop_yields_empty_schema(pg_dsn, request):
     store = _safe(request.node.name)
     drop_postgres_store(store, pg_dsn)
 
-    first = open_postgres_backend(store, pg_dsn)
+    first = open_postgres_backend(store, pg_dsn, create=True)
     try:
         first.nodes.insert(Insight(id='pre-wipe', content='will be wiped'))
         first._conn.commit()
@@ -93,7 +93,7 @@ def test_recreate_after_drop_yields_empty_schema(pg_dsn, request):
 
     drop_postgres_store(store, pg_dsn)
 
-    second = open_postgres_backend(store, pg_dsn)
+    second = open_postgres_backend(store, pg_dsn, create=True)
     try:
         assert second.nodes.get('pre-wipe') is None, (
             'recreated schema should not contain pre-wipe rows')

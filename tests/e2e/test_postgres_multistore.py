@@ -42,7 +42,7 @@ def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
     store = _safe(request.node.name)
     schema = _store_schema(store)
     drop_postgres_store(store, pg_dsn)
-    backend = open_postgres_backend(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn, create=True)
     try:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -72,8 +72,8 @@ def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
     for s in (store_a, store_b):
         drop_postgres_store(s, pg_dsn)
 
-    a = open_postgres_backend(store_a, pg_dsn)
-    b = open_postgres_backend(store_b, pg_dsn)
+    a = open_postgres_backend(store_a, pg_dsn, create=True)
+    b = open_postgres_backend(store_b, pg_dsn, create=True)
     try:
         a.nodes.insert(Insight(id='a-1', content='only in A'))
         b.nodes.insert(Insight(id='b-1', content='only in B'))
@@ -118,11 +118,11 @@ def test_cross_backend_parity_insert_and_get(pg_dsn, tmp_path, request):
     """
     sqlite_data = str(tmp_path / 'memman_sqlite')
     Path(sqlite_data).mkdir(parents=True, exist_ok=True)
-    sqlite_backend = open_sqlite_backend('parity', sqlite_data)
+    sqlite_backend = open_sqlite_backend('parity', sqlite_data, create=True)
 
     pg_store = _safe(request.node.name)
     drop_postgres_store(pg_store, pg_dsn)
-    pg_backend = open_postgres_backend(pg_store, pg_dsn)
+    pg_backend = open_postgres_backend(pg_store, pg_dsn, create=True)
 
     try:
         ins = Insight(id='parity-1', content='same content both ways')

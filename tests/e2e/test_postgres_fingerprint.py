@@ -35,7 +35,7 @@ def test_stored_fingerprint_round_trips_through_backend_meta(
     """
     store = _safe(request.node.name)
     drop_postgres_store(store, pg_dsn)
-    backend = open_postgres_backend(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn, create=True)
     try:
         target = Fingerprint(
             model='voyage-3-lite', dim=512)
@@ -63,7 +63,7 @@ def test_active_vs_stored_fingerprint_mismatch_is_observable(
     """
     store = _safe(request.node.name)
     drop_postgres_store(store, pg_dsn)
-    backend = open_postgres_backend(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn, create=True)
     try:
         seeded = Fingerprint(
             model='voyage-3-lite', dim=512)
@@ -96,7 +96,7 @@ def test_corrupt_fingerprint_json_raises(pg_dsn, request):
     """
     store = _safe(request.node.name)
     drop_postgres_store(store, pg_dsn)
-    backend = open_postgres_backend(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn, create=True)
     try:
         backend.meta.set(META_KEY, '{not valid json')
         backend._conn.commit()

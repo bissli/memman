@@ -17,6 +17,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
+from memman.store.sqlite import open_sqlite_backend
 
 pytestmark = pytest.mark.e2e_cli
 
@@ -50,6 +51,7 @@ def test_prime_emits_memman_prefix(memman_home: tuple[Path, Path]):
         shipped guide.md text, which only a real prime payload carries.
     """
     home, _ = memman_home
+    open_sqlite_backend('default', str(home / '.memman'), create=True).close()
     out = _run_hook(_hook('prime.sh'),
                     {'session_id': SESSION_ID}, home)
     assert out.returncode == 0, out.stderr
@@ -69,6 +71,7 @@ def test_prime_handles_empty_stdin(memman_home: tuple[Path, Path]):
         which only a real `memman prime` run prints.
     """
     home, _ = memman_home
+    open_sqlite_backend('default', str(home / '.memman'), create=True).close()
     out = subprocess.run(
         ['bash', _hook('prime.sh')],
         input='', capture_output=True, text=True,

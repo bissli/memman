@@ -18,13 +18,16 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli
+from memman.store import factory
 from tests.conftest import invoke
 
 
 def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
     """Build a CliRunner whose env has `<store_name>` routed to postgres.
 
-    Returns the standard `(runner, data_dir)` tuple.
+    Drops a schema of that name another test left in the shared
+    container, so the store starts missing. Returns the standard
+    `(runner, data_dir)` tuple.
     """
     data_dir = tmp_path / 'memman'
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -40,6 +43,7 @@ def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
     env_path.write_text(
         '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n')
     config.reset_file_cache()
+    factory.drop_store(store_name, str(data_dir))
     return CliRunner(), str(data_dir)
 
 
