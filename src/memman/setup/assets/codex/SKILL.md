@@ -19,7 +19,7 @@ loaded.
 
 The Codex sandbox blocks memman's writes to its data dir and its
 provider network calls. `memman install --codex` writes allow rules to
-`$CODEX_HOME/rules/memman.rules` for the agent verbs; an allowed verb
+`$CODEX_HOME/rules/memman.rules` for the agent verbs. An allowed verb
 runs outside the sandbox with no approval prompt. A `--store` after
 the verb (`memman recall --store NAME ...`) matches the verb's rule.
 Any other command, or a call with a global option before the verb
@@ -28,7 +28,7 @@ requests outside-sandbox execution through the shell tool
 (`sandbox_permissions="require_escalated"`), subject to the session's
 approval policy.
 
-## Storing memories
+## Remembering
 
 Store one thought per call, written as one paragraph that opens on
 its subject, with no label prefix, list, or line break. A thought is
@@ -38,24 +38,24 @@ paragraph holding two independent thoughts is two memories. Do not
 split what becomes false together: a decision and its reason, a rule
 and the value it constrains, a constraint and its rationale stay in
 the one paragraph, however many sentences it takes. Several calls per
-turn is normal. Unrelated thoughts are not merged to look tidy, and
-one thought is not padded to look substantial. When unsure, write the
-smaller memory. A too-small memory stays retrievable and replaces
-cleanly. A too-large one forces a rewrite and drops clauses.
+turn is normal. Never merge unrelated thoughts to look tidy, or pad
+one to look substantial. When unsure, write the smaller memory. A
+too-small memory stays retrievable and replaces cleanly. A too-large
+one forces a rewrite and drops clauses.
 
 ```bash
 memman remember "<thought>"
 ```
 
-### When to write
+### Timing
 
-A user directive - a stated preference, a decision, a correction, or
-"remember this" - is stored at once, never deferred, even
-mid-conversation. Deliberation that has reached no conclusion is
-deferred: an intermediate conclusion that will shift with further
-discussion wastes a write. The stability test for everything else:
-would this be worth storing as-is if the exchange stopped here? If
-yes, store it. If the next exchange might change it, defer.
+Store a user directive - a stated preference, a decision, a
+correction, or "remember this" - at once, even mid-conversation.
+Defer deliberation that has reached no conclusion: an intermediate
+conclusion that will shift with further discussion wastes a write.
+The stability test for everything else: would this be worth storing
+as-is if the exchange stopped here? If yes, store it. If the next
+exchange might change it, defer.
 
 After each response, the agent runs this check, biased toward
 capturing: when in doubt, store.
@@ -73,8 +73,7 @@ Store unless trivial:
 
 - a casual preference revealed in passing ("I usually...", "I
   prefer...", "I don't like...")
-- a topic explored, with its conclusion or current understanding, not
-  just the questions
+- a topic explored, with its conclusion or current understanding
 - a useful framing or analogy the user offered
 - background context about the user's projects, tools, or setup
 
@@ -84,7 +83,7 @@ Never stored, at any tier. The recoverability test: can this fact be
 recovered from the project's code, config, IaC state, or cloud
 account? If yes, do not store it.
 
-- a bug or issue discovery: store the resolution, not the problem
+- a bug or issue discovery (its resolution is stored)
 - a state snapshot: line numbers, line counts, file sizes, resource
   counts, instance IDs
 - a deployment or verification receipt ("all verified", "deployed
@@ -102,8 +101,8 @@ keep the reasoning and conclusions.
 A correction goes through `memman replace <id> "<new text>"` on the
 row it corrects. `remember` only adds a row and retires nothing, so a
 correction written with `remember` leaves the outdated row current in
-recall. When that has happened, replace the outdated row with what it
-should now say.
+recall. When that has happened, replace the outdated row with the
+current claim.
 
 The id is one of:
 
@@ -161,8 +160,8 @@ the rest.
 ### The text
 
 The text stores conclusions AND enough context to understand them. It
-is self-contained: every "that", "this", and "it" is dereferenced into
-its actual subject before the call. It never opens with a label such
+is self-contained: the agent replaces every "that", "this", and "it"
+with its subject before the call. It never opens with a label such
 as `Fix:` or `Decision:`, nor with who wrote it or when: `author`
 and `created_at` carry those.
 
@@ -176,7 +175,7 @@ turn, never through a sub-agent.
 A behavioral rule - universal language such as "never", "always", or
 "mandatory", with no project-specific entity - goes to the project
 AGENTS.md under a `## Directives` section instead of `memman
-remember`; the agent creates the section if absent. A directive needs
+remember`. The agent creates the section if absent. A directive needs
 guaranteed recall, which AGENTS.md gets by loading at session start
 and a ranked recall page does not. The user prunes AGENTS.md
 periodically, so no confirmation is needed.
@@ -184,7 +183,7 @@ periodically, so no confirmation is needed.
 ### The write pipeline
 
 `memman remember` queues the write, then reads the store to list
-`related`; when that read fails the reply carries `related_error`
+`related`. When that read fails the reply carries `related_error`
 in its place and the write stays queued. The full pipeline -
 summary enrichment, then embedding - runs out of band in a worker
 the scheduler starts on a timer (systemd on Linux, launchd on macOS,
@@ -198,8 +197,8 @@ enrichment.
 
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write is stored as its own row:
-a second write of the same text is a second row. Nothing a `remember`
-does retires a stored memory; only `replace` does.
+a second write of the same text is a second row. A `remember` retires
+nothing. Only `replace` does.
 
 To correct a stored memory by id:
 
@@ -220,12 +219,12 @@ replace's id with text that keeps its correction and adds the second:
 on the drain, a second replace of the same target retires the first,
 and any claim only the first text held is lost.
 
-On the drain the replacement is stored under the `id` that `replace`
-printed, and the old row is replaced: it keeps its content behind
+On the drain the worker stores the replacement under the `id` that
+`replace` printed and retires the old row, which keeps its content behind
 `replaced_by` and drops out of every recall and listing. A `replace`
 waits behind its queued target and behind every earlier `replace` in
-the store, so replacements are stored in queue order whatever retries
-they take. `memman insights show <id> --history` lists the chain of
+the store, so the store holds replacements in queue order whatever
+retries they take. `memman insights show <id> --history` lists the chain of
 replacements through a row, old text included. A wrong correction is
 itself an outdated row: replace it with the right text.
 
@@ -269,8 +268,8 @@ else:
   the same page, never against a fixed number and never across
   pages: the scale belongs to whichever reranker is configured.
 - `created_at`: the UTC date, `YYYY-MM-DD`, with no time of day. A
-  timeline question sorts on this field rather than on row order,
-  which is relevance order. Rows from one day tie. `memman insights
+  timeline question sorts on this field, since row order is relevance
+  order. Rows from one day tie. `memman insights
   show <id8>` carries the full timestamp when same-day order matters.
 - `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
   `.envrc`, else the OS username - or `-` when unset.
@@ -279,34 +278,33 @@ else:
   run in either folds to one space. A summarized row carries no
   marker however much its summary left out.
 
-The page is for choosing which row to open, not for reading the rows
-themselves: `memman insights show <id8>` reads the rest of any row
-worth more than a scan. `--limit` defaults to `MEMMAN_RECALL_LIMIT`,
-or 20 when unset. A wide page costs little and carries more relevant
-material than a narrow one, so scan the wide page and open the rows
-worth reading. Rows come back in relevance order at every `--limit`,
-so the first `n` of a page of `m` are exactly a page of `n`.
+The page is for choosing which row to open: `memman insights show
+<id8>` reads the rest of any row worth more than a scan. `--limit`
+defaults to `MEMMAN_RECALL_LIMIT`, or 20 when unset. A wide page costs
+little and carries more relevant material than a narrow one, so scan
+the wide page and open the rows worth reading. Rows come back in
+relevance order at every `--limit`, so the first `n` of a page of `m`
+are exactly a page of `n`.
 
 Recall prints rows even when nothing matches: a recency channel adds
 the newest rows as anchors whatever the query. A scored page with no
 line therefore means the store holds no memory, not that the query
 failed. A full page is not evidence that anything on it is relevant.
-A page that looks thin usually is not, because the store nearly
-always holds something bearing on a query drawn from the same work.
-Judge each row on its merits against the query and against its
-siblings on the page. Report that nothing relevant is stored only
-when no row bears on the query. If a paraphrase returns nothing that
-bears on the query, re-ask in the store's own words before concluding
-it is empty.
+Read a thin-looking page in full: rows from the same work often bear
+on the query. Judge each row on its merits against the
+query and against its siblings on the page. Report that nothing
+relevant is stored only when no row bears on the query. If a
+paraphrase returns nothing that bears on the query, re-ask in the
+store's own words before concluding it is empty.
 
-Rows assert; AGENTS.md directs. A row recording a decision is history
+Rows assert, and AGENTS.md directs. A row recording a decision is history
 with its rationale, and a rule to follow goes in AGENTS.md. A row that
 names a file path or a symbol is a claim about the code at the row's
 `created_at`. Before acting on it, check the path's history since
 that date with `git log --since=<created_at> -- <path>` from the
 project directory. An empty result means the path did not change OR
 the path is not in this repo, since a store can hold rows from
-several repos; `git log -1 -- <path>` confirms the path exists here
+several repos. `git log -1 -- <path>` confirms the path exists here
 before an empty result is taken to mean the row is current.
 
 For a fast token-only lookup that skips vector search and reranking
@@ -358,7 +356,7 @@ reads it back. `forget` refuses a current row that replaced a row not
 yet forgotten, because that row stays retired either way. Once every
 row it replaced is forgotten, `forget` takes it.
 
-## Inspecting the system
+## Status and health
 
 ```bash
 memman status                         # store, backend, insight counts, stale_insights, oplog size
@@ -366,58 +364,67 @@ memman doctor                         # health check (sqlite, queue, keys, sched
 ```
 
 Every memory verb refuses a store that does not exist and writes
-nothing. Only `memman store create <name>` or `store fork` makes a
+nothing. Only `memman store create <name>` or `store branch` makes a
 store.
 
-## Experiment forks
+## Branches
 
-A fork is a local copy of a store's current rows that takes one
-thread's writes while the thread runs; the parent keeps serving every
-other session. A fork starts only when the user asks for one, and
-ends only when the user asks: `store merge` keeps the thread's
-memories, `store drop` discards them.
+A branch is an empty local store layered over a parent. It holds one
+thread's writes and reads the parent live. The parent gains only a
+token and keeps serving every other session. A branch starts and ends
+only when the user asks: `store merge` keeps the thread's memories,
+`store drop` discards them.
 
 ```bash
-memman store fork <parent> <label>    # <parent>: the `store` field of `memman status`
-memman store merge <fork>
-memman store drop <fork>
+memman store branch <parent> <label>  # <parent>: the `store` field of `memman status`
+memman store merge <branch>
+memman store drop <branch>
 ```
 
-`store fork` prints an `instruction` line. Paste it into the notes the
-thread's next session reads, and remove it after the merge or drop.
-With no notes, instruction, or framework saying where the line goes,
-ask the user how to carry it to future sessions, or whether future
-sessions should know of the fork at all. While the line applies, every
-memory verb (`recall`, `remember`, `replace`, `forget`, `insights
-show`) takes `--store <fork>`, and every subagent brief carries the
-line. A call without the flag reads and writes the parent.
+The name is `<parent>__<label>_<4 hex>`, and the label takes no `__`.
+`store branch` prints an `instruction` line. Paste it into the notes
+the thread's next session reads, and remove it after the merge or
+drop. With no such notes, instruction or framework, ask the user how
+to carry it to future sessions, or whether future sessions should know
+of the branch at all. Every memory verb takes `--store <branch>` while
+the line applies, and every subagent brief carries the line. A call
+without `--store <branch>` reads and writes the parent. `store use`
+refuses a branch, since the active file routes every session on the
+host. A branch of a branch is refused.
 
-The fork holds every row that was current in the parent at fork time.
-For rows the parent gained since, run `memman recall --store <parent>`
-and use only rows dated on or after the fork date in the line; a row
-dated before that day is already in the fork, or was retired there on
-purpose. A parent-only
-row the thread finds wrong is corrected with `memman remember --store
-<fork>`; after the merge, settle the pair in the parent with `replace`
-or `forget`.
+Recall on the branch ranks its rows with the parent's current rows,
+later parent rows included, so the thread needs no parent recall and
+no date filter. A `replace` or `forget` of a parent row acts on a copy
+in the branch until merge. On a row the parent already replaced it is
+refused, and the error names the current row.
 
-`store merge` copies the fork's own rows into the parent with their
-dates and repeats each `replace` and `forget` the fork made on an
-inherited row. Its `conflicts` list holds inherited rows the fork and
-the parent retired differently. The parent keeps its own state for
-each, so settle every entry in the parent with `replace` or `forget`.
-Merge refuses while the fork has queued writes, and after an embed
-model change on the parent until the fork is swapped to the same
-model; each refusal names the fix.
+`store merge` copies the branch's rows into the parent with dates,
+summaries and embeddings, and repeats each `replace` and `forget` made
+on a parent row, in one parent transaction. `conflicts` holds parent
+rows the two stores retired differently, and the parent keeps its
+state. Each entry carries `branch_content`, `parent_content` and
+`parent_head`, the parent's current row (null when the parent's chain
+ends in a forgotten row). Settle each in the parent with `replace` or
+`forget`. Merge refuses while the branch has queued writes, while
+either store is mid embed swap or re-embed, and when the parent no
+longer holds the token. After an embed model change on the parent,
+branch recall and merge refuse until the branch runs the embed swap
+the refusal names. Every refusal names its fix. A merge that stops
+part way says to re-run, which finishes it.
 
-`store drop` prints `dropped`, the fork's rows the parent lacks.
+`store drop` prints `dropped`, one `{id, content, replaces}` per
+current branch row. `replaces` names the parent row it corrects.
 Re-save each claim unrelated to the thread with `memman remember
---store <parent>`, taking `<parent>` from the output, then write a
-closing row the same way that says the thread was dropped and why.
+--store <parent>` (`<parent>` from the output), or `memman replace
+--store <parent> <replaces>` where set, then a closing row the same
+way saying why the thread was dropped. Drop refuses while the branch
+has queued writes, and after a merge that stopped part way, which only
+a re-run of merge ends.
 
-A fork lives on the host that made it; the same line on another host
-meets the missing-store refusal. So does a stale line after the merge
-or drop: remove the line.
+A branch is local to its host, whatever the parent's backend, and its
+recall needs the parent. The same line on another host, or a stale
+line after the merge or drop, meets the missing-store refusal: remove
+the line.
 
 ## Scheduler controls
 
@@ -429,8 +436,8 @@ systemd timer on Linux, a launchd agent on macOS, and a long-running
 When the scheduler is stopped, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
 scheduler start' to enable.` The serve loop polls the state file every
-iteration and mid-drain, so a pause takes effect within seconds even
-during a long drain.
+iteration and mid-drain, so a pause takes effect even during a long
+drain.
 
 Drains never overlap: a lock on `<data dir>/drain.lock` gates entry to
 the drain. A manual `scheduler trigger` run while a timer-driven
@@ -453,12 +460,12 @@ and exits 0.
   it starts.
 - `memman scheduler trigger` - dispatch a drain on systemd/launchd and
   return at once. It does not wait, so `dispatched` means the run is
-  queued; `memman log worker` reports whether it ran and its outcome.
+  queued. `memman log worker` reports whether it ran and its outcome.
   Not applicable in serve mode.
 - `memman log worker [--errors|--stack]` - tail one worker log target;
   the two flags are mutually exclusive. `--errors` reads `enrich.err`,
   the worker's own ERROR-level tracebacks. `--stack` reads the rotated
-  `memman.log` and its backups, the only place a traceback survives
+  `memman.log` and its backups, the only place that holds a traceback
   when the CLI error that reports it is one line. The `enrich` files
   always sit under `~/.memman/logs`; `memman.log` follows `--data-dir`,
   so under a non-default data dir they are in different directories
