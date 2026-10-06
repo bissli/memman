@@ -11,6 +11,9 @@ Notes
   that id.
 - The parent opens with `read_only=True`, so a write to it raises on
   either backend.
+- Every node write raises while the branch's meta holds
+  `branch_merging`, which `branch.merge_branch` sets before it reads
+  the branch.
 """
 
 import dataclasses
@@ -30,6 +33,7 @@ from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import WorkerRun
 
 BRANCH_PARENT = 'branch_parent'
+BRANCH_MERGING = 'branch_merging'
 
 
 class OverlayNodeStore(NodeStore):
@@ -46,6 +50,13 @@ class OverlayNodeStore(NodeStore):
 
     def _held(self, id: Id) -> bool:
         return self._branch.get_include_deleted(id) is not None
+
+    def _require_unmerged(self) -> None:
+        if self._overlay.meta.get(BRANCH_MERGING) is not None:
+            raise BackendError(
+                f'branch {self._overlay.name!r} is merging into'
+                f' {self._overlay.parent_name!r}; re-run memman store merge'
+                f' {self._overlay.name} to finish it')
 
     def _require_held(self, id: Id) -> None:
         if not self._held(id):
@@ -123,9 +134,11 @@ class OverlayNodeStore(NodeStore):
         return f'{message}; {verb} {head.id} to {purpose} the current claim'
 
     def insert(self, ins: Insight) -> None:
+        self._require_unmerged()
         self._branch.insert(ins)
 
     def insert_raw(self, row: MigrateInsight) -> bool:
+        self._require_unmerged()
         return self._branch.insert_raw(row)
 
     def get_raw(self, id: Id) -> MigrateInsight | None:
@@ -176,18 +189,21 @@ class OverlayNodeStore(NodeStore):
 
     def soft_delete(self, id: Id) -> bool:
         with self._overlay.transaction():
+            self._require_unmerged()
             if not self._hold_for_retire(id, refuse_retired=True):
                 return False
             return self._branch.soft_delete(id)
 
     def soft_delete_current(self, id: Id) -> bool:
         with self._overlay.transaction():
+            self._require_unmerged()
             if not self._hold_for_retire(id, refuse_retired=False):
                 return False
             return self._branch.soft_delete_current(id)
 
     def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         with self._overlay.transaction():
+            self._require_unmerged()
             if not self._hold_for_retire(predecessor_id, refuse_retired=False):
                 return False
             return self._branch.mark_replaced(predecessor_id, successor_id)
@@ -211,6 +227,7 @@ class OverlayNodeStore(NodeStore):
         return result
 
     def update_enrichment(self, id: Id, *, summary: str) -> None:
+        self._require_unmerged()
         self._require_held(id)
         self._branch.update_enrichment(id, summary=summary)
 
@@ -248,6 +265,7 @@ class OverlayNodeStore(NodeStore):
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
+        self._require_unmerged()
         self._require_held(id)
         self._branch.update_embedding(id, vec, model)
 
@@ -261,12 +279,14 @@ class OverlayNodeStore(NodeStore):
         return self._branch.embedding_size_distribution()
 
     def stamp_enrich_attempted(self, id: Id) -> None:
+        self._require_unmerged()
         self._require_held(id)
         self._branch.stamp_enrich_attempted(id)
 
     def stamp_enriched(
             self, id: Id, *,
             prompt_version: str | None = None) -> None:
+        self._require_unmerged()
         self._require_held(id)
         self._branch.stamp_enriched(id, prompt_version=prompt_version)
 
@@ -292,6 +312,7 @@ class OverlayNodeStore(NodeStore):
         return self._branch.count_stale_insights(active_pv)
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
+        self._require_unmerged()
         for id in ids:
             self._require_held(id)
         self._branch.reset_for_rebuild(ids)

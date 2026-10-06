@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from memman import config, extras
+from memman.branch import read_branch_info
 from memman.embed import get_client
 from memman.embed import registry as _ec_registry
 from memman.embed.fingerprint import stored_fingerprint, swap_command
 from memman.exceptions import ConfigError
-from memman.fork import read_fork_info
 from memman.llm import client as llm_client
 from memman.llm import usage as llm_usage
 from memman.pipeline.remember import compute_prompt_version
@@ -978,36 +978,36 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
         'detail': detail}
 
 
-def check_forks(data_dir: str) -> dict[str, Any]:
-    """List each open fork with its parent and date.
+def check_branches(data_dir: str) -> dict[str, Any]:
+    """List each open branch with its parent and date.
 
     Returns
     -------
     dict[str, Any]
-        `warn` when a fork's parent does not exist or cannot be
-        checked, else `pass`. `detail.forks` holds `{store, parent,
-        created_at}` per fork, `detail.missing_parent` the forks whose
-        parent is gone, and `detail.errors` the failed checks.
+        `warn` when a branch's parent does not exist or cannot be
+        checked, else `pass`. `detail.branches` holds `{store, parent,
+        created_at}` per branch, `detail.missing_parent` the branches
+        whose parent is gone, and `detail.errors` the failed checks.
     """
-    forks: list[dict[str, Any]] = []
+    branches: list[dict[str, Any]] = []
     missing_parent: list[str] = []
     errors: list[dict[str, str]] = []
     for store in list_local_store_dirs(data_dir):
         try:
-            info = read_fork_info(store, data_dir)
+            info = read_branch_info(store, data_dir)
             if info is None:
                 continue
-            forks.append({'store': store, **info})
+            branches.append({'store': store, **info})
             if not factory.store_exists(info['parent'], data_dir):
                 missing_parent.append(store)
         except Exception as exc:
             errors.append({
                 'store': store, 'error': f'{type(exc).__name__}: {exc}'})
     return {
-        'name': 'forks',
+        'name': 'branches',
         'status': 'warn' if missing_parent or errors else 'pass',
         'detail': {
-            'forks': forks,
+            'branches': branches,
             'missing_parent': missing_parent,
             'errors': errors,
             },
@@ -1066,7 +1066,7 @@ def run_all_checks(
             check_env_completeness(),
             check_per_store_keys(data_dir),
             check_stale_post_migrate_source(data_dir),
-            check_forks(data_dir),
+            check_branches(data_dir),
             check_env_permissions(),
             check_claude_hooks(),
             check_codex_skill(),

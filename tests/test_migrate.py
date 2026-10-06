@@ -6,6 +6,7 @@ confirmation flow, and the per-store env-key write
 (`MEMMAN_BACKEND_<store>=postgres`) after a successful migrate.
 """
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,11 +14,14 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli
-from memman.migrate import SchemaState, inspect_target_schemas, preflight
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+from memman.migrate import MigrateInsight, MigrationPayload, SchemaState
+from memman.migrate import inspect_target_schemas, preflight
 from memman.store.db import open_db, set_meta, store_dir
 from memman.store.model import Insight
 from memman.store.node import insert_insight
 from memman.store.sqlite import SqliteMigrator
+from tests.conftest import invoke
 
 psycopg = pytest.importorskip('psycopg')
 
@@ -353,3 +357,82 @@ def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
     assert 'Migration plan' in result.output
     assert 'mig_cli_dry' in result.output
     assert 'dry-run' in result.output
+
+
+def _row(row_id, content, created_at):
+    """A MigrateInsight with only the columns the apply test reads.
+    """
+    return MigrateInsight(
+        id=row_id, content=content, summary=None, embedding=None,
+        enrich_attempted_at=None, enriched_at=None, created_at=created_at,
+        updated_at=created_at, deleted_at=None, prompt_version=None,
+        embedding_model=None, queue_uuid=None, replaced_by=None,
+        author=None)
+
+
+def _apply_payload(existing_id):
+    """A payload holding a clashing id, a new id, and empty meta.
+    """
+    when = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fp = seed_default_fingerprint()
+    return MigrationPayload(
+        fingerprint=fp, embedding_dim=fp.dim,
+        insights=[
+            _row(existing_id, 'clashing text', when),
+            _row('new-row', 'new text', when),
+            ],
+        oplog=[], meta={})
+
+
+def test_sqlite_apply_into_a_populated_store_inserts_only_new_ids(
+        mm_runner):
+    """Verify SqliteMigrator.apply skips ids the store already holds.
+
+    Mutation: the plain insert kept, which fails the whole apply on the
+    first clashing id.
+    Oracle: the existing row's text and the meta, read before the apply.
+    """
+    _, data_dir = mm_runner
+    existing = json.loads(invoke(mm_runner, [
+        'remember', 'The retry cap for batch jobs is three.']).output)['id']
+    before = SqliteMigrator(data_dir).gather('default')
+
+    SqliteMigrator(data_dir).apply('default', _apply_payload(existing))
+
+    after = SqliteMigrator(data_dir).gather('default')
+    rows = {ins.id: ins.content for ins in after.insights}
+    assert rows[existing] == 'The retry cap for batch jobs is three.'
+    assert rows['new-row'] == 'new text'
+    assert after.meta == before.meta
+
+
+@pytest.mark.postgres
+def test_postgres_apply_into_a_populated_store_inserts_only_new_ids(
+        pg_dsn):
+    """Verify PostgresMigrator.apply skips held ids and keeps the meta.
+
+    Mutation: an upsert of clashing rows, or a meta write that replaces
+    the store's own keys.
+    Oracle: the existing row's text and the meta, read before the apply.
+    """
+    from memman.store.postgres import PostgresMigrator, drop_postgres_store
+    from memman.store.postgres import open_postgres_backend
+    store = 'apply_populated'
+    drop_postgres_store(store, pg_dsn)
+    with open_postgres_backend(store, pg_dsn, create=True) as backend:
+        backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
+    migrator = PostgresMigrator(dsn=pg_dsn)
+    before = migrator.gather(store)
+    migrator.apply(store, _apply_payload('held-row'))
+    clash = _apply_payload('held-row')
+    clash.insights[0].content = 'second text'
+
+    try:
+        migrator.apply(store, clash)
+        after = migrator.gather(store)
+    finally:
+        drop_postgres_store(store, pg_dsn)
+
+    rows = {ins.id: ins.content for ins in after.insights}
+    assert rows['held-row'] == 'clashing text'
+    assert after.meta == before.meta

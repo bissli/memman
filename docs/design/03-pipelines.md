@@ -30,7 +30,7 @@ Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drai
 
 1. Check that writes are enabled, then validate the text against the [input rules](../USAGE.md#rejected-input).
 2. Identify potentially temporary information and report it as advisory `quality_warnings`.
-3. Check that the selected store exists, then append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity. On SQLite the check and the append share one `begin immediate` transaction, the same kind `store merge` and `store drop` use to remove a fork, so a write either reaches the queue before the removal, which then sees it and refuses, or meets the missing-store refusal. On Postgres the check is one schema query with `PGCONNECT_TIMEOUT` defaulting to three seconds; a connection error lets the write queue.
+3. Check that the selected store exists, then append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity. The check also refuses a branch whose merge started. On SQLite the check and the append share one `begin immediate` transaction. `store merge` and `store drop` remove a branch in the same kind of transaction. So a write either reaches the queue before the removal, and the removal then sees it and refuses, or the write meets the missing-store refusal. On Postgres the check is one schema query with `PGCONNECT_TIMEOUT` defaulting to three seconds. A connection error lets the write queue.
 4. Look for up to three related current memories. This uses word overlap and calls no model.
 5. Return JSON with `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related`.
 
@@ -203,46 +203,56 @@ Prompts, models, and providers change over time. memman does not aim for identic
 
 An enriched memory with a null `prompt_version` counts as current. A change to the summary-length filter alone leaves the prompt hash unchanged. [Chapter 4](04-lifecycle.md) covers embedding model changes, and [re-enrichment](../USAGE.md#re-enrichment) covers the commands.
 
-## 3.6 Experiment forks
+## 3.6 Store branches
 
-[Chapter 2](02-concepts.md#experiment-forks) defines a fork and its identity. The three verbs run in the agent's turn, hold the drain lock, and make no LLM or embedding call. Each refusal happens before anything is written.
+[Chapter 2](02-concepts.md#store-branches) defines a branch and its identity. A branch is an empty SQLite store whose `OverlayBackend` (`store/overlay.py`) reads the parent live. The three verbs run in the agent's turn, hold no row copy, and make no LLM or embedding call. `merge` and `drop` hold the drain lock. Each verb refuses before it writes anything.
 
-### Fork
+### Branch
 
-`store fork <parent> <label>` refuses a missing parent, a parent that is itself a fork, a label that fails the store-name rule or holds `__`, a parent with no fingerprint or with an embed swap or re-embed in progress, and a running drain. It then:
+`store branch <parent> <label>` refuses a label that fails the store-name rule or holds `__`, a missing parent, a parent that is itself a branch, a parent with no fingerprint or a corrupt one, and a parent with an embed swap or re-embed in progress. It takes no drain lock. It then:
 
-1. Reads the parent through its backend's migrator, as `migrate` does. A Postgres parent is only read.
-2. Draws a name, drawing again while one exists, and keeps only current rows. The oplog is not copied. The meta keeps `embed_fingerprint` and gains the three fork keys.
-3. Writes `MEMMAN_BACKEND_<fork>=sqlite`, and the parent's rerank key when it has one.
-4. Creates the fork directory and applies the payload with the SQLite migrator, which keeps every column (`created_at`, `summary`, `enriched_at`, `author`, and the embedding) and writes the meta in the same transaction as the rows. The FTS trigger indexes each row on insert.
+1. Reads the parent's meta through the parent's own backend, SQLite or Postgres.
+2. Draws a name, drawing again while a store of that name exists, and creates the branch directory.
+3. Writes `MEMMAN_BACKEND_<branch>=sqlite`, and the parent's rerank key when it has one.
+4. Creates the branch store with no rows and a meta of `embed_fingerprint` (the parent's), `branch_parent`, `branch_created_at`, and `branch_token`. Writes the same token to the parent's meta as `branch_token:<branch>`.
 
-A failure in the last two steps removes the directory and the env keys before raising. The drain lock keeps this host's drains off the parent during the read; a `forget` on the parent, or another host's drain on a Postgres parent, can still retire a row mid-read. Such a row is an inherited row the fork left alone, so merge keeps the parent's state for it.
+A failure after the directory exists removes the directory and the env keys before raising. The output carries the instruction line that routes a session to the branch: "Use memman store <branch> for this thread: pass --store <branch> to every memman recall, remember, replace, forget and insights show call."
+
+### Reads and writes
+
+The overlay opens the parent read-only on first use, so a plain `remember` and the drain's enrich work while the parent is unreachable. Every id the branch holds, in any state, hides the parent row with that id.
+
+- Recall ranks the branch's rows and the parent's current rows in one pass. It refuses when the parent's embed fingerprint differs from the branch's, and the message names the branch's embed swap.
+- Opening a branch never compares fingerprints, so the drain, `doctor`, an embed swap, and `drop` work across a parent swap.
+- `count_active` and the `status` total count the rows recall sees.
+- `remember`, `replace`, and `forget` write only the branch. A `replace` or `forget` of a current parent row copies the row raw into the branch and retires the copy there (copy-on-write). A `replace` or `forget` of a parent row the parent already retired fails and names the current head of its chain.
+- Enrich and embed write branch rows only. The drain's chain-follow on a `replace` follows only a successor the branch holds.
 
 ### Merge
 
-`store merge <fork>` takes its target from `fork_parent` alone, never from `--store`, `MEMMAN_STORE`, or the active-store file. It refuses a store without `fork_parent`, a missing parent, the active fork, a fingerprint that differs from the parent's (the message names the swap command for the fork), and a swap or re-embed in progress in either store. Under the drain lock it also refuses a `pending` or `failed` queue row for the fork, a `pending` parent `replace` whose target is an inherited row the fork retired, and a parent holding fewer than `fork_rows` of the fork's ids, which means the parent was removed and recreated, points at another database, or was restored from a backup older than the fork.
+`store merge <branch>` takes its target from `branch_parent` alone, never from `--store`, `MEMMAN_STORE`, or the active-store file. It refuses a store without `branch_parent`, the active branch, a missing parent, a fingerprint that differs from the parent's (the message names the swap command for the branch), a swap or re-embed in progress in either store, and a parent whose `branch_token:<branch>` is missing or differs from the branch's token. A token mismatch means the parent is a recreated store, points at another database, or came from a backup older than the branch.
 
-1. **Mark.** Write `fork_merging` into the fork's meta. `drop` refuses while it is set, so a merge that stops part way can only be finished by another merge.
-2. **Copy.** Every fork row whose id the parent lacks, current or retired, goes to the parent through its migrator's `apply`, with an empty oplog and empty meta. `apply` inserts rows absent from the store and leaves existing rows (`insert or ignore` on SQLite, `on conflict (id) do nothing` on Postgres), and keeps timestamps, summaries, authors, and embeddings. Postgres `apply` computes `kw_tokens`.
-3. **Retire.** For each inherited row the fork retired, repeat the retirement in the parent, all in one parent transaction, each with an oplog row whose detail is `merged from <fork>`.
-4. **Remove.** In one `begin immediate` transaction on `queue.db`: re-check for pending or failed fork rows, delete the fork directory, purge the fork's queue rows, commit. Then delete the fork's per-store env keys.
+1. **Mark.** Write `branch_merging` into the branch's meta. From then the overlay refuses every node write to the branch, and `remember` and `replace` refuse to queue for it. After the parent commit of step 3, `drop` refuses it too, so only another merge finishes it.
+2. **Check the queue.** In one `begin immediate` transaction on `queue.db`, look for `pending` or `failed` queue rows for the branch and for a `pending` or `failed` parent `replace` whose target's chain in the parent holds a row the branch retired. A failed one counts because a retry would follow the chain onto the branch's successor and retire it. A refusal here clears the flag.
+3. **Apply.** Read the branch, then in one parent transaction: re-read the parent's fingerprint, insert every branch-only row raw (`insert or ignore` on SQLite, `on conflict (id) do nothing` on Postgres, keeping timestamps, summaries, authors, and embeddings), repeat each retirement of a copied row by the table below, and remove the parent's token. Each applied retirement writes a parent oplog row whose detail is `merged from <branch>`.
+4. **Remove.** In one `begin immediate` transaction on `queue.db`: re-check for pending or failed branch rows, delete the branch directory, purge the branch's queue rows, commit. Then delete the branch's per-store env keys.
 
-Ids are random UUIDs, so rows written on either side after the fork never collide. Rows only the parent holds are never touched, and an inherited row the fork left alone keeps whatever the parent did to it since the fork. The retirement step reads each inherited row's state in both stores:
+Ids are random UUIDs, so rows written on either side never collide. Merge leaves a row only the parent holds as it is. The retirement step reads each copied row's state in both stores:
 
-| Fork state | Parent state                                | Result                                    |
-| ---------- | ------------------------------------------- | ----------------------------------------- |
-| replaced   | current, with or without a live predecessor | `mark_replaced` to the fork's successor   |
-| replaced   | replaced by the same successor              | done                                      |
-| replaced   | replaced by another row, or deleted         | conflict                                  |
-| deleted    | current                                     | `soft_delete_current`                     |
-| deleted    | current with a live predecessor             | conflict, as `forget` itself would refuse |
-| deleted    | deleted                                     | done                                      |
-| deleted    | replaced                                    | conflict                                  |
+| Branch state | Parent state                                | Result                                    |
+| ------------ | ------------------------------------------- | ----------------------------------------- |
+| replaced     | current, with or without a live predecessor | `mark_replaced` to the branch's successor |
+| replaced     | replaced by the same successor              | done                                      |
+| replaced     | replaced by another row, or deleted         | conflict                                  |
+| deleted      | current                                     | `soft_delete_current`                     |
+| deleted      | current with a live predecessor             | conflict, as `forget` itself would refuse |
+| deleted      | deleted                                     | done                                      |
+| deleted      | replaced                                    | conflict                                  |
 
-A fork row with `replaced_by` set counts as replaced whatever its `deleted_at` holds. Each write is guarded on the parent row still being current; a guard that fails re-reads the row and takes the table again, which covers a row another host's drain changed meanwhile. A conflict leaves the parent row as it is and adds `{id, fork_state, parent_state, fork_successor, parent_successor}` to the output, each successor present only for a `replaced` state. In a `replaced` conflict the fork's successor was copied as current, so the parent holds both it and its own state; a `deleted` conflict leaves the parent row current. Merge deletes the fork even when conflicts exist, and the agent settles each entry in the parent with `replace` or `forget`.
+A branch row with `replaced_by` set counts as replaced whatever its `deleted_at` holds. Each write checks that the parent row is still current. A failed check re-reads the row and takes the table again, which covers a row another host's drain changed meanwhile. A conflict leaves the parent row as it is and adds `{id, branch_state, parent_state, branch_successor, parent_head, branch_content, parent_content}` to the output. `parent_head` is the current row that ends the parent's chain from `id`: `id` itself while it is current, and null when the chain ends in a forgotten row. The two contents are the texts of `branch_successor` and `parent_head`. In a `replaced` conflict, step 3 inserted the branch's successor as current, so the parent holds both it and its own state. A `deleted` conflict leaves the parent row current. Merge deletes the branch even when conflicts exist, and the agent settles each entry in the parent with `replace` or `forget`. The output also carries `copied` and `retired`.
 
-A failure after the copy says to re-run. The re-run recomputes the parent's id set, so a row an earlier run copied counts as inherited, and a retirement an earlier run applied reads as done. The fork's own oplog is discarded, and a merge-time soft delete carries the merge time.
+When the parent transaction fails, it rolls back everything it wrote. Merge leaves the flag set and says to re-run. When a re-run finds the flag set, the parent's token gone, and every branch id already in the parent, it writes nothing to the parent. It takes the retirement table against the parent as it stands, reports each conflict, then runs the removal. Merge discards the branch's own oplog, and a merge-time soft delete carries the merge time.
 
 ### Drop
 
-`store drop <fork>` refuses a store without `fork_parent`, a fork with `fork_merging` set, the active fork, a running drain, a pending or failed queue row for the fork, and a parent whose existence check hits a connection error, since the list below could not be computed. It reads the fork's current rows, keeps those whose id the parent lacks (every current row when the parent no longer exists), removes the fork in the same `queue.db` transaction merge uses, and deletes the fork's env keys. The output lists each kept row as `{id, content}`, so the agent can re-save a claim unrelated to the thread with `remember --store <parent>` and then write a closing row.
+`store drop <branch>` refuses a store without `branch_parent`, a branch that a re-run of merge would finish (the state above), the active branch, a running drain, and a pending or failed queue row for the branch. It reads the branch's current rows, then asks the parent which rows they correct. `replaces` names the parent row at the root of the row's chain in the branch, and is null for a branch-only chain and for every row when the parent cannot answer. The parent read uses `PGCONNECT_TIMEOUT` defaulting to three seconds. A missing parent does not stop the drop. An unreachable parent stops it only when the flag is set, since drop then cannot tell whether a merge wrote the parent. Drop then removes the branch as merge does. After that it removes the parent's token, when the parent holds it. When the token removal fails, drop logs a warning and still returns the listing. When the queue re-check refuses the drop, the token stays, so a later merge still accepts the branch. The output lists each current row as `{id, content, replaces}`, so the agent can re-save a claim unrelated to the thread with `remember --store <parent>` and then write a closing row.

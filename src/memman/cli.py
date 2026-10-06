@@ -34,8 +34,8 @@ from urllib.parse import quote
 
 import click
 import memman
+from memman import branch as branch_mod
 from memman import config
-from memman import fork as fork_mod
 from memman.drain_lock import DrainLockBusy, acquire, release
 from memman.embed import fingerprint, get_client
 from memman.embed import registry as _ec_registry
@@ -66,8 +66,9 @@ from memman.store.model import insight_to_delta_dict, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.node import count_active_insights, get_stats
 from memman.store.node import iter_for_reembed
-from memman.store.overlay import BRANCH_PARENT, OverlayBackend
+from memman.store.overlay import BRANCH_MERGING, BRANCH_PARENT, OverlayBackend
 from memman.store.sqlite import SqliteBackend, SqliteMigrator
+from memman.store.sqlite import open_sqlite_backend
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -402,16 +403,30 @@ def _enqueue_into_existing_store(
     Raises
     ------
     click.ClickException
-        The store does not exist, or its config cannot reach it (no
-        DSN, no postgres extra). Nothing is queued. A Postgres
-        connection error is no answer, so that write queues.
+        The store does not exist, its config cannot reach it (no DSN,
+        no postgres extra), or it is a branch a merge started. Nothing
+        is queued. A Postgres connection error is no answer, so that
+        write queues.
     """
     if resolve_store_backend(name, data_dir) == 'sqlite':
-        # Pairs with `fork._remove_fork`, so a write cannot outlive a drop.
+        # Pairs with the queue checks of `branch._remove_branch` and
+        # `branch.merge_branch`, so a write cannot outlive a drop or
+        # slip past a merge.
         conn.execute('begin immediate')
         try:
             if not store_exists(data_dir, name):
                 raise click.ClickException(str(StoreMissingError(name)))
+            try:
+                with open_sqlite_backend(
+                        name, data_dir, read_only=True) as backend:
+                    merging = backend.meta.get(BRANCH_MERGING) is not None
+            except BackendError as exc:
+                logger.debug(f'merge flag check for {name!r} failed: {exc}')
+                merging = False
+            if merging:
+                raise click.ClickException(
+                    f'store {name!r} is merging into its parent; re-run'
+                    f' memman store merge {name} to finish it')
             queued = enqueue(
                 conn, store=name, content=content,
                 replaced_id=replaced_id, author=author)
@@ -2384,21 +2399,21 @@ def store(ctx: click.Context) -> None:
 @store.command('list')
 @click.pass_context
 def store_list(ctx: click.Context) -> None:
-    """List all stores as JSON (stores[], active, forks{name: info}).
+    """List all stores as JSON (stores[], active, branches{name: info}).
     """
     data_dir = ctx.obj['data_dir']
     stores = list_stores(data_dir)
     active = _resolve_store_name(data_dir, ctx.obj['store']) if stores else None
-    forks = {}
+    branches = {}
     for name in list_local_store_dirs(data_dir):
         try:
-            info = fork_mod.read_fork_info(name, data_dir)
+            info = branch_mod.read_branch_info(name, data_dir)
         except BackendError as exc:
-            logger.debug(f'store list skips fork info for {name!r}: {exc}')
+            logger.debug(f'store list skips branch info for {name!r}: {exc}')
             continue
         if info is not None:
-            forks[name] = info
-    _json_out({'stores': stores, 'active': active, 'forks': forks})
+            branches[name] = info
+    _json_out({'stores': stores, 'active': active, 'branches': branches})
 
 
 @store.command('create')
@@ -2413,7 +2428,7 @@ def store_create(ctx: click.Context, name: str) -> None:
             f'invalid store name {name!r}')
     if '__' in name:
         raise click.ClickException(
-            f'invalid store name {name!r}: `__` is reserved for forks')
+            f'invalid store name {name!r}: `__` is reserved for branches')
     if name in factory.list_stores(data_dir):
         raise click.ClickException(
             f'store "{name}" already exists')
@@ -2435,9 +2450,9 @@ def store_use(ctx: click.Context, name: str) -> None:
         raise click.ClickException(f'invalid store name {name!r}')
     if name not in factory.list_stores(data_dir):
         raise click.ClickException(str(StoreMissingError(name)))
-    if fork_mod.read_fork_info(name, data_dir) is not None:
+    if branch_mod.read_branch_info(name, data_dir) is not None:
         raise click.ClickException(
-            f'store {name!r} is a fork, and the active file routes every'
+            f'store {name!r} is a branch, and the active file routes every'
             f' session on this host; pass --store {name} to each memory'
             ' verb instead')
     write_active(data_dir, name)
@@ -2496,20 +2511,21 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 
 
 @claude_callable(store_option=False)
-@store.command('fork')
+@store.command('branch')
 @click.argument('parent')
 @click.argument('label')
 @click.pass_context
-def store_fork(ctx: click.Context, parent: str, label: str) -> None:
-    """Start an experiment fork: a local copy of PARENT's current rows.
+def store_branch(ctx: click.Context, parent: str, label: str) -> None:
+    """Start a branch: an empty local store layered over PARENT.
 
     \b
     Parameters
     ----------
     parent : str
-        Store to copy, on any backend. It is only read.
+        Store to branch, on any backend. It gains only the branch's
+        token.
     label : str
-        Name part for the fork, without `__`. The fork is named
+        Name part for the branch, without `__`. The branch is named
         `<parent>__<label>_<4 hex>`.
 
     \b
@@ -2518,74 +2534,82 @@ def store_fork(ctx: click.Context, parent: str, label: str) -> None:
     - Only on the user's request. The JSON reply carries
       `instruction`, the line to paste into the notes the thread's next
       session reads. With no such notes, ask the user where it goes.
+    - Recall on the branch ranks its own rows with PARENT's live rows.
+      A replace or forget of a PARENT row acts on a copy in the branch.
     - Ends with `memman store merge` or `memman store drop`.
 
     \b
     Examples
     --------
-    memman store fork memman rearch
+    memman store branch memman rearch
     """  # noqa: D301, D410, D411
-    _json_out(fork_mod.create_fork(ctx.obj['data_dir'], parent, label))
+    _json_out(branch_mod.create_branch(ctx.obj['data_dir'], parent, label))
 
 
 @claude_callable(store_option=False)
 @store.command('merge')
-@click.argument('fork')
+@click.argument('branch')
 @click.pass_context
-def store_merge(ctx: click.Context, fork: str) -> None:
-    """Keep an experiment fork: replay it into its parent, then delete it.
+def store_merge(ctx: click.Context, branch: str) -> None:
+    """Keep a branch: replay it into its parent, then delete it.
 
     \b
     Parameters
     ----------
-    fork : str
-        A store made by `memman store fork`. Any other store is refused.
+    branch : str
+        A store made by `memman store branch`. Any other store is
+        refused.
 
     \b
     Notes
     -----
-    - Only on the user's request. The parent is the fork's own
-      `fork_parent`, never the active store or `--store`.
-    - Rows written in the fork are copied with their dates, summaries
-      and embeddings. A replace or forget the fork made on an inherited
-      row is repeated in the parent.
-    - Each entry of `conflicts` is an inherited row the fork and the
-      parent retired differently. The parent keeps its own state;
-      settle each with replace or forget in the parent.
-    - Refused while the fork has queued writes, and while either store
-      is mid embed swap or re-embed. A run that stops part way says to
-      re-run, which finishes it.
+    - Only on the user's request. The parent is the branch's own
+      `branch_parent`, never the active store or `--store`.
+    - Rows written in the branch are copied with their dates, summaries
+      and embeddings. A replace or forget the branch made on a parent
+      row is repeated in the parent, all in one parent transaction.
+    - Each entry of `conflicts` is a parent row the branch and the
+      parent retired differently. The parent keeps its own state, and
+      `parent_head` names the parent's current row for it. Settle each
+      with replace or forget in the parent.
+    - Refused while the branch has queued writes, while either store is
+      mid embed swap or re-embed, and when the parent does not hold the
+      branch's token. A run that stops part way says to re-run, which
+      finishes it.
 
     \b
     Examples
     --------
     memman store merge memman__rearch_7f3a
     """  # noqa: D301, D410, D411
-    _json_out(fork_mod.merge_fork(ctx.obj['data_dir'], fork))
+    _json_out(branch_mod.merge_branch(ctx.obj['data_dir'], branch))
 
 
 @claude_callable(store_option=False)
 @store.command('drop')
-@click.argument('fork')
+@click.argument('branch')
 @click.pass_context
-def store_drop(ctx: click.Context, fork: str) -> None:
-    """Throw an experiment fork away, listing the rows written in it.
+def store_drop(ctx: click.Context, branch: str) -> None:
+    """Throw a branch away, listing the rows written in it.
 
     \b
     Parameters
     ----------
-    fork : str
-        A store made by `memman store fork`. Any other store is refused.
+    branch : str
+        A store made by `memman store branch`. Any other store is
+        refused.
 
     \b
     Notes
     -----
     - Only on the user's request. Nothing reaches the parent.
-    - `dropped` holds `{id, content}` for each current fork row the
-      parent lacks. Re-save each claim unrelated to the thread with
-      `memman remember --store <parent>`, then a closing row saying
-      why the thread was dropped.
-    - Refused while the fork has queued writes, and after a merge that
+    - `dropped` holds `{id, content, replaces}` for each current branch
+      row. `replaces` names the parent row the claim corrects. Re-save
+      each claim unrelated to the thread with `memman remember --store
+      <parent>`, or `memman replace --store <parent> <replaces>` where
+      `replaces` is set, then a closing row saying why the thread was
+      dropped.
+    - Refused while the branch has queued writes, and after a merge that
       stopped part way, which only a re-run of merge ends.
 
     \b
@@ -2593,7 +2617,7 @@ def store_drop(ctx: click.Context, fork: str) -> None:
     --------
     memman store drop memman__rearch_7f3a
     """  # noqa: D301, D410, D411
-    _json_out(fork_mod.drop_fork(ctx.obj['data_dir'], fork))
+    _json_out(branch_mod.drop_branch(ctx.obj['data_dir'], branch))
 
 
 @cli.group(invoke_without_command=True)
@@ -2860,11 +2884,11 @@ def status(ctx: click.Context) -> None:
             'oplog_count': node_stats.oplog_count,
             'storage_path': backend.path,
             }
-        fork_parent = backend.meta.get(fork_mod.FORK_PARENT)
-        if fork_parent is not None:
-            out['fork_parent'] = fork_parent
-            out['fork_created_at'] = backend.meta.get(
-                fork_mod.FORK_CREATED_AT)
+        branch_parent = backend.meta.get(BRANCH_PARENT)
+        if branch_parent is not None:
+            out['branch_parent'] = branch_parent
+            out['branch_created_at'] = backend.meta.get(
+                branch_mod.BRANCH_CREATED_AT)
         _json_out(out)
 
 
@@ -3478,9 +3502,9 @@ def migrate(
     skipped: list[str] = []
     for s in stores_all:
         current = resolve_store_backend(s, data_dir)
-        if fork_mod.read_fork_info(s, data_dir) is not None:
+        if branch_mod.read_branch_info(s, data_dir) is not None:
             click.echo(
-                f'Skipping {s!r}: it is a fork, which stays local; end it'
+                f'Skipping {s!r}: it is a branch, which stays local; end it'
                 f' with memman store merge {s} or memman store drop {s}.',
                 err=True)
             skipped.append(s)

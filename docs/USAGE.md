@@ -20,7 +20,7 @@ Examples use `<id>` and `<name>` as placeholders. Square brackets in a synopsis 
 
 ## Global flags
 
-A global flag goes before the subcommand: `memman --store work recall "retry cap"`. The agent verbs other than `store fork`, `store merge`, and `store drop` also take `--store` after the verb, `memman recall --store work "retry cap"`, with the same effect; a command that gives both flags with different names is refused. The `--store` option of `memman migrate` and `memman config set-pg-dsn` is a separate subcommand option with its own meaning.
+A global flag goes before the subcommand: `memman --store work recall "retry cap"`. The agent verbs other than `store branch`, `store merge`, and `store drop` also take `--store` after the verb, `memman recall --store work "retry cap"`, with the same effect. memman refuses a command that gives both flags with different names. The `--store` option of `memman migrate` and `memman config set-pg-dsn` is a separate subcommand option with its own meaning.
 
 | Flag                | Default     | Description                                                                                                                                                        |
 | ------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -94,7 +94,7 @@ memman install --codex
 
 In Codex, `$memman` invokes the skill, as in `Use $memman to recall our deployment decisions`. A new session loads a skill the running one does not show. Codex gets no lifecycle hooks: the skill alone tells the agent when to recall and save, and the agent runs the same CLI.
 
-The Codex sandbox blocks writes to the memman data directory and the provider network calls, so a sandboxed `memman` call fails or stops for approval. Installation therefore writes `$CODEX_HOME/rules/memman.rules`, one `prefix_rule(..., decision="allow")` line for each of the eleven verbs Claude Code also allows: `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store drop`, `store fork`, and `store merge`. Codex runs an allowed verb outside the sandbox with no prompt. An interactive installation lists the rules and asks first. With `--no-wizard` or no terminal, it writes them without a prompt. A `--store` after the verb, as in `memman recall --store NAME`, matches the verb's rule. A call that puts a global option first, such as `memman --store NAME recall`, matches no rule and still prompts. Installation leaves `config.toml`, `AGENTS.md`, and every other rules file unchanged.
+The Codex sandbox blocks writes to the memman data directory and the provider network calls, so a sandboxed `memman` call fails or stops for approval. Installation therefore writes `$CODEX_HOME/rules/memman.rules`, one `prefix_rule(..., decision="allow")` line for each of the eleven verbs Claude Code also allows: `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store branch`, `store drop`, and `store merge`. Codex runs an allowed verb outside the sandbox with no prompt. An interactive installation lists the rules and asks first. With `--no-wizard` or no terminal, it writes them without a prompt. A `--store` after the verb, as in `memman recall --store NAME`, matches the verb's rule. A call that puts a global option first, such as `memman --store NAME recall`, matches no rule and still prompts. Installation leaves `config.toml`, `AGENTS.md`, and every other rules file unchanged.
 
 Codex needs `memman` on its shell's `PATH`. For a custom data directory, the Codex environment sets `MEMMAN_DATA_DIR`, or the call passes `memman --data-dir PATH ...`.
 
@@ -387,19 +387,19 @@ memman scheduler start
 A store is a named, isolated set of memories: one SQLite file or one Postgres schema. [Chapter 2](design/02-concepts.md) explains why stores exist.
 
 ```bash
-memman store list            # JSON: {stores, active, forks}
+memman store list            # JSON: {stores, active, branches}
 memman store create work
 memman store use work        # write "work" to the active-store file
 memman store remove old-project [--yes]
-memman store fork work rearch          # a fork of work, named work__rearch_<4 hex>
-memman store merge work__rearch_7f3a   # replay the fork into work, then delete it
-memman store drop work__rearch_7f3a    # list the fork's own rows, then delete it
+memman store branch work rearch        # a branch of work, named work__rearch_<4 hex>
+memman store merge work__rearch_7f3a   # replay the branch into work, then delete it
+memman store drop work__rearch_7f3a    # list the branch's own rows, then delete it
 ```
 
-- A store name starts with a letter or digit and continues with letters, digits, `_`, or `-`. A Postgres store also needs a name that is a valid SQL identifier. `store create` refuses a name holding `__`, which marks a fork.
+- A store name starts with a letter or digit and continues with letters, digits, `_`, or `-`. A Postgres store also needs a name that is a valid SQL identifier. `store create` refuses a name holding `__`, which marks a branch.
 - A store exists once `store create` has made it. Every command that opens a store, `remember` and `replace` included, refuses a store that does not exist with `store "<name>" does not exist (create it with memman store create <name>)` and writes nothing: no directory, no Postgres schema, no env key. `memman install` creates the store the active-store file names.
-- `store use` accepts only an existing store, and refuses a fork.
-- `store remove` asks first unless `--yes` is given. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It removes a fork too, without the `dropped` list that `store drop` prints.
+- `store use` accepts only an existing store, and refuses a branch.
+- `store remove` asks first unless the call passes `--yes`. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It removes a branch too, without the `dropped` list that `store drop` prints.
 - `memman store` with no subcommand runs `store list`.
 
 **Store selection**, from highest priority to lowest:
@@ -409,22 +409,23 @@ memman store drop work__rearch_7f3a    # list the fork's own rows, then delete i
 3. the active-store file `<data dir>/active`,
 4. `default`.
 
-### Experiment forks
+### Store branches
 
-A fork is a SQLite store that starts as a copy of a parent store's current rows and ends with `store merge` or `store drop`. It holds one research thread's writes apart from the parent while other sessions keep writing to the parent. [Chapter 3](design/03-pipelines.md#36-experiment-forks) describes the three flows.
+A branch is an empty SQLite store layered over its live parent store. It ends with `store merge` or `store drop`. It holds one research thread's writes apart from the parent, while recall on the branch also reads the parent's current rows. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
 
-| Command                       | Effect                                                                                                                                                                                  |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store fork <parent> <label>` | Copies the parent's current rows into `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `rows`, `created_at`, and `instruction`.          |
-| `store merge <fork>`          | Copies the fork's own rows into the parent, repeats the fork's `replace` and `forget` on inherited rows, deletes the fork. Prints `copied`, `retired`, and `conflicts`.                 |
-| `store drop <fork>`           | Deletes the fork. Prints `dropped`, the `{id, content}` of each current fork row the parent lacks, so a claim unrelated to the thread can be re-saved with `remember --store <parent>`. |
+| Command                         | Effect                                                                                                                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store branch <parent> <label>` | Creates an empty `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `path`, `created_at`, and `instruction`.                                                                                         |
+| `store merge <branch>`          | Copies the branch's own rows into the parent, repeats the branch's `replace` and `forget` on parent rows, deletes the branch. Prints `copied`, `retired`, and `conflicts`.                                                                        |
+| `store drop <branch>`           | Deletes the branch. Prints `dropped`, the `{id, content, replaces}` of each current branch row, so the agent can re-save a claim unrelated to the thread with `remember --store <parent>`. `replaces` names the parent row the row corrects, else null. |
 
-- The parent of a fork is the `fork_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store.
-- The `instruction` line names the fork, the memory verbs that take `--store`, the parent, and the fork date. A session that reads the line passes `--store <fork>` to every memory verb. A session without it uses the parent.
-- A `--store <fork>` recall returns the fork's own rows and every row current in the parent at fork time. A `recall --store <parent>` reads rows the parent gained later; the session uses only rows dated on or after the fork date, since a recall page prints `created_at` as a date.
-- `merge` refuses while the fork has queued writes, while either store has an embed swap or re-embed in progress, when the fork's embedding fingerprint differs from the parent's, and when the parent lacks rows the fork copied. Each `conflicts` entry is an inherited row the fork and the parent retired differently; the parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
-- `drop` refuses a fork whose merge stopped part way; a re-run of `merge` finishes it.
-- A fork cannot be the active store, is skipped by `migrate`, and is bundled by `backup` like any store. `doctor` lists each fork with its parent and creation time.
+- The parent of a branch is the `branch_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store. `store branch` refuses a branch as parent. Any number of branches of one parent can stay open. Siblings see each other's rows only after one merges.
+- The `instruction` line reads "Use memman store <branch> for this thread: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A session that reads the line passes `--store <branch>` to every memory verb. A session without it uses the parent.
+- A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. `status` counts the rows recall sees.
+- `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `replace` or `forget` of a parent row the parent already retired fails and names the current head.
+- `merge` refuses a store that is not a branch, the active branch, a missing parent, queued writes for the branch, a pending or failed parent `replace` whose target's chain holds a row the branch retired, an embed swap or re-embed in progress in either store, a branch whose embedding fingerprint differs from the parent's, and a parent that does not hold the branch's token. After the checks it refuses every further write to the branch. Each `conflicts` entry is a copied row the branch and the parent retired differently. The parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
+- A `merge` that stops part way says to re-run `merge`, which finishes it. A re-run after the parent commit writes nothing more to the parent and reports the conflicts as the parent holds them. `drop` refuses a branch whose merge stopped after the parent commit, the active branch, and a branch with queued writes. A missing parent does not stop `drop`. An unreachable parent stops it only for a branch whose merge started.
+- A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time.
 
 **Per-directory stores.** memman reads `MEMMAN_STORE` from the process environment, so a tool that sets variables per directory switches the store on a directory change.
 
@@ -676,7 +677,7 @@ memman config set-pg-dsn --store work    # prompt for a DSN, write MEMMAN_POSTGR
 
 ### Backend selection
 
-A store's backend is `MEMMAN_BACKEND_<store>`, then `MEMMAN_DEFAULT_BACKEND`, then `sqlite`. The first drain that writes to a store records `MEMMAN_BACKEND_<store>` from the default, together with `MEMMAN_POSTGRES_DSN_<store>` from `MEMMAN_DEFAULT_POSTGRES_DSN` when the default is `postgres`. A later change to `MEMMAN_DEFAULT_BACKEND` therefore moves no store that has been written to. `memman migrate` moves a store and its data. `store fork` writes `MEMMAN_BACKEND_<fork>=sqlite` itself, whatever the default, because a fork is always SQLite.
+A store's backend is `MEMMAN_BACKEND_<store>`, then `MEMMAN_DEFAULT_BACKEND`, then `sqlite`. The first drain that writes to a store records `MEMMAN_BACKEND_<store>` from the default, together with `MEMMAN_POSTGRES_DSN_<store>` from `MEMMAN_DEFAULT_POSTGRES_DSN` when the default is `postgres`. A later change to `MEMMAN_DEFAULT_BACKEND` therefore moves no store a drain has written to. `memman migrate` moves a store and its data. `store branch` writes `MEMMAN_BACKEND_<branch>=sqlite` itself, whatever the default, because a branch is always SQLite.
 
 A Postgres store lives in the schema `store_<name>`. Its DSN is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. The write queue is always SQLite, at `<data dir>/queue.db`.
 
@@ -713,15 +714,15 @@ These variables are not installable. The component that uses each one reads it f
 
 ## Troubleshooting
 
-| Symptom                                           | Check                                           | Next step                                                                                                                                 |
-| ------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| A new memory does not appear in recall            | `scheduler status`, then `scheduler queue list` | Wait for processing; inspect a failed entry and fix its reported error before retrying.                                                   |
-| Writes report that the scheduler is stopped       | `scheduler status`                              | Run `scheduler start` when maintenance is finished.                                                                                       |
-| Recall warns about embedding or reranking         | `embed status`, then endpoint settings          | Restore the required key or endpoint; reranking can be disabled separately.                                                               |
-| Even `recall --basic` fails on a missing key      | Global embedding model and endpoint             | Supply the key required during store opening.                                                                                             |
-| Doctor reports incomplete enrichment              | `doctor --text`                                 | Stop the scheduler, run `enrich --stale-only`, then restart it.                                                                           |
-| A model swap was interrupted                      | `embed status`                                  | Resume or abort the swap.                                                                                                                 |
-| Claude Code has no memory reminders               | `doctor --text`                                 | Re-run `memman install` and start a new session.                                                                                          |
-| A memory verb reports that a store does not exist | `store list`                                    | Create it with `store create NAME`, or correct `--store`, `MEMMAN_STORE`, or a stale fork instruction line so it names an existing store. |
+| Symptom                                           | Check                                           | Next step                                                                                                                                   |
+| ------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| A new memory does not appear in recall            | `scheduler status`, then `scheduler queue list` | Wait for processing; inspect a failed entry and fix its reported error before retrying.                                                     |
+| Writes report that the scheduler is stopped       | `scheduler status`                              | Run `scheduler start` when maintenance is finished.                                                                                         |
+| Recall warns about embedding or reranking         | `embed status`, then endpoint settings          | Restore the required key or endpoint; reranking can be disabled separately.                                                                 |
+| Even `recall --basic` fails on a missing key      | Global embedding model and endpoint             | Supply the key required during store opening.                                                                                               |
+| Doctor reports incomplete enrichment              | `doctor --text`                                 | Stop the scheduler, run `enrich --stale-only`, then restart it.                                                                             |
+| A model swap was interrupted                      | `embed status`                                  | Resume or abort the swap.                                                                                                                   |
+| Claude Code has no memory reminders               | `doctor --text`                                 | Re-run `memman install` and start a new session.                                                                                            |
+| A memory verb reports that a store does not exist | `store list`                                    | Create it with `store create NAME`, or correct `--store`, `MEMMAN_STORE`, or a stale branch instruction line so it names an existing store. |
 
 Commands in this table take the `memman` prefix. `doctor` makes live provider probes, and the queue and worker logs show processing without them.

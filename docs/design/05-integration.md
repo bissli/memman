@@ -71,7 +71,7 @@ The event source determines whether the reminder appears. The reminder still app
 | `~/.claude/settings.json`, key `hooks`             | Event registrations and matchers.       |
 | `~/.claude/settings.json`, key `permissions.allow` | Eleven `Bash(memman <verb>:*)` entries. |
 
-The permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store drop`, `store fork`, and `store merge`. Each verb other than the three store verbs takes `--store` after the verb, so a call on a named store still matches its entry. In an interactive installation, memman lists the entries and asks before adding them. With `--no-wizard` or no terminal, it adds them without a prompt.
+The permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store drop`, `store branch`, and `store merge`. Each verb other than the three store verbs takes `--store` after the verb, so a call on a named store still matches its entry. In an interactive installation, memman lists the entries and asks before adding them. With `--no-wizard` or no terminal, it adds them without a prompt.
 
 Installation replaces existing hook entries mentioning memman and preserves other hooks. Re-running it leaves one set of registrations. The guide needs no symlink because prime reads it from the package. Installation never moves an existing SQLite store to a newly chosen Postgres backend. `memman migrate` moves a store.
 

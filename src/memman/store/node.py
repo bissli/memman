@@ -141,8 +141,8 @@ def mark_insight_replaced(
         degrades to a plain add.
     """
     now = format_timestamp(datetime.now(timezone.utc))
-    # The `replaced_by is null` guard replaces a row at most once,
-    # which rules out forks in the chain.
+    # The `replaced_by is null` guard replaces a row at most once, so
+    # no row in a chain has two successors.
     sql = """
 update insights
 set replaced_by = ?, updated_at = ?

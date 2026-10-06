@@ -124,16 +124,16 @@ Generated fields carry markers for later maintenance:
 
 ![CLI, worker, search, providers, and storage](../diagrams/02-system-architecture.drawio.png)
 
-| Area        | Main modules                                                                                                                      | Responsibility                                                                                      |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Integration | `setup/`, `setup/assets/claude/`                                                                                                  | Installation, hooks, guide, and skill.                                                              |
-| Commands    | `cli.py`, `session.py`, `config.py`                                                                                               | CLI entry points, store sessions, and settings.                                                     |
-| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
-| Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                                  |
-| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                               |
-| Storage     | `store/`, `migrate/`, `backup/`, `fork.py`                                                                                        | Backend interface, SQLite and Postgres, migration, snapshots, and experiment forks.                 |
-| Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                                     |
-| Scripts     | `scripts/enrich_stale.py`                                                                                                         | `enrich --stale-only` over many stores.                                                             |
+| Area        | Main modules                                                                                                                        | Responsibility                                                                                      |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Integration | `setup/`, `setup/assets/claude/`                                                                                                    | Installation, hooks, guide, and skill.                                                              |
+| Commands    | `cli.py`, `session.py`, `config.py`                                                                                                 | CLI entry points, store sessions, and settings.                                                     |
+| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py`   | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
+| Search      | `search/`                                                                                                                           | Keyword matching, rank fusion, and quality checks.                                                  |
+| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                         | Model clients, usage accounting, embedding bindings, and model swaps.                               |
+| Storage     | `store/`, `migrate/`, `backup/`, `branch.py`                                                                                        | Backend interface, SQLite and Postgres, migration, snapshots, and store branches.                   |
+| Diagnostics | `doctor.py`, `trace.py`                                                                                                             | Health checks and debug events.                                                                     |
+| Scripts     | `scripts/enrich_stale.py`                                                                                                           | `enrich --stale-only` over many stores.                                                             |
 
 The `Backend` protocol in [store/backend.py](../../src/memman/store/backend.py) separates pipelines from database details. The shared queue and scheduler coordinate writes across stores.
 
@@ -167,7 +167,7 @@ The default data directory is `~/.memman`:
     |   +-- memman.db           # one SQLite file per store, WAL mode
     +-- <name>/
     |   +-- memman.db
-    +-- <parent>__<label>_<id>/ # an experiment fork, always SQLite
+    +-- <parent>__<label>_<id>/ # a store branch, always SQLite
         +-- memman.db
 ```
 
@@ -195,14 +195,16 @@ Store selection follows this order:
 
 `memman store use work` changes the shared default. `MEMMAN_STORE=work` selects a store for one process and its children, which lets separate agent sessions use different stores. The agent verbs also accept `--store` after the verb, which routes like the global flag and matches the `Bash(memman <verb>:*)` allow rules and the Codex rules.
 
-The selected store must already exist. `store create`, `store fork`, `migrate`, `backup restore`, and `memman install` are the only commands that create one. Every other command that opens a store, and `remember` and `replace` before they queue, refuse a missing store and write nothing: no directory, no Postgres schema, and no `MEMMAN_BACKEND_<store>` key. On SQLite a store exists when its directory does; on Postgres, when the `store_<name>` schema does. A Postgres connection error is neither answer, so `remember` and `replace` queue the write, and the drain reports the error.
+The selected store must already exist. `store create`, `store branch`, `migrate`, `backup restore`, and `memman install` are the only commands that create one. Every other command that opens a store, and `remember` and `replace` before they queue, refuse a missing store and write nothing: no directory, no Postgres schema, and no `MEMMAN_BACKEND_<store>` key. On SQLite a store exists when its directory does. On Postgres it exists when the `store_<name>` schema does. A Postgres connection error is neither answer, so `remember` and `replace` queue the write, and the drain reports the error.
 
 Changing the data directory also changes the settings file and queue. A scheduler drains only its configured directory, so named stores separate projects within one installation. [Store management](../USAGE.md#store-management) covers the commands and directory-based selection.
 
-### Experiment forks
+### Store branches
 
-A fork is a SQLite store that begins as a copy of a parent store's current rows. One research thread writes into it, through a pasted instruction line that adds `--store <fork>` to every memory verb, while other sessions keep writing to the parent. The thread ends with `store merge`, which replays the fork into the parent, or `store drop`, which lists the fork's own rows and deletes it. [Chapter 3](03-pipelines.md#36-experiment-forks) describes the three flows.
+A branch is an empty SQLite store layered over its live parent store. One research thread writes into it. A pasted instruction line adds `--store <branch>` to every memory verb of that thread. Other sessions keep writing to the parent. Recall on the branch ranks the branch's rows and the parent's current rows in one pass. The thread ends with `store merge`, which replays the branch into the parent, or `store drop`, which lists the branch's current rows and deletes it. [Chapter 3](03-pipelines.md#36-store-branches) describes the three flows.
 
-A store is a fork exactly when its `meta` table holds `fork_parent`, whose value names the parent. `store fork` also writes `fork_created_at`, the UTC fork time, and `fork_rows`, the count of rows it copied, and copies the parent's `embed_fingerprint`. No code reads the parent from the store name. `merge` and `drop` act only on a store with `fork_parent`, so no agent-callable verb can delete an ordinary store.
+A store is a branch exactly when its `meta` table holds `branch_parent`, whose value names the parent. `store branch` also writes `branch_created_at`, the UTC creation time, and `branch_token`, a random value. The parent's meta holds the same token under `branch_token:<branch>`. `store branch` also copies the parent's `embed_fingerprint`. No code reads the parent from the store name. `merge` and `drop` act only on a store with `branch_parent`, so no agent-callable verb can delete an ordinary store.
 
-The name is `<parent>__<label>_<id>`, where `<id>` is four lowercase hex digits. `__` is reserved: `store create` refuses a name holding it, and a label may not hold it, so an ordinary store never carries the fork shape. The fork takes `MEMMAN_BACKEND_<fork>=sqlite` and copies the parent's `MEMMAN_RERANK_ENABLED_<parent>` when set. A fork of a fork is refused, `store use` refuses a fork because the active-store file would route every session on the host into it, and `migrate` skips a fork. `backup` bundles forks like other stores. A fork exists only on the host that made it.
+The name is `<parent>__<label>_<id>`, where `<id>` is four lowercase hex digits. `__` is reserved: `store create` refuses a name holding it, and a label may not hold it, so an ordinary store never carries the branch shape. The branch takes `MEMMAN_BACKEND_<branch>=sqlite` and copies the parent's `MEMMAN_RERANK_ENABLED_<parent>` when set. `store branch` refuses a branch as parent. `store use` refuses a branch, because the active-store file would route every session on the host into it. `migrate` skips a branch. `backup` bundles branches like other stores. A branch exists only on the host that made it. The parent opens read-only through the branch, so work on a branch cannot write it.
+
+A branch row whose id the parent holds is a copy, made when the branch replaced or forgot that parent row. Every other branch row is branch-only. Every id the branch holds hides the parent row with that id.
