@@ -52,6 +52,7 @@ from memman.queue import start_worker_run
 from memman.queue import stats as queue_stats
 from memman.setup.archive import archive_postgres_schema
 from memman.store import factory
+from memman.store.backend import chain_head
 from memman.store.db import default_data_dir, get_meta, list_local_store_dirs
 from memman.store.db import open_db, open_read_only, portable_store_name
 from memman.store.db import read_active, store_dir, store_exists
@@ -66,7 +67,8 @@ from memman.store.model import insight_to_delta_dict, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.node import count_active_insights, get_stats
 from memman.store.node import iter_for_reembed
-from memman.store.overlay import BRANCH_MERGING, BRANCH_PARENT, OverlayBackend
+from memman.store.overlay import BRANCH_CREATED_AT, BRANCH_MERGING
+from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN, OverlayBackend
 from memman.store.sqlite import SqliteBackend, SqliteMigrator
 from memman.store.sqlite import open_sqlite_backend
 from tqdm import tqdm
@@ -1929,8 +1931,9 @@ def forget(ctx: click.Context, id: str) -> None:
     - A current row that replaced another is refused: the row it
       replaced stays retired, so forgetting it drops the topic from
       recall. `replace` on its id corrects it instead.
-    - A replaced row may be forgotten. A missing or already
-      forgotten row is refused.
+    - A replaced row may be forgotten, except on a branch, which
+      refuses a row its parent already replaced. A missing or
+      already forgotten row is refused.
 
     \b
     Examples
@@ -2010,12 +2013,10 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
     with _active_backend(ctx) as backend:
         queued, old = _resolve_queued_or_stored(
             backend, data_dir_val, name, id)
-        if (queued is None and old is not None and old.replaced_by
-                and old.deleted_at is None
-                and isinstance(backend, OverlayBackend)
-                and not backend.branch_holds(old.id)):
-            raise click.ClickException(backend.nodes.retired_message(
-                old.id, old.replaced_by, verb='replace'))
+        head = (
+            chain_head(backend.nodes, old.id)
+            if queued is None and old is not None and old.replaced_by
+            else None)
     if queued is not None:
         id = queued
     elif old is None:
@@ -2023,10 +2024,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
     elif old.deleted_at is not None:
         raise click.ClickException(f'insight {old.id} was forgotten')
     elif old.replaced_by:
+        next_step = (
+            f'replace {head.id}' if head is not None and head.deleted_at is None
+            else 'its chain ends in a forgotten row')
         raise click.ClickException(
             f'insight {old.id} was replaced by {old.replaced_by};'
-            f' replace {old.replaced_by}, or run'
-            f' insights show {old.id} --history')
+            f' {next_step}, or run insights show {old.id} --history')
     else:
         id = old.id
 
@@ -2501,7 +2504,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         raise click.ClickException(
             f"cannot remove the active store \"{name}\""
             f" (switch first with 'memman store use <other>')")
-    prefix = f'{branch_mod.BRANCH_TOKEN}:'
+    prefix = f'{BRANCH_TOKEN}:'
     try:
         info = branch_mod.read_branch_info(name, data_dir)
         token_keys = []
@@ -2946,7 +2949,7 @@ def status(ctx: click.Context) -> None:
         if branch_parent is not None:
             out['branch_parent'] = branch_parent
             out['branch_created_at'] = backend.meta.get(
-                branch_mod.BRANCH_CREATED_AT)
+                BRANCH_CREATED_AT)
         _json_out(out)
 
 

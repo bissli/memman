@@ -10,7 +10,7 @@ Memories have no expiry date or automatic size cap. A memory stays current until
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `replace <id> "<text>"`         | Create a successor and set the target's `replaced_by` when the worker commits.                                   | Return the successor; exclude the old version.                                                                                            |
 | `forget <id>`                   | Set `deleted_at`; keep the row.                                                                                  | Exclude the forgotten memory.                                                                                                             |
-| `store remove <name>`           | Delete the store and its queued writes.                                                                          | Remove the entire collection.                                                                                                             |
+| `store remove <name>`           | Delete the store and its queued writes. Refuse a branch, or a store that holds a branch token.                   | Remove the entire collection.                                                                                                             |
 | `store branch <parent> <label>` | Create an empty SQLite store over the live parent, marked with `branch_parent`.                                  | `--store <branch>` recall ranks the branch's rows with the parent's current rows. Parent recall is unaffected.                            |
 | `store merge <branch>`          | Insert the branch's own rows into the parent, repeat its replaces and forgets on copied rows, delete the branch. | The parent returns the branch's own current rows and applies the branch's retirements. A conflicting retirement keeps the parent's state. |
 | `store drop <branch>`           | Delete the branch and list its current rows.                                                                     | Remove the branch. Parent recall is unaffected.                                                                                           |
@@ -81,10 +81,10 @@ The worker attempts embedding after enrichment. A handled HTTP or provider runti
 
 A configuration change alone leaves an existing store's fingerprint unchanged. One of these operations changes it, with the scheduler stopped:
 
-| Command         | Scope                                   | During the operation                                            |
-| --------------- | --------------------------------------- | --------------------------------------------------------------- |
-| `embed swap`    | One SQLite or Postgres store            | Recall uses old vectors until an atomic switch.                 |
-| `embed reembed` | All SQLite stores in the data directory | Vectors are rewritten in place, so recall may see mixed models. |
+| Command         | Scope                                                                  | During the operation                                            |
+| --------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `embed swap`    | One SQLite or Postgres store                                           | Recall uses old vectors until an atomic switch.                 |
+| `embed reembed` | SQLite stores in the data directory, Postgres-parent branches excepted | Vectors are rewritten in place, so recall may see mixed models. |
 
 The [embedding command reference](../USAGE.md#embedding-operations) gives complete stop, change, and restart examples.
 
@@ -108,6 +108,6 @@ Only current memories receive new vectors. At cutover, Postgres clears vectors o
 
 ### In-place re-embedding
 
-`embed reembed` visits all SQLite stores and rewrites current memories whose model or vector width differs from the target, or whose vector is missing. It skips matching vectors and retired memories, saves a cursor to support resumption, and writes each store's fingerprint after completion.
+`embed reembed` visits all SQLite stores, except a branch whose parent is not a local SQLite store, and rewrites current memories whose model or vector width differs from the target, or whose vector is missing. It skips matching vectors and retired memories, saves a cursor to support resumption, and writes each store's fingerprint after completion.
 
 It refuses to start with a Postgres store selected and otherwise skips Postgres stores. `--dry-run` counts the changes without writing and does not require stopping the scheduler.

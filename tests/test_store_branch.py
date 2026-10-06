@@ -106,9 +106,8 @@ def test_branch_work_writes_nothing_to_the_parent(
         cross_backend_runner, monkeypatch):
     """Verify add, replace, forget and the drain leave the parent unchanged.
 
-    Mutation: a parent write method called from the overlay, enrich or
-        embed reading the parent's pending rows, or a writable parent
-        open.
+    Mutation: a parent write method called from the overlay, or a
+        writable parent open.
     Oracle: the parent's rows, meta and oplog before and after, and a
         recording stub of `factory.open_backend`.
     """
@@ -484,8 +483,8 @@ def test_replace_on_a_branch_of_a_row_the_parent_replaced_names_the_head(
         mm_runner):
     """Verify replace of a row the parent already replaced names its head.
 
-    Mutation: the single-store refusal, which names the next successor
-        and never says the row is retired in the parent.
+    Mutation: the refusal naming the next successor, which the parent
+        already replaced, in place of the current head.
     Oracle: the head id the parent's second replace printed.
     """
     _, data_dir = mm_runner
@@ -500,7 +499,6 @@ def test_replace_on_a_branch_of_a_row_the_parent_replaced_names_the_head(
         'replace', '--store', branch, stale, 'The backup job runs at three.'])
 
     assert result.exit_code != 0
-    assert 'already retired in default' in result.output
     assert f'replace {head}' in result.output
 
 
@@ -852,6 +850,23 @@ def test_merge_refuses_a_parent_whose_token_is_missing_or_differs(
     assert _snapshot(data_dir, branch) == branch_before
 
 
+def test_merge_token_refusal_names_the_drop_that_keeps_the_rows(mm_runner):
+    """Verify the token refusal names a command, as every branch refusal does.
+
+    Mutation: the refusal lists only causes, which leaves the agent no
+        move for the branch's rows.
+    Oracle: the drop command for the branch, which lists its rows.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    _set_meta(data_dir, 'default', f'branch_token:{branch}', None)
+
+    result = invoke(mm_runner, ['store', 'merge', branch])
+
+    assert result.exit_code != 0
+    assert f'memman store drop {branch}' in result.output
+
+
 def test_merge_conflict_names_the_head_of_the_parent_chain(mm_runner):
     """Verify a conflict entry names the parent's current head and texts.
 
@@ -900,8 +915,8 @@ def test_a_parent_embed_swap_blocks_only_recall_and_merge(
     recall = invoke(mm_runner, ['recall', '--store', branch, 'backup'])
     merge = invoke(mm_runner, ['store', 'merge', branch])
     own = _remember(mm_runner, 'The grackle colony nests by the river.', branch)
-    doctor = json.loads(
-        invoke(mm_runner, ['--store', branch, 'doctor']).output)
+    doctor_result = invoke(mm_runner, ['--store', branch, 'doctor'])
+    doctor = json.loads(doctor_result.output)
     with monkeypatch.context() as patch:
         patch.setattr(
             sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
@@ -915,6 +930,7 @@ def test_a_parent_embed_swap_blocks_only_recall_and_merge(
     assert recall.exit_code != 0
     assert merge.exit_code != 0
     assert swap_command(branch) in merge.output
+    assert doctor_result.exit_code == 0, doctor_result.output
     assert [b['store'] for b in branches['detail']['branches']] == [branch]
     assert swap.exit_code == 0, swap.output
     assert recall_after_swap.exit_code == 0, recall_after_swap.output
@@ -1197,6 +1213,56 @@ def test_branch_whose_directory_cannot_be_made_writes_no_env_keys(
 
     assert isinstance(result.exception, SystemExit), result.exception
     assert not [k for k in _env_keys(data_dir) if '__rearch' in k]
+
+
+def test_branch_writes_its_backend_key_before_its_directory(
+        mm_runner, monkeypatch):
+    """Verify the branch's SQLite backend key exists before its directory.
+
+    Mutation: the directory made first, so a kill between the two under
+        a Postgres default leaves a directory that store remove, store
+        drop and doctor resolve to Postgres and fail on.
+    Oracle: the env keys a stub mkdir reads at its call.
+    """
+    _, data_dir = mm_runner
+    seen = []
+
+    class RecordingPath(type(Path())):
+        def mkdir(self, *args, **kwargs):
+            if '__rearch' in self.name:
+                seen.append({k for k in _env_keys(data_dir) if '__rearch' in k})
+            return super().mkdir(*args, **kwargs)
+
+    monkeypatch.setattr(branch_mod, 'Path', RecordingPath)
+
+    store = _branch(data_dir)
+
+    assert seen == [{config.BACKEND_FOR(store)}]
+
+
+def test_branch_never_takes_a_name_whose_token_the_parent_holds(
+        mm_runner, monkeypatch):
+    """Verify create picks another name when the parent holds its token key.
+
+    Mutation: only the local directory checked for a free name, so a
+        branch on another host of the same label and suffix loses its
+        parent token to this one.
+    Oracle: a parent key set by hand for the first suffix a stub hands
+        out.
+    """
+    _, data_dir = mm_runner
+    taken = 'branch_token:default__rearch_aaaa'
+    _set_meta(data_dir, 'default', taken, 'f' * 32)
+    suffixes = iter(['aaaa', 'bbbb'])
+    real_hex = branch_mod.secrets.token_hex
+    monkeypatch.setattr(
+        branch_mod.secrets, 'token_hex',
+        lambda n: next(suffixes) if n == 2 else real_hex(n))
+
+    store = _branch(data_dir)
+
+    assert store == 'default__rearch_bbbb'
+    assert _snapshot(data_dir, 'default')[1][taken] == 'f' * 32
 
 
 def test_merge_copies_a_branch_row_whole_without_api_calls(
@@ -1562,6 +1628,88 @@ def test_drop_caps_the_parent_check_connect_time(mm_runner, monkeypatch):
     assert ('default', '3') in seen
 
 
+def test_drop_leaves_a_parent_token_of_another_branch(mm_runner):
+    """Verify drop removes the parent's token key only when it holds ours.
+
+    Mutation: the key deleted whatever its value, so a branch on another
+        host of the same name loses its token and its merge refuses.
+    Oracle: a parent key value set by hand to another token.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    _set_meta(data_dir, 'default', f'branch_token:{branch}', 'f' * 32)
+
+    _drop(mm_runner, branch)
+
+    assert _snapshot(data_dir, 'default')[1][f'branch_token:{branch}'] == (
+        'f' * 32)
+
+
+def test_drop_runs_on_a_merging_branch_whose_parent_holds_another_token(
+        mm_runner):
+    """Verify drop goes ahead when the parent's token key holds another value.
+
+    Mutation: drop's merge-resume refusal reading a foreign token as no
+        token, so drop sends the caller to merge and merge's token
+        refusal sends it back to drop.
+    Oracle: a merge flag and a foreign parent token set by hand.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    _set_meta(data_dir, branch, 'branch_merging', '2026-10-06T00:00:00Z')
+    _set_meta(data_dir, 'default', f'branch_token:{branch}', 'f' * 32)
+
+    reply = _drop(mm_runner, branch)
+
+    assert reply['action'] == 'dropped'
+
+
+def test_recall_after_the_merge_commit_names_the_merge_rerun(mm_runner):
+    """Verify branch recall in a merge's post-commit state names merge.
+
+    Mutation: the token refusal for a recreated parent, which sends the
+        caller to drop, and drop refuses this state.
+    Oracle: a merge flag set and the parent token removed by hand.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    _set_meta(data_dir, branch, 'branch_merging', '2026-10-06T00:00:00Z')
+    _set_meta(data_dir, 'default', f'branch_token:{branch}', None)
+
+    result = invoke(mm_runner, ['recall', '--store', branch, 'backup'])
+
+    assert result.exit_code != 0
+    assert f'memman store merge {branch}' in result.output
+
+
+def test_merge_caps_the_parent_connect_time(mm_runner, monkeypatch):
+    """Verify merge sets the short connect timeout before it opens the parent.
+
+    Mutation: the default libpq timeout kept, so an unreachable parent
+        host holds the drain lock, and every drain, for minutes.
+    Oracle: a stub open_backend recording PGCONNECT_TIMEOUT at each
+        parent open.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    monkeypatch.setenv('PGCONNECT_TIMEOUT', 'unset')
+    monkeypatch.delenv('PGCONNECT_TIMEOUT')
+    seen = []
+    real_open = factory.open_backend
+
+    def recording_open(store, data_dir_arg, *args, **kwargs):
+        if store == 'default':
+            seen.append(os.environ.get('PGCONNECT_TIMEOUT'))
+        return real_open(store, data_dir_arg, *args, **kwargs)
+
+    monkeypatch.setattr(factory, 'open_backend', recording_open)
+
+    _merge(mm_runner, branch)
+
+    assert seen
+    assert set(seen) == {'3'}
+
+
 @pytest.mark.parametrize('parent_case', ['removed', 'unreachable'])
 def test_drop_lists_the_branch_rows_when_the_parent_cannot_answer(
         mm_runner, env_file, parent_case):
@@ -1753,6 +1901,50 @@ def test_doctor_lists_open_branches_and_warns_on_a_missing_parent(mm_runner):
     assert check['detail']['missing_parent'] == [orphan]
 
 
+def test_recall_on_a_branch_refuses_a_recreated_parent(mm_runner):
+    """Verify branch recall refuses a parent that lacks the branch's token.
+
+    Mutation: recall checks only the fingerprint, so a parent removed
+        and recreated on the same model answers as the branch's parent
+        with none of its rows.
+    Oracle: a parent dropped and recreated with the old fingerprint set
+        by hand.
+    """
+    _, data_dir = mm_runner
+    invoke(mm_runner, ['store', 'create', 'work'])
+    _remember(mm_runner, 'The backup job runs at midnight.', 'work')
+    branch = _branch(data_dir, parent='work')
+    work_fp = _snapshot(data_dir, 'work')[1]['embed_fingerprint']
+    factory.drop_store('work', data_dir)
+    invoke(mm_runner, ['store', 'create', 'work'])
+    _set_meta(data_dir, 'work', 'embed_fingerprint', work_fp)
+
+    result = invoke(mm_runner, ['recall', '--store', branch, 'backup'])
+
+    assert result.exit_code != 0
+    assert 'token' in result.output
+
+
+def test_doctor_on_a_branch_whose_parent_is_gone_reports_it(mm_runner):
+    """Verify doctor on an orphan branch fails a check and runs the rest.
+
+    Mutation: doctor counting through the overlay first, so the parent's
+        missing-store error aborts it before any check runs.
+    Oracle: an orphan branch from a parent removed after the branch.
+    """
+    _, data_dir = mm_runner
+    invoke(mm_runner, ['store', 'create', 'work'])
+    orphan = _branch(data_dir, parent='work')
+    factory.drop_store('work', data_dir)
+
+    result = invoke(mm_runner, ['--store', orphan, 'doctor'])
+
+    assert result.exit_code == 1, result.output
+    checks = {c['name']: c for c in json.loads(result.output)['checks']}
+    assert checks['integrity']['status'] == 'fail'
+    assert checks['branches']['detail']['missing_parent'] == [orphan]
+
+
 @pytest.mark.parametrize('damage', ['corrupt database', 'missing database'])
 def test_store_remove_removes_a_sqlite_store_it_cannot_read(mm_runner, damage):
     """Verify store remove still removes a SQLite store with a broken file.
@@ -1780,9 +1972,10 @@ def test_store_remove_refuses_a_parent_holding_a_branch_token(
 
     Mutation: no token check in store remove, or a check of local
         branches only, which removes a Postgres parent shared with a
-        branch on another host.
+        branch on another host, or the marker for a key with no local
+        branch missing or misplaced.
     Oracle: the parent's existence after the call, and the key named in
-        the refusal.
+        the refusal with the marker only for the other host's key.
     """
     _, data_dir = mm_runner
     invoke(mm_runner, ['store', 'create', 'work'])
@@ -1796,6 +1989,8 @@ def test_store_remove_refuses_a_parent_holding_a_branch_token(
 
     assert result.exit_code != 0
     assert key in result.output
+    assert (f'{key} (no local branch)' in result.output) == (
+        holder == 'branch on another host')
     assert factory.store_exists('work', data_dir)
 
 
@@ -1997,6 +2192,7 @@ def test_remember_refuses_a_postgres_store_without_the_extra(
         'host=127.0.0.1 port=1 dbname=x user=x password=x')
     monkeypatch.setitem(sys.modules, 'psycopg', None)
     monkeypatch.delitem(sys.modules, 'memman.store.postgres', raising=False)
+    monkeypatch.delattr('memman.store.postgres', raising=False)
 
     result = invoke(mm_runner, [
         'remember', '--store', 'pgx', 'The retry cap is three.'])

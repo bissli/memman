@@ -338,13 +338,13 @@ memman scheduler start
 
 Each store records its embedding model and vector dimension in a **fingerprint**. Recall and the worker use that recorded model on the shared endpoint. Changing `MEMMAN_EMBED_MODEL` alone does not convert existing vectors. [Credential requirements](#credential-requirements) and the [embedding design](design/04-lifecycle.md#43-embedding-support) give the detail.
 
-| Command                     | Scope                             | Purpose                                                              |
-| --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
-| `embed status`              | Selected store                    | Show fingerprint, credentials, and swap progress.                    |
-| `embed swap --to MODEL`     | Selected SQLite or Postgres store | Change model while recall continues using old vectors until cutover. |
-| `embed swap --resume`       | Selected store                    | Continue an interrupted swap.                                        |
-| `embed swap --abort`        | Selected store                    | Discard pending vectors and swap state, before cutover only.         |
-| `embed reembed [--dry-run]` | All SQLite stores                 | Rewrite vectors using `MEMMAN_EMBED_MODEL`.                          |
+| Command                     | Scope                                            | Purpose                                                              |
+| --------------------------- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| `embed status`              | Selected store                                   | Show fingerprint, credentials, and swap progress.                    |
+| `embed swap --to MODEL`     | Selected SQLite or Postgres store                | Change model while recall continues using old vectors until cutover. |
+| `embed swap --resume`       | Selected store                                   | Continue an interrupted swap.                                        |
+| `embed swap --abort`        | Selected store                                   | Discard pending vectors and swap state, before cutover only.         |
+| `embed reembed [--dry-run]` | SQLite stores, Postgres-parent branches excepted | Rewrite vectors using `MEMMAN_EMBED_MODEL`.                          |
 
 To change one store's model:
 
@@ -368,6 +368,7 @@ After a failed swap, `embed status` shows its state, and `--resume` or `--abort`
 **`embed reembed`** converts every SQLite store under the data directory to the `MEMMAN_EMBED_MODEL` client.
 
 - It needs a stopped scheduler, except with `--dry-run`. It refuses to run when the selected store is on Postgres, and it skips Postgres stores.
+- A branch keeps its parent's model, so `embed reembed` skips a branch whose parent is not a local SQLite store. Such a branch needs `embed swap` after its parent swaps.
 - For each store, every current memory whose vector is not on the target model is re-embedded, and the store gets the new fingerprint. An empty store gets only the fingerprint.
 - A second run resumes an interrupted one.
 
@@ -399,7 +400,7 @@ memman store drop work__rearch_7f3a    # list the branch's own rows, then delete
 - A store name starts with a letter or digit and continues with letters, digits, `_`, or `-`. A Postgres store also needs a name that is a valid SQL identifier. `store create` refuses a name holding `__`, which marks a branch.
 - A store exists once `store create` has made it. Every command that opens a store, `remember` and `replace` included, refuses a store that does not exist with `store "<name>" does not exist (create it with memman store create <name>)` and writes nothing: no directory, no Postgres schema, no env key. `memman install` creates the store the active-store file names.
 - `store use` accepts only an existing store, and refuses a branch.
-- `store remove` asks first unless the call passes `--yes`. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It removes a branch too, without the `dropped` list that `store drop` prints.
+- `store remove` asks first unless the call passes `--yes`. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It refuses a branch and names `store merge` and `store drop`. It refuses a store that holds a `branch_token:<branch>` meta key, the mark of an open branch on this host or another. It lists each such key and marks a key that has no local branch. When it cannot read a SQLite store's file, it skips these checks and removes the store.
 - `memman store` with no subcommand runs `store list`.
 
 **Store selection**, from highest priority to lowest:
@@ -413,19 +414,19 @@ memman store drop work__rearch_7f3a    # list the branch's own rows, then delete
 
 A branch is an empty SQLite store layered over its live parent store. It ends with `store merge` or `store drop`. It holds one research thread's writes apart from the parent, while recall on the branch also reads the parent's current rows. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
 
-| Command                         | Effect                                                                                                                                                                                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store branch <parent> <label>` | Creates an empty `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `path`, `created_at`, and `instruction`.                                                                                         |
-| `store merge <branch>`          | Copies the branch's own rows into the parent, repeats the branch's `replace` and `forget` on parent rows, deletes the branch. Prints `copied`, `retired`, and `conflicts`.                                                                        |
+| Command                         | Effect                                                                                                                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store branch <parent> <label>` | Creates an empty `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `path`, `created_at`, and `instruction`.                                                                                               |
+| `store merge <branch>`          | Copies the branch's own rows into the parent, repeats the branch's `replace` and `forget` on parent rows, deletes the branch. Prints `copied`, `retired`, and `conflicts`.                                                                              |
 | `store drop <branch>`           | Deletes the branch. Prints `dropped`, the `{id, content, replaces}` of each current branch row, so the agent can re-save a claim unrelated to the thread with `remember --store <parent>`. `replaces` names the parent row the row corrects, else null. |
 
 - The parent of a branch is the `branch_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store. `store branch` refuses a branch as parent. Any number of branches of one parent can stay open. Siblings see each other's rows only after one merges.
 - The `instruction` line reads "Use memman store <branch> for this thread: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A session that reads the line passes `--store <branch>` to every memory verb. A session without it uses the parent.
-- A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. `status` counts the rows recall sees.
+- A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. Recall also refuses when the parent's `meta` lacks `branch_token:<branch>`, as after a parent removed and recreated under the same name, pointed at another database, or restored from an older backup. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>`, which lists the branch rows to remember again in the parent. `status` counts the rows recall sees.
 - `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `replace` or `forget` of a parent row the parent already retired fails and names the current head.
 - `merge` refuses a store that is not a branch, the active branch, a missing parent, queued writes for the branch, a pending or failed parent `replace` whose target's chain holds a row the branch retired, an embed swap or re-embed in progress in either store, a branch whose embedding fingerprint differs from the parent's, and a parent that does not hold the branch's token. After the checks it refuses every further write to the branch. Each `conflicts` entry is a copied row the branch and the parent retired differently. The parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
 - A `merge` that stops part way says to re-run `merge`, which finishes it. A re-run after the parent commit writes nothing more to the parent and reports the conflicts as the parent holds them. `drop` refuses a branch whose merge stopped after the parent commit, the active branch, and a branch with queued writes. A missing parent does not stop `drop`. An unreachable parent stops it only for a branch whose merge started.
-- A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time.
+- A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time. On a branch whose parent is missing or unreachable, `doctor` reports a failed `integrity` check and runs the other checks, `branches` included.
 
 **Per-directory stores.** memman reads `MEMMAN_STORE` from the process environment, so a tool that sets variables per directory switches the store on a directory change.
 

@@ -192,7 +192,8 @@ memman replace <id> "<new content>"
 or the `id` of a write still queued for the same store, so the agent
 can replace its own write before the drain runs. `replace` refuses a
 forgotten target. It refuses a target already replaced, and the
-message names its successor, which is the row to replace instead. It
+message names the current row at the end of its chain, which is the
+row to replace instead, or says the chain ends in a forgotten row. It
 refuses a target, stored or queued, that a queued `replace` in the
 same store already names, and the message quotes that replace's id
 and full text, so an agent in another session or past a compaction
@@ -387,12 +388,14 @@ rows the two stores retired differently, and the parent keeps its
 state. Each entry carries `branch_content`, `parent_content` and
 `parent_head`, the parent's current row (null when the parent's chain
 ends in a forgotten row). Settle each in the parent with `replace` or
-`forget`. Merge refuses while the branch has queued writes, while
-either store is mid embed swap or re-embed, and when the parent no
-longer holds the token. After an embed model change on the parent,
-branch recall and merge refuse until the branch runs the embed swap
-the refusal names. Every refusal names its fix. A merge that stops
-part way says to re-run, which finishes it.
+`forget`. Merge refuses while the branch has queued writes and while
+either store is mid embed swap or re-embed. Merge and branch recall
+refuse when the parent does not hold the branch's token, as after a
+parent recreated under the same name, pointed at another database,
+or restored from an older backup. After an embed model change on the
+parent, branch recall and merge refuse until the branch runs the
+embed swap the refusal names. Every refusal names its fix. A merge
+that stops part way says to re-run, which finishes it.
 
 `store drop` prints `dropped`, one `{id, content, replaces}` per
 current branch row. `replaces` names the parent row it corrects.

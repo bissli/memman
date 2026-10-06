@@ -347,6 +347,26 @@ class NodeStore(Protocol):
         ...
 
 
+def chain_head(nodes: NodeStore, id: Id) -> Insight | None:
+    """Last row of the replacement chain that starts at `id`, in any state.
+
+    Returns
+    -------
+    Insight | None
+        The first row on the chain with no `replaced_by`: `id`'s own row
+        when nothing replaced it, and possibly a forgotten row. None when
+        a row on the chain is missing or the chain loops.
+    """
+    row = nodes.get_include_deleted(id)
+    seen: set[Id] = set()
+    while row is not None and row.replaced_by:
+        if row.id in seen:
+            return None
+        seen.add(row.id)
+        row = nodes.get_include_deleted(row.replaced_by)
+    return row
+
+
 @runtime_checkable
 class MetaStore(Protocol):
     """Key-value metadata table.

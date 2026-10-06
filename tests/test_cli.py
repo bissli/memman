@@ -893,6 +893,28 @@ class TestReplace:
             basic=True)
         assert [row['id'] for row in active] == [new_id[:8]]
 
+    def test_replace_of_a_row_two_replaces_back_names_the_head(self, runner):
+        """Verify the replaced-row refusal names the current row of the chain.
+
+        Mutation: the refusal naming the next successor, which a later
+            replace already retired, so following it is refused again.
+        Oracle: the id the second replace printed.
+        """
+        result = invoke(runner, ['remember', 'Kafka retention is one day'])
+        first = parse_remember(result, runner)['id']
+        result = invoke(runner, [
+            'replace', first, 'Kafka retention is seven days'])
+        middle = parse_remember(result, runner)['id']
+        result = invoke(runner, [
+            'replace', middle, 'Kafka retention is thirty days'])
+        head = parse_remember(result, runner)['id']
+
+        result = invoke(runner, [
+            'replace', first, 'Kafka retention is ninety days'])
+
+        assert result.exit_code != 0
+        assert f'replace {head}' in result.output
+
     def test_replace_oplog_entries(self, runner):
         """Verify a replace logs both a replace and a remember op.
 

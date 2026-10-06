@@ -33,6 +33,7 @@ from memman.setup.settings import memman_hook_triples, read_json_file
 from memman.store import factory
 from memman.store.backend import Backend
 from memman.store.db import list_local_store_dirs
+from memman.store.errors import BackendError
 
 logger = logging.getLogger('memman')
 
@@ -1023,7 +1024,9 @@ def run_all_checks(
     ----------
     backend : Backend or None
         The open store. None means the resolved store does not exist:
-        a failed `store_exists` check replaces the per-store checks.
+        a failed `store_exists` check replaces the per-store checks. A
+        store that cannot count its rows, such as a branch whose parent
+        is gone, gets a failed `integrity` check in their place.
     data_dir : str | None
         Data directory. When None, only the per-store checks run.
 
@@ -1034,13 +1037,25 @@ def run_all_checks(
         or `empty` with no checks when the store holds no active row
         and `data_dir` is None. Also `total_active` and `checks`.
     """
-    total = backend.nodes.count_active() if backend else 0
+    total = 0
+    unreadable = None
+    if backend is not None:
+        try:
+            total = backend.nodes.count_active()
+        except BackendError as exc:
+            unreadable = str(exc)
     checks = []
     if backend is None:
         checks.append({
             'name': 'store_exists',
             'status': 'fail',
             'detail': {'error': 'store does not exist'},
+            })
+    elif unreadable is not None:
+        checks.append({
+            'name': 'integrity',
+            'status': 'fail',
+            'detail': {'result': unreadable},
             })
     elif total > 0:
         checks.extend([
@@ -1074,7 +1089,7 @@ def run_all_checks(
             check_llm_probe(),
             check_embed_probe(),
             check_optional_extras()))
-    if total == 0 and data_dir is None:
+    if total == 0 and data_dir is None and unreadable is None:
         return {'status': 'empty', 'total_active': 0, 'checks': []}
     statuses = [c['status'] for c in checks]
     if 'fail' in statuses:

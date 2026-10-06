@@ -26,7 +26,7 @@ from memman.embed.fingerprint import META_KEY, Fingerprint, swap_command
 from memman.migrate import MigrateInsight
 from memman.store import factory
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
-from memman.store.backend import RecallSession
+from memman.store.backend import RecallSession, chain_head
 from memman.store.errors import BackendError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
@@ -34,6 +34,26 @@ from memman.store.model import WorkerRun
 
 BRANCH_PARENT = 'branch_parent'
 BRANCH_MERGING = 'branch_merging'
+BRANCH_CREATED_AT = 'branch_created_at'
+BRANCH_TOKEN = 'branch_token'
+
+
+def parent_token_key(branch: str) -> str:
+    """The parent meta key that holds `branch`'s token.
+    """
+    return f'{BRANCH_TOKEN}:{branch}'
+
+
+def token_refusal(branch: str, parent: str) -> str:
+    """Refusal for a parent that does not hold `branch`'s token.
+    """
+    return (
+        f'store {parent!r} does not hold the token of branch {branch!r}:'
+        ' it was removed and recreated, points at another database, or'
+        ' was restored from a backup older than the branch; fix the'
+        ' parent if it points at the wrong database, else run memman'
+        f' store drop {branch}, which lists the branch rows to remember'
+        f' again in {parent!r}')
 
 
 class OverlayNodeStore(NodeStore):
@@ -48,9 +68,6 @@ class OverlayNodeStore(NodeStore):
     def _parent(self) -> NodeStore:
         return self._overlay.parent.nodes
 
-    def _held(self, id: Id) -> bool:
-        return self._branch.get_include_deleted(id) is not None
-
     def _require_unmerged(self) -> None:
         if self._overlay.meta.get(BRANCH_MERGING) is not None:
             raise BackendError(
@@ -59,7 +76,7 @@ class OverlayNodeStore(NodeStore):
                 f' {self._overlay.name} to finish it')
 
     def _require_held(self, id: Id) -> None:
-        if not self._held(id):
+        if not self._overlay.branch_holds(id):
             raise BackendError(
                 f'branch {self._overlay.name!r} holds no row {id};'
                 ' a branch writes only its own rows')
@@ -88,31 +105,28 @@ class OverlayNodeStore(NodeStore):
             `refuse_retired` is set and the parent already replaced the
             row. The message names the current head of its chain.
         """
-        if self._held(id):
+        if self._overlay.branch_holds(id):
             return True
         row = self._parent.get_raw(id)
         if row is None or row.deleted_at is not None:
             return False
         if row.replaced_by is not None:
             if refuse_retired:
-                raise BackendError(self.retired_message(
-                    row.id, row.replaced_by, verb='forget'))
+                raise BackendError(self._retired_message(
+                    row.id, row.replaced_by))
             return False
         self._branch.insert_raw(row)
         return True
 
-    def retired_message(self, id: Id, successor: Id, *, verb: str) -> str:
-        """Refusal for a write to a row the parent already replaced.
+    def _retired_message(self, id: Id, successor: Id) -> str:
+        """Refusal for a forget of a row the parent already replaced.
 
         Parameters
         ----------
         id : Id
-            The parent row the write targets.
+            The parent row the forget targets.
         successor : Id
             The row's `replaced_by`.
-        verb : str
-            'forget' or 'replace', the refused verb, which the message
-            tells the caller to run on the current head instead.
 
         Returns
         -------
@@ -120,18 +134,13 @@ class OverlayNodeStore(NodeStore):
             Names the row as retired in the parent and names the head
             of its chain, or says the chain ends in a forgotten row.
         """
-        head = self.get_include_deleted(successor)
-        seen = {id}
-        while head is not None and head.replaced_by and head.id not in seen:
-            seen.add(head.id)
-            head = self.get_include_deleted(head.replaced_by)
+        head = chain_head(self, successor)
         message = (
             f'insight {id} is already retired in'
             f' {self._overlay.parent_name} (replaced by {successor})')
         if head is None or head.deleted_at is not None:
             return f'{message}; its chain ends in a forgotten row'
-        purpose = 'drop' if verb == 'forget' else 'correct'
-        return f'{message}; {verb} {head.id} to {purpose} the current claim'
+        return f'{message}; forget {head.id} to drop the current claim'
 
     def insert(self, ins: Insight) -> None:
         self._require_unmerged()
@@ -146,7 +155,7 @@ class OverlayNodeStore(NodeStore):
         return row if row is not None else self._parent.get_raw(id)
 
     def get(self, id: Id) -> Insight | None:
-        if self._held(id):
+        if self._overlay.branch_holds(id):
             return self._branch.get(id)
         return self._parent.get(id)
 
@@ -508,14 +517,24 @@ class OverlayBackend(Backend):
         Raises
         ------
         BackendError
-            The parent's embed fingerprint differs from the branch's.
-            The message names the branch swap that fixes it.
+            The parent's embed fingerprint differs from the branch's,
+            and the message names the branch swap that fixes it. Or
+            the parent does not hold the branch's token, as after a
+            parent removed and recreated under the same name, or after
+            a merge that stopped past its parent commit, whose message
+            names the merge re-run.
         """
         if self.parent.meta.get(META_KEY) != self.branch.meta.get(META_KEY):
             raise BackendError(
                 f'store {self.name!r} and its parent {self.parent_name!r}'
                 f' use different embed models; run {swap_command(self.name)}'
                 " with the parent's model first")
+        if (self.parent.meta.get(parent_token_key(self.name))
+                != self.branch.meta.get(BRANCH_TOKEN)):
+            # A merge past its parent commit removed the token; only a
+            # re-run of that merge ends this state.
+            self.nodes._require_unmerged()
+            raise BackendError(token_refusal(self.name, self.parent_name))
         hidden = self.branch.nodes.get_all_ids()
         hidden_current = self.hidden_current_count()
         with self.branch.recall_session() as branch_session, \
@@ -524,16 +543,7 @@ class OverlayBackend(Backend):
                 branch_session, parent_session, hidden, hidden_current)
 
     def integrity_check(self) -> dict[str, Any]:
-        """The branch's integrity probe, failed when the parent cannot answer.
-        """
-        result = self.branch.integrity_check()
-        if not result['ok']:
-            return result
-        try:
-            self.parent.meta.get(META_KEY)
-        except BackendError as exc:
-            return {'ok': False, 'detail': str(exc)}
-        return result
+        return self.branch.integrity_check()
 
     def close(self) -> None:
         try:

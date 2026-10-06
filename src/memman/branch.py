@@ -36,27 +36,20 @@ from memman.migrate import MigrateInsight
 from memman.queue import purge_store, queue_db
 from memman.store import db as _db
 from memman.store import factory
-from memman.store.backend import Backend
+from memman.store.backend import Backend, chain_head
 from memman.store.errors import BackendError, StoreMissingError
 from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
-from memman.store.overlay import BRANCH_MERGING, BRANCH_PARENT
+from memman.store.overlay import BRANCH_CREATED_AT, BRANCH_MERGING
+from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN, parent_token_key
+from memman.store.overlay import token_refusal
 from memman.store.sqlite import open_sqlite_backend
 
 logger = logging.getLogger('memman')
-
-BRANCH_CREATED_AT = 'branch_created_at'
-BRANCH_TOKEN = 'branch_token'
 
 _INSTRUCTION = (
     'Use memman store {branch} for this thread: pass --store {branch} to'
     ' every memman recall, remember, replace, forget and insights show'
     ' call.')
-
-
-def parent_token_key(branch: str) -> str:
-    """The parent meta key that holds `branch`'s token.
-    """
-    return f'{BRANCH_TOKEN}:{branch}'
 
 
 def read_branch_info(store: str, data_dir: str) -> dict[str, str] | None:
@@ -161,11 +154,9 @@ def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
             ' and single underscores')
     _require_existing(parent, data_dir)
     try:
-        with factory.open_backend(parent, data_dir) as backend:
-            parent_meta = {
-                key: backend.meta.get(key)
-                for key in backend.meta.keys()  # noqa: SIM118
-                }
+        with factory.open_backend(
+                parent, data_dir, read_only=True) as backend:
+            parent_meta = _meta_dict(backend)
     except (ConfigError, BackendError) as exc:
         raise click.ClickException(
             f'cannot read store {parent!r}: {exc}') from exc
@@ -191,33 +182,38 @@ def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
             f'store {parent!r} has a re-embed in progress; finish it first')
 
     name = f'{parent}__{label}_{secrets.token_hex(2)}'
-    while _db.store_exists(data_dir, name):
+    while (_db.store_exists(data_dir, name)
+           or parent_token_key(name) in parent_meta):
         name = f'{parent}__{label}_{secrets.token_hex(2)}'
     created_at = format_timestamp(datetime.now(timezone.utc))
     token = secrets.token_hex(16)
 
     from memman.setup.scheduler import _write_env_keys_with_flock
 
+    # Not `_ensure_store_backend_key`: the default may be postgres.
+    env_updates = {config.BACKEND_FOR(name): 'sqlite'}
+    parent_rerank = config.parse_env_file(
+        config.env_file_path(data_dir)).get(
+            config.RERANK_ENABLED_FOR(parent))
+    if parent_rerank is not None:
+        env_updates[config.RERANK_ENABLED_FOR(name)] = parent_rerank
+    # The key comes first, so a directory never exists that store verbs
+    # resolve to the default backend.
+    _write_env_keys_with_flock(env_updates, data_dir=data_dir)
     branch_dir = Path(_db.store_dir(data_dir, name))
-    # exist_ok=False keeps a concurrent branch's directory safe.
+    # exist_ok=False keeps a concurrent branch's directory safe, and the
+    # keys it shares with this name hold the same values.
     try:
         branch_dir.mkdir(mode=0o755, parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise click.ClickException(
             f'branch name {name!r} was taken meanwhile; re-run') from exc
     except OSError as exc:
+        _remove_env_keys(name, data_dir)
         raise click.ClickException(
             f'cannot create branch directory {str(branch_dir)!r}: {exc}'
             ) from exc
     try:
-        # Not `_ensure_store_backend_key`: the default may be postgres.
-        env_updates = {config.BACKEND_FOR(name): 'sqlite'}
-        parent_rerank = config.parse_env_file(
-            config.env_file_path(data_dir)).get(
-                config.RERANK_ENABLED_FOR(parent))
-        if parent_rerank is not None:
-            env_updates[config.RERANK_ENABLED_FOR(name)] = parent_rerank
-        _write_env_keys_with_flock(env_updates, data_dir=data_dir)
         with open_sqlite_backend(name, data_dir, create=True) as backend, \
                 backend.transaction():
             backend.meta.set(META_KEY, parent_meta[META_KEY])
@@ -287,6 +283,15 @@ group by status
         ' after the queue is clear')
 
 
+def _meta_dict(backend: Backend) -> dict[str, str]:
+    """Every meta key of `backend` with its value.
+    """
+    return {
+        key: backend.meta.get(key)
+        for key in backend.meta.keys()  # noqa: SIM118
+        }
+
+
 def _read_branch_meta(branch: str, data_dir: str) -> dict[str, str]:
     """Meta of an existing branch, refusing a missing store or a non-branch.
 
@@ -298,10 +303,7 @@ def _read_branch_meta(branch: str, data_dir: str) -> dict[str, str]:
     """
     try:
         with factory.open_backend(branch, data_dir, read_only=True) as backend:
-            meta = {
-                key: backend.meta.get(key)
-                for key in backend.meta.keys()  # noqa: SIM118
-                }
+            meta = _meta_dict(backend)
     except (ConfigError, BackendError) as exc:
         raise click.ClickException(str(exc)) from exc
     if BRANCH_PARENT not in meta:
@@ -426,12 +428,8 @@ def _retire_copied(
         return {'result': 'done'}
     head = before if parent_state.startswith('current') else None
     if parent_state == 'replaced':
-        head, seen = before, {before.id}
-        while (head is not None and head.replaced_by
-               and head.replaced_by not in seen):
-            seen.add(head.replaced_by)
-            head = backend.nodes.get_include_deleted(head.replaced_by)
-        if head is not None and (head.replaced_by or head.deleted_at):
+        head = chain_head(backend.nodes, before.id)
+        if head is not None and head.deleted_at is not None:
             head = None
     successor = (
         backend.nodes.get_include_deleted(ins.replaced_by)
@@ -504,22 +502,18 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
             raise click.ClickException(
                 f'store {branch!r} is the active store; run memman store'
                 f' use {parent} first')
+        # Merge holds the drain lock; the libpq default can block for
+        # minutes on a host that drops packets.
+        os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
         _require_existing(parent, data_dir)
         try:
-            with factory.open_backend(parent, data_dir) as backend:
-                parent_meta = {
-                    key: backend.meta.get(key)
-                    for key in backend.meta.keys()  # noqa: SIM118
-                    }
+            with factory.open_backend(
+                    parent, data_dir, read_only=True) as backend:
+                parent_meta = _meta_dict(backend)
                 parent_ids = backend.nodes.get_all_ids()
         except (ConfigError, BackendError) as exc:
             raise click.ClickException(
                 f'cannot read store {parent!r}: {exc}') from exc
-        token_refusal = (
-            f'store {parent!r} does not hold the token of branch'
-            f' {branch!r}: it was removed and recreated, points at another'
-            ' database, or was restored from a backup older than the'
-            ' branch')
         resume = (BRANCH_MERGING in meta
                   and parent_token_key(branch) not in parent_meta)
         if not resume:
@@ -537,7 +531,7 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                         ' progress; finish it first')
             if parent_meta.get(parent_token_key(branch)) != meta.get(
                     BRANCH_TOKEN):
-                raise click.ClickException(token_refusal)
+                raise click.ClickException(token_refusal(branch, parent))
             if BRANCH_MERGING not in meta:
                 _set_merging(
                     data_dir, branch,
@@ -550,7 +544,7 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                     for row_id in sorted(backend.nodes.get_all_ids())
                     ]
             if resume and not {row.id for row in rows} <= parent_ids:
-                raise click.ClickException(token_refusal)
+                raise click.ClickException(token_refusal(branch, parent))
             retired_ids = {
                 row.id for row in rows
                 if row.replaced_by or row.deleted_at is not None
@@ -687,7 +681,7 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
     Notes
     -----
     - The parent's `branch_token:<branch>` is removed after the branch,
-      when the parent holds it and answers. A missing parent, or an
+      when the parent holds this branch's value and answers. A missing parent, or an
       unreachable one when no merge started, leaves it, and the drop
       goes ahead. A failed removal leaves it and still returns the
       listing.
@@ -721,14 +715,13 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
         # minutes on a host that drops packets.
         os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
         parent_ids = None
-        token_held = False
+        parent_token = None
         try:
             if factory.store_exists(parent, data_dir):
                 with factory.open_backend(
                         parent, data_dir, read_only=True) as backend:
                     parent_ids = backend.nodes.get_all_ids()
-                    token_held = (
-                        backend.meta.get(parent_token_key(branch)) is not None)
+                    parent_token = backend.meta.get(parent_token_key(branch))
         except (ConfigError, BackendError, sqlite3.Error) as exc:
             if BRANCH_MERGING in meta:
                 raise click.ClickException(
@@ -738,14 +731,14 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
                     ) from exc
             logger.debug(f'drop of {branch!r} cannot read {parent!r}: {exc}')
         if (BRANCH_MERGING in meta and parent_ids is not None
-                and not token_held and branch_ids <= parent_ids):
+                and parent_token is None and branch_ids <= parent_ids):
             raise click.ClickException(
                 f'a merge of {branch!r} stopped part way after writing'
                 f' {parent!r}; re-run memman store merge {branch} to finish'
                 ' it')
         with queue_db(data_dir) as conn:
             _remove_branch(conn, branch, data_dir)
-        if token_held:
+        if parent_token == meta.get(BRANCH_TOKEN):
             # The branch is gone, so no error here may cost the caller
             # the listing of its rows.
             try:
