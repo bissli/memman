@@ -1855,7 +1855,7 @@ class PostgresMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             cur.execute(f"""
-select id, content, summary, embedding,
+select id, content, summary, embedding::real[],
        enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, replaced_by,
@@ -1864,13 +1864,10 @@ from {schema}.insights
 order by id
 """)
             insight_rows = cur.fetchall()
-            insights: list[MigrateInsight] = []
-            for r in insight_rows:
-                emb = list(r[3]) if r[3] is not None else None
-                insights.append(MigrateInsight(
+            insights: list[MigrateInsight] = [MigrateInsight(
                     id=r[0], content=r[1],
                     summary=r[2],
-                    embedding=emb,
+                    embedding=r[3],
                     enrich_attempted_at=r[4],
                     enriched_at=r[5],
                     created_at=r[6],
@@ -1880,7 +1877,7 @@ order by id
                     embedding_model=r[10],
                     queue_uuid=r[11],
                     replaced_by=r[12],
-                    author=r[13]))
+                    author=r[13]) for r in insight_rows]
 
             cur.execute(f"""
 select coalesce(legacy_id, id) as sqlite_id,

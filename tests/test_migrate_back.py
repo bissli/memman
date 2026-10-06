@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
+from memman.embed.vector import serialize_vector
 from memman.migrate import MigrateError
 from memman.store.db import open_db, set_meta, store_dir
 from memman.store.model import Insight, format_timestamp
@@ -303,6 +304,46 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             r['prompt_version'], r['embedding_model'],
             r['queue_uuid'], r['replaced_by'],
             r['author'])
+    finally:
+        _drop_schema(pg_dsn, store)
+
+
+def test_postgres_gather_returns_embedding_as_floats(tmp_path, pg_dsn):
+    """Verify postgres gather reads a stored embedding back as its floats.
+
+    Mutation: `list(r[3])` on the pgvector 0.5 `Vector`, which has no
+        `__iter__`, so gather raises TypeError on any embedded row.
+    Oracle: hand-picked values exact in float32, written through sqlite.
+    """
+
+    store = 'rb_embed'
+    want = [0.5, -0.25, 1.0, 0.125]
+    ins = Insight(
+        id='rb-embed-1',
+        content='embedded row',
+        updated_at=datetime.now(timezone.utc),
+        deleted_at=None)
+    db = open_db(store_dir(str(tmp_path), store))
+    try:
+        insert_insight(db, ins)
+        db.conn.execute(
+            'update insights set embedding = ? where id = ?',
+            (serialize_vector(want), ins.id))
+        db.conn.commit()
+        set_meta(db, 'embed_fingerprint',
+                 '{"model":"voyage-3-lite","dim":4}')
+    finally:
+        db.close()
+    _drop_schema(pg_dsn, store)
+    try:
+        payload = SqliteMigrator(str(tmp_path)).gather(store)
+        tgt_mig = PostgresMigrator(dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
+
+        rev_payload = PostgresMigrator(dsn=pg_dsn).gather(store)
+
+        assert rev_payload.insights[0].embedding == want
     finally:
         _drop_schema(pg_dsn, store)
 

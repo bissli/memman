@@ -80,7 +80,7 @@ def test_vector_512_round_trip(pg_conn):
             'insert into vec_test (id, embedding) values (%s, %s)',
             (1, original))
         cur.execute('select embedding from vec_test where id = 1')
-        roundtripped = list(cur.fetchone()[0])
+        roundtripped = cur.fetchone()[0].to_list()
     assert len(roundtripped) == 512
     for a, b in zip(original, roundtripped):
         assert abs(a - b) < 1e-5, (
