@@ -14,7 +14,8 @@ Distributed-shaping commitments baked into this Protocol surface:
    Backends stamp these server-side: SQLite via Python `datetime.now`,
    Postgres via `now()`, except `nodes.insert`, which takes the Python
    clock on both. Pipeline code never produces a timestamp that lands
-   in a database write.
+   in a database write. `nodes.insert_raw` is the one exception: it
+   copies a stored row, timestamps included, between stores.
 
 2. **`Backend.transaction()` nesting contract.** Nested calls reuse
    the outer transaction (SAVEPOINT-like or no-op). Required by the
@@ -33,6 +34,7 @@ from memman.store.model import WorkerRun
 
 if TYPE_CHECKING:
     from memman.embed.fingerprint import Fingerprint
+    from memman.migrate import MigrateInsight
 
 _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -65,6 +67,33 @@ class NodeStore(Protocol):
 
     def insert(self, ins: Insight) -> None:
         """Insert a new insight. Backend stamps timestamps server-side.
+        """
+        ...
+
+    def insert_raw(self, row: 'MigrateInsight') -> bool:
+        """Insert a copy of a stored row, keeping every column as given.
+
+        Parameters
+        ----------
+        row : MigrateInsight
+            A row read by `get_raw` from another store. Its timestamps,
+            chain, forget state and embedding are stored unchanged.
+
+        Returns
+        -------
+        bool
+            True when inserted, False when the id already exists, which
+            leaves the stored row unchanged.
+
+        Notes
+        -----
+        - Joins the caller's `transaction()`, so a raise there undoes
+          the insert.
+        """
+        ...
+
+    def get_raw(self, id: Id) -> 'MigrateInsight | None':
+        """Every column of row `id`, embedding included, in any state.
         """
         ...
 

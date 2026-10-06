@@ -47,6 +47,12 @@ from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
+_RAW_COLUMNS = (
+    'id, content, summary, embedding,'
+    ' enrich_attempted_at, enriched_at, created_at, updated_at,'
+    ' deleted_at, prompt_version, embedding_model,'
+    ' queue_uuid, replaced_by, author')
+
 
 class SqliteNodeStore(NodeStore):
     """Bindings from NodeStore Protocol verbs to `store.node` functions.
@@ -57,6 +63,42 @@ class SqliteNodeStore(NodeStore):
 
     def insert(self, ins: Insight) -> None:
         _node.insert_insight(self._db, ins)
+
+    def insert_raw(self, row: MigrateInsight) -> bool:
+        values = (
+            row.id, row.content, row.summary,
+            serialize_vector(row.embedding)
+            if row.embedding is not None else None,
+            format_timestamp(row.enrich_attempted_at)
+            if row.enrich_attempted_at else None,
+            format_timestamp(row.enriched_at) if row.enriched_at else None,
+            format_timestamp(row.created_at),
+            format_timestamp(row.updated_at),
+            format_timestamp(row.deleted_at) if row.deleted_at else None,
+            row.prompt_version, row.embedding_model, row.queue_uuid,
+            row.replaced_by, row.author)
+        cur = self._db._exec(
+            f'insert or ignore into insights ({_RAW_COLUMNS})'
+            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            values)
+        return cur.rowcount == 1
+
+    def get_raw(self, id: Id) -> MigrateInsight | None:
+        r = self._db._query(
+            f'select {_RAW_COLUMNS} from insights where id = ?',
+            (id,)).fetchone()
+        if r is None:
+            return None
+        return MigrateInsight(
+            id=r[0], content=r[1], summary=r[2],
+            embedding=deserialize_vector(r[3]) if r[3] else None,
+            enrich_attempted_at=parse_timestamp(r[4]) if r[4] else None,
+            enriched_at=parse_timestamp(r[5]) if r[5] else None,
+            created_at=parse_timestamp(r[6]),
+            updated_at=parse_timestamp(r[7]),
+            deleted_at=parse_timestamp(r[8]) if r[8] else None,
+            prompt_version=r[9], embedding_model=r[10],
+            queue_uuid=r[11], replaced_by=r[12], author=r[13])
 
     def get(self, id: Id) -> Insight | None:
         return _node.get_insight_by_id(self._db, id)

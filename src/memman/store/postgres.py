@@ -306,6 +306,13 @@ _INSIGHT_COLS = (
     ' author')
 
 
+_RAW_SELECT = (
+    'id, content, summary, embedding::real[],'
+    ' enrich_attempted_at, enriched_at, created_at, updated_at,'
+    ' deleted_at, prompt_version, embedding_model,'
+    ' queue_uuid, replaced_by, author')
+
+
 class PostgresNodeStore(NodeStore):
     """NodeStore implementation against a per-store Postgres schema.
     """
@@ -351,6 +358,38 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ins.queue_uuid,
                 sorted(insight_tokens(ins)),
                 ins.author))
+
+    def insert_raw(self, row: MigrateInsight) -> bool:
+        # `kw_tokens` follows the migrator's apply: empty for a deleted
+        # row, as `soft_delete` leaves it.
+        sql = self._q("""
+insert into {s}.insights
+    (id, content, summary, embedding,
+     enrich_attempted_at, enriched_at, created_at, updated_at,
+     deleted_at, prompt_version, embedding_model,
+     queue_uuid, kw_tokens, replaced_by, author)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+on conflict (id) do nothing
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (
+                row.id, row.content, row.summary,
+                [float(x) for x in row.embedding]
+                if row.embedding is not None else None,
+                row.enrich_attempted_at, row.enriched_at,
+                row.created_at, row.updated_at, row.deleted_at,
+                row.prompt_version, row.embedding_model, row.queue_uuid,
+                [] if row.deleted_at else sorted(
+                    insight_tokens(Insight(content=row.content))),
+                row.replaced_by, row.author))
+            return cur.rowcount == 1
+
+    def get_raw(self, id: Id) -> MigrateInsight | None:
+        sql = self._q(f'select {_RAW_SELECT} from {{s}}.insights where id = %s')
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (id,))
+            row = cur.fetchone()
+        return MigrateInsight(*row) if row else None
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
