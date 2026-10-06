@@ -52,10 +52,10 @@ from memman.queue import start_worker_run
 from memman.queue import stats as queue_stats
 from memman.setup.archive import archive_postgres_schema
 from memman.store import factory
-from memman.store.db import default_data_dir, list_local_store_dirs, open_db
-from memman.store.db import open_read_only, portable_store_name, read_active
-from memman.store.db import store_dir, store_exists, valid_store_name
-from memman.store.db import write_active
+from memman.store.db import default_data_dir, get_meta, list_local_store_dirs
+from memman.store.db import open_db, open_read_only, portable_store_name
+from memman.store.db import read_active, store_dir, store_exists
+from memman.store.db import valid_store_name, write_active
 from memman.store.errors import BackendError
 from memman.store.errors import ConfigError as StoreConfigError
 from memman.store.errors import StoreMissingError
@@ -66,6 +66,7 @@ from memman.store.model import insight_to_delta_dict, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.node import count_active_insights, get_stats
 from memman.store.node import iter_for_reembed
+from memman.store.overlay import BRANCH_PARENT, OverlayBackend
 from memman.store.sqlite import SqliteBackend, SqliteMigrator
 from tqdm import tqdm
 
@@ -1665,10 +1666,14 @@ def _process_queue_row(
         #   current head leaves the topic with one current row.
         # - A forgotten or missing head passes the original id
         #   through, and `_apply_plan` degrades to a named add.
+        # - A branch follows only a successor it holds. Following one
+        #   the parent wrote retires it with text that never saw it.
         old = backend.nodes.get_include_deleted(replaced_id)
         seen: set[str] = set()
         while (old is not None and old.replaced_by
-                and old.id not in seen):
+                and old.id not in seen
+                and (not isinstance(backend, OverlayBackend)
+                     or backend.branch_holds(old.replaced_by))):
             seen.add(old.id)
             old = backend.nodes.get_include_deleted(old.replaced_by)
         if (old is not None and old.deleted_at is None
@@ -1990,6 +1995,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
     with _active_backend(ctx) as backend:
         queued, old = _resolve_queued_or_stored(
             backend, data_dir_val, name, id)
+        if (queued is None and old is not None and old.replaced_by
+                and old.deleted_at is None
+                and isinstance(backend, OverlayBackend)
+                and not backend.branch_holds(old.id)):
+            raise click.ClickException(backend.nodes.retired_message(
+                old.id, old.replaced_by, verb='replace'))
     if queued is not None:
         id = queued
     elif old is None:
@@ -3851,14 +3862,17 @@ def prime() -> None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
         name = _resolve_store_name(data_dir, '')
         backend_name = resolve_store_backend(name, data_dir)
+        branch_parent = None
         if backend_name == 'sqlite':
             if not store_exists(data_dir, name):
                 raise StoreMissingError(name)
             with open_read_only(store_dir(data_dir, name)) as db:
                 stats = get_stats(db)
-            status_line = (f"[memman] Memory active "
-                           f"({stats['total_insights']} insights).")
-        else:
+                branch_parent = get_meta(db, BRANCH_PARENT)
+            if branch_parent is None:
+                status_line = (f"[memman] Memory active "
+                               f"({stats['total_insights']} insights).")
+        if backend_name != 'sqlite' or branch_parent is not None:
             with factory.open_backend(name, data_dir) as backend:
                 s = backend.nodes.stats()
                 status_line = (f'[memman] Memory active '

@@ -1,10 +1,12 @@
-"""Raw row copy on both backends: `nodes.get_raw` and `nodes.insert_raw`.
+"""Raw row copy: `nodes.get_raw`, `nodes.insert_raw` and Migrator.apply.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from memman.migrate import MigrateInsight
+from memman.embed.fingerprint import seed_default_fingerprint
+from memman.migrate import MigrateInsight, MigrationPayload
+from memman.store.sqlite import SqliteMigrator, open_sqlite_backend
 from tests.conftest import _vec
 
 CREATED = datetime(2025, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
@@ -80,6 +82,44 @@ def test_raw_inserted_current_row_scores_a_keyword_hit(backend):
         counts = session.keyword_counts({'grackle', 'north'})
 
     assert counts == {'row-a': 2}
+
+
+def test_raw_insert_keeps_the_instant_of_a_non_utc_timestamp(backend):
+    """Verify a timestamp in another zone reads back as the same instant.
+
+    Mutation: the SQLite insert formatting the wall clock with a `Z`
+        suffix and no UTC conversion, as psycopg hands back timestamptz
+        in the session zone.
+    Oracle: the same instant written at UTC-5.
+    """
+    eastern = CREATED.astimezone(timezone(timedelta(hours=-5)))
+
+    backend.nodes.insert_raw(_row(created_at=eastern, updated_at=eastern))
+
+    row = backend.nodes.get_raw('row-a')
+    assert (row.created_at, row.updated_at) == (CREATED, CREATED)
+
+
+def test_sqlite_apply_keeps_the_instant_of_a_non_utc_timestamp(tmp_path):
+    """Verify SqliteMigrator.apply stores a non-UTC timestamp as its instant.
+
+    Mutation: apply formatting the wall clock with a `Z` suffix and no
+        UTC conversion, which shifts a row migrated from Postgres.
+    Oracle: the same instant written at UTC-5.
+    """
+    data_dir = str(tmp_path / 'memman')
+    eastern = CREATED.astimezone(timezone(timedelta(hours=-5)))
+    fingerprint = seed_default_fingerprint()
+    payload = MigrationPayload(
+        fingerprint=fingerprint, embedding_dim=fingerprint.dim,
+        insights=[_row(created_at=eastern, updated_at=eastern)],
+        oplog=[], meta={})
+
+    SqliteMigrator(data_dir).apply('target', payload)
+
+    with open_sqlite_backend('target', data_dir) as backend:
+        row = backend.nodes.get_raw('row-a')
+    assert (row.created_at, row.updated_at) == (CREATED, CREATED)
 
 
 def test_get_raw_returns_none_for_a_missing_id(backend):

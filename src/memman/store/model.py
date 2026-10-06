@@ -227,7 +227,20 @@ class WorkerRun:
 
 def format_timestamp(dt: datetime) -> str:
     """Format datetime as RFC3339 with Z suffix (Go-compatible).
+
+    Parameters
+    ----------
+    dt : datetime
+        An aware value in any zone is converted to UTC first. A naive
+        value is taken as UTC.
+
+    Returns
+    -------
+    str
+        `YYYY-MM-DDTHH:MM:SSZ`.
     """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
     return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
 

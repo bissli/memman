@@ -7,7 +7,7 @@ universe is `nodes.get_all_active()`.
 import numpy as np
 import pytest
 from memman.search.recall import run_recall
-from tests.conftest import make_insight
+from tests.conftest import _vec, make_insight
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -107,6 +107,25 @@ def test_replaced_row_is_not_returned_by_recall(backend):
 
     returned = {r['insight'].id for r in resp['results']}
     assert returned == {'sup-0', 'sup-1', 'sup-3'}
+
+
+def test_vector_anchors_accepts_a_k_past_the_search_width_cap(backend):
+    """Verify a large k returns anchors in place of raising.
+
+    Mutation: Postgres ef_search set to 4 * k with no clamp, which
+        pgvector refuses above 1000, so a branch over-ask drops the
+        vector channel.
+    Oracle: one embedded row, which a working search returns. A first
+        small search loads pgvector, which only then checks the width.
+    """
+    backend.nodes.insert(make_insight(id='row-a', content='grackle'))
+    backend.nodes.update_embedding('row-a', _vec(1.0), 'model-x')
+
+    with backend.recall_session() as session:
+        session.vector_anchors(_vec(1.0), k=1)
+        anchors = session.vector_anchors(_vec(1.0), k=300)
+
+    assert [row_id for row_id, _ in anchors] == ['row-a']
 
 
 def test_minority_width_query_still_scores_its_own_rows(tmp_backend):

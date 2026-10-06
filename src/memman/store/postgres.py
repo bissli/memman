@@ -1006,12 +1006,13 @@ limit %s
         # - HNSW is approximate: a search width near `k` returns a
         #   top-k that is only near the true one, and a width well
         #   above `k` matches an exact scan. The width scales with `k`
-        #   above pgvector's own default of 40.
+        #   above pgvector's own default of 40, up to its cap of 1000.
         # - Set on THIS connection: the session opens its own in
         #   `__enter__`, so a width set on the Backend's connection
         #   never reaches this query.
         with self._conn.cursor() as cur:
-            cur.execute(f'set hnsw.ef_search = {max(40, 4 * int(k))}')
+            cur.execute(
+                f'set hnsw.ef_search = {min(1000, max(40, 4 * int(k)))}')
             cur.execute(sql, (query_vec, query_vec, k))
             return [
                 (r[0], float(r[1])) for r in cur.fetchall()

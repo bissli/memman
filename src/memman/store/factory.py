@@ -233,7 +233,8 @@ def open_backend(
     -------
     Backend
         A live backend. Two stores in one process can use distinct
-        backends.
+        backends. A store whose meta holds `branch_parent` opens as an
+        `OverlayBackend` over that parent.
 
     Raises
     ------
@@ -251,8 +252,14 @@ def open_backend(
     merged = dict(os.environ)
     merged.update(config.parse_env_file(config.env_file_path(data_dir)))
     validate_all(merged)
-    return desc.open_backend(
+    backend = desc.open_backend(
         store, data_dir, read_only=read_only, create=create)
+    if name == 'sqlite':
+        from memman.store.overlay import BRANCH_PARENT, OverlayBackend
+        parent = backend.meta.get(BRANCH_PARENT)
+        if parent is not None:
+            return OverlayBackend(store, backend, parent, data_dir)
+    return backend
 
 
 def store_exists(store: str, data_dir: str) -> bool:
