@@ -153,9 +153,9 @@ class Migrator(abc.ABC):
 
         Creates the store when it is missing. An insight whose id the
         store already holds keeps its stored columns. Every payload
-        oplog row is appended and every meta key is written, replacing
-        a stored value, so `store merge` passes an empty oplog and
-        empty meta.
+        oplog row is appended, except on Postgres, which skips a row
+        whose `legacy_id` it already holds. Every meta key is written,
+        replacing a stored value.
 
         Raises
         ------

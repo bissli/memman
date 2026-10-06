@@ -28,6 +28,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from itertools import starmap
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -312,6 +313,37 @@ _RAW_SELECT = (
     ' deleted_at, prompt_version, embedding_model,'
     ' queue_uuid, replaced_by, author')
 
+_RAW_INSERT = (
+    'id, content, summary, embedding,'
+    ' enrich_attempted_at, enriched_at, created_at, updated_at,'
+    ' deleted_at, prompt_version, embedding_model,'
+    ' queue_uuid, kw_tokens, replaced_by, author')
+
+
+def _raw_values(row: MigrateInsight) -> tuple:
+    """Column values of `row` in `_RAW_INSERT` order.
+
+    Parameters
+    ----------
+    row : MigrateInsight
+        Any row. A deleted one gets empty `kw_tokens`, as
+        `soft_delete` leaves it.
+
+    Returns
+    -------
+    tuple
+    """
+    return (
+        row.id, row.content, row.summary,
+        [float(x) for x in row.embedding]
+        if row.embedding is not None else None,
+        row.enrich_attempted_at, row.enriched_at,
+        row.created_at, row.updated_at, row.deleted_at,
+        row.prompt_version, row.embedding_model, row.queue_uuid,
+        [] if row.deleted_at else sorted(
+            insight_tokens(Insight(content=row.content))),
+        row.replaced_by, row.author)
+
 
 class PostgresNodeStore(NodeStore):
     """NodeStore implementation against a per-store Postgres schema.
@@ -360,28 +392,13 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ins.author))
 
     def insert_raw(self, row: MigrateInsight) -> bool:
-        # `kw_tokens` follows the migrator's apply: empty for a deleted
-        # row, as `soft_delete` leaves it.
-        sql = self._q("""
-insert into {s}.insights
-    (id, content, summary, embedding,
-     enrich_attempted_at, enriched_at, created_at, updated_at,
-     deleted_at, prompt_version, embedding_model,
-     queue_uuid, kw_tokens, replaced_by, author)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-on conflict (id) do nothing
-""")
+        sql = self._q(
+            f'insert into {{s}}.insights ({_RAW_INSERT})'
+            ' values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
+            ' %s, %s, %s, %s)'
+            ' on conflict (id) do nothing')
         with self._conn.cursor() as cur:
-            cur.execute(sql, (
-                row.id, row.content, row.summary,
-                [float(x) for x in row.embedding]
-                if row.embedding is not None else None,
-                row.enrich_attempted_at, row.enriched_at,
-                row.created_at, row.updated_at, row.deleted_at,
-                row.prompt_version, row.embedding_model, row.queue_uuid,
-                [] if row.deleted_at else sorted(
-                    insight_tokens(Insight(content=row.content))),
-                row.replaced_by, row.author))
+            cur.execute(sql, _raw_values(row))
             return cur.rowcount == 1
 
     def get_raw(self, id: Id) -> MigrateInsight | None:
@@ -1912,30 +1929,9 @@ class PostgresMigrator(Migrator):
                     f' meta.embed_fingerprint')
             fingerprint = Fingerprint.from_json(fp_str)
 
-            cur.execute(f"""
-select id, content, summary, embedding::real[],
-       enrich_attempted_at, enriched_at, created_at, updated_at,
-       deleted_at, prompt_version, embedding_model,
-       queue_uuid, replaced_by,
-       author
-from {schema}.insights
-order by id
-""")
-            insight_rows = cur.fetchall()
-            insights: list[MigrateInsight] = [MigrateInsight(
-                    id=r[0], content=r[1],
-                    summary=r[2],
-                    embedding=r[3],
-                    enrich_attempted_at=r[4],
-                    enriched_at=r[5],
-                    created_at=r[6],
-                    updated_at=r[7],
-                    deleted_at=r[8],
-                    prompt_version=r[9],
-                    embedding_model=r[10],
-                    queue_uuid=r[11],
-                    replaced_by=r[12],
-                    author=r[13]) for r in insight_rows]
+            cur.execute(
+                f'select {_RAW_SELECT} from {schema}.insights order by id')
+            insights = list(starmap(MigrateInsight, cur.fetchall()))
 
             cur.execute(f"""
 select coalesce(legacy_id, id) as sqlite_id,
@@ -1970,41 +1966,13 @@ order by sqlite_id
                 apply_baseline_schema(conn, schema, dim)
 
                 if payload.insights:
-                    insight_rows = []
-                    for ins in payload.insights:
-                        emb = (
-                            [float(x) for x in ins.embedding]
-                            if ins.embedding is not None else None)
-                        insight_rows.append((
-                            ins.id, ins.content,
-                            ins.summary,
-                            emb,
-                            ins.enrich_attempted_at, ins.enriched_at,
-                            ins.created_at, ins.updated_at,
-                            ins.deleted_at, ins.prompt_version,
-                            ins.embedding_model,
-                            ins.queue_uuid,
-                            [] if ins.deleted_at else sorted(
-                                insight_tokens(Insight(
-                                    content=ins.content))),
-                            ins.replaced_by,
-                            ins.author))
                     with conn.cursor() as cur:
                         cur.executemany(
-                            f'insert into {schema}.insights ('
-                            ' id, content, summary,'
-                            ' embedding,'
-                            ' enrich_attempted_at, enriched_at, created_at,'
-                            ' updated_at, deleted_at,'
-                            ' prompt_version,'
-                            ' embedding_model,'
-                            ' queue_uuid,'
-                            ' kw_tokens, replaced_by, author)'
-                            ' values (%s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s, %s, %s,'
+                            f'insert into {schema}.insights ({_RAW_INSERT})'
+                            ' values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
                             ' %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
-                            insight_rows)
+                            [_raw_values(ins) for ins in payload.insights])
 
                 if payload.oplog:
                     op_rows = [(

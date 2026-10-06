@@ -113,19 +113,20 @@ def test_postgres_migrator_names_replaced_by_on_both_halves():
     Mutation: adding `replaced_by` to gather's select but not to
         apply's insert list, or the reverse -- every Postgres
         migration then drops or nulls the pointer.
-    Oracle: source text of `PostgresMigrator` (read from source since
-        psycopg may be absent) names the column in the gather select
-        and in the apply insert list.
+    Oracle: source text of `postgres.py` (read from source since
+        psycopg may be absent): the `_RAW_SELECT` and `_RAW_INSERT`
+        column lists name the column, and gather and apply use them.
     """
     src = (Path(inspect.getsourcefile(node_mod)).parent
            / 'postgres.py').read_text()
+    for constant in ('_RAW_SELECT', '_RAW_INSERT'):
+        _, _, columns = src.partition(f'\n{constant} = (')
+        assert 'replaced_by' in columns.partition(')')[0], constant
     _, _, migrator = src.partition('class PostgresMigrator')
     _, _, gather_body = migrator.partition('def gather')
-    _, _, select_list = gather_body.partition('select id, content')
-    assert 'replaced_by' in select_list[:600]
+    assert '{_RAW_SELECT}' in gather_body.partition('def apply')[0]
     _, _, apply_body = migrator.partition('def apply')
-    _, _, insert_list = apply_body.partition('insert into {schema}.insights')
-    assert 'replaced_by' in insert_list[:800]
+    assert '({_RAW_INSERT})' in apply_body.partition('def archive')[0]
 
 
 def test_open_db_refuses_a_store_missing_replaced_by(tmp_path):
