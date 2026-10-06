@@ -385,8 +385,7 @@ where deleted_at is null and replaced_by is null and embedding is not null
             self, query_tokens: set[str]) -> dict[Id, int]:
         """Match count per active insight id, from FTS5 probes.
 
-        The contract, including the non-ASCII divergence from
-        `keyword.insight_tokens`, is in the Protocol docstring.
+        The contract is in the Protocol docstring.
         """
         if not query_tokens:
             return {}
@@ -403,8 +402,8 @@ where insights_fts match ? and i.deleted_at is null and i.replaced_by is null
         #   per-token count is `kw_score`'s numerator.
         # - The match expression is built from the token alone, never
         #   from user text, since FTS5 `match` takes a query language.
-        #   The quotes keep the probe valid if `tokenize` stops
-        #   guaranteeing `[a-zA-Z0-9]+`.
+        #   The quotes keep a token that is an FTS5 keyword, such as
+        #   `near`, a plain term.
         for token in query_tokens:
             for (iid,) in self.db._query(sql, (f'"{token}"',)):
                 counts[iid] = counts.get(iid, 0) + 1

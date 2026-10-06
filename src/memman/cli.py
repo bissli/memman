@@ -1040,8 +1040,9 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
                 if ins.id in counts and ins.id != queue_uuid
                 and len(ins.content.encode('utf-8')) <= _MAX_CONTENT_BYTES
                 ]
-        # A row whose words the ASCII tokenizer drops can still match
-        # the store's own index, so its length floors at one.
+        # A row can match the store's own index on a word the tokenizer
+        # splits otherwise (a decomposed accent), so its length floors
+        # at one.
         related_rows.sort(
             key=lambda ins: counts[ins.id] / math.sqrt(
                 max(len(insight_tokens(ins)), 1)),

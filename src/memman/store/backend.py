@@ -458,8 +458,8 @@ class RecallSession(Protocol):
         Parameters
         ----------
         query_tokens : set[str]
-            Tokens from `search.keyword.tokenize`, so each is
-            `[a-zA-Z0-9]+` and none is a stopword.
+            Tokens from `search.keyword.tokenize`: runs of Unicode
+            letters and numbers, none a stopword.
 
         Returns
         -------
@@ -474,13 +474,6 @@ class RecallSession(Protocol):
           `keyword.insight_tokens` and is the numerator of
           `kw_score`, so a backend that counts differently shifts
           `signals.keyword` and the rerank blend.
-        - Non-ASCII text diverges on SQLite. `keyword._WORD_RE` is
-          `[a-zA-Z0-9]+` and splits a run at any other character,
-          while FTS5 `unicode61` keeps a whole Unicode word, so
-          `naive` with an i-diaeresis is one FTS term and two Python
-          tokens. Postgres matches Python exactly. Closing the gap
-          means changing `_WORD_RE`, which restales every stored
-          `kw_tokens` set.
         """
         ...
 

@@ -409,35 +409,34 @@ def test_integrity_check_does_not_cry_drift_on_a_read_only_handle(
     assert 'not checked' in result['detail']
 
 
-def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
-    """Pin the known SQLite/Python tokenizer gap so it cannot widen.
+def test_non_ascii_words_count_the_same_as_python(backend):
+    """Verify a word with a non-ASCII letter counts alike on both backends.
 
-    Mutation: any change that moves the boundary - `remove_diacritics
-        1` or `2`, a different tokenizer, or a Postgres split that
-        stops matching `_WORD_RE`. All three would silently reshape
-        `signals.keyword` for accented content, in opposite
-        directions on the two backends.
-    Oracle: hand-computed from the two tokenizers' rules. `_WORD_RE`
-        is `[a-zA-Z0-9]+`, so `naive` with an i-diaeresis is `na` +
-        `ve`; `unicode61` keeps it whole and matches neither.
+    Mutation: an ASCII-only `_WORD_RE`, which splits `naive` with an
+        i-diaeresis into `na` + `ve` while FTS5 `unicode61` keeps it
+        whole, so SQLite matches neither fragment; or a Unicode
+        `_WORD_RE` that keeps `_` or drops digits like a superscript
+        two, which FTS5 treats otherwise.
+    Oracle: the Python token-overlap counts, and hand-computed token
+        sets from `unicode61`'s rule that letters and numbers are
+        token characters.
     """
-    backend.nodes.insert(make_insight(
-        id='kw-nonascii', content='a na\u00efve fallback'))
+    insights = {}
+    for iid, content in (
+            ('kw-naive', 'a na\u00efve fallback'),
+            ('kw-delta', 'the \u0394stock hedge'),
+            ('kw-power', 'fit e\u00b2 by least_squares')):
+        insights[iid] = make_insight(id=iid, content=content)
+        backend.nodes.insert(insights[iid])
 
-    with backend.recall_session() as session:
-        got = session.keyword_counts({'na', 've', 'fallback'})
-
-    # Notes:
-    # - This asserts a DIVERGENCE. SQLite cannot reproduce `_WORD_RE`
-    #   without changing `_WORD_RE` itself, which would reshape
-    #   `signals.keyword` recall scoring. `RecallSession.keyword_counts`
-    #   documents the gap and its cost.
-    # - Postgres is the faithful side and is asserted as such, so a
-    #   regression there fails even though the value differs by
-    #   backend.
-    assert got.get('kw-nonascii') == (1 if backend_kind == 'sqlite' else 3), (
-        'sqlite indexes the whole word and matches only "fallback";'
-        ' postgres splits exactly as _WORD_RE does')
+    assert tokenize('na\u00efve \u0394stock e\u00b2') == {
+        'na\u00efve', '\u03b4stock', 'e\u00b2'}
+    for query in ('na\u00efve fallback', '\u0394stock hedge',
+                  'stock', 'e\u00b2 squares'):
+        query_tokens = tokenize(query)
+        with backend.recall_session() as session:
+            got = session.keyword_counts(query_tokens)
+        assert got == _python_counts(insights, query_tokens), query
 
 
 @pytest.mark.postgres

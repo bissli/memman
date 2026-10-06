@@ -20,7 +20,10 @@ STOPWORDS = {
     'which', 'who', 'how', 'when', 'where',
     }
 
-_WORD_RE = re.compile(r'[a-zA-Z0-9]+')
+# Letters and numbers in any script, the token characters of FTS5
+# `unicode61`, so SQLite's index splits precomposed text where this
+# does. A decomposed accent still splits here and not there.
+_WORD_RE = re.compile(r'[^\W_]+')
 
 
 def tokenize(text: str) -> set[str]:

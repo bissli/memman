@@ -143,7 +143,7 @@ Scored recall embeds the query with the store's bound model. If embedding fails,
 
 The union of these lists forms the candidate set, with no further cap. The vector channel takes 100 so the reranker sees a full shortlist of the query's nearest memories.
 
-Keyword tokenization lowercases text, splits outside `[a-zA-Z0-9]`, and removes stopwords. SQLite uses an FTS5 probe per term; Postgres counts intersections with `kw_tokens`. Non-ASCII text can yield different counts because FTS5 tokenizes it differently.
+Keyword tokenization lowercases text, splits on any character that is not a Unicode letter or number, and removes stopwords. SQLite uses an FTS5 probe per term; Postgres counts intersections with `kw_tokens`. Both count precomposed text alike. A decomposed accent or a Turkish dotted capital I still splits differently in FTS5, so such a word scores no keyword hit on SQLite.
 
 SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine threshold means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails if an absolute floor is reintroduced.
 
