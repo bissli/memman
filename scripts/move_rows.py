@@ -1,29 +1,23 @@
-#!/usr/bin/env python3
-r"""Move or copy chosen rows from one memman store to another, by hand.
-
-memman has no verb for a store split. The script copies each row with
-its id, dates, author, summary and embedding, which a fresh `memman
-remember` would lose.
+r"""Move or copy rows between memman stores, keeping ids, dates and embeddings.
 
 Usage
 -----
     python scripts/move_rows.py export SOURCE OUTDIR
     python scripts/move_rows.py apply SOURCE TARGET PLAN [--dry-run]
 
-`export` only reads SOURCE. It writes `<SOURCE>_payload.pkl`, the full
-payload as a backup, and `<SOURCE>_current.json`, the current rows.
-
-`apply` reads PLAN, a TSV of `<id>\t<move|copy>` lines naming current
-rows of SOURCE. TARGET must already exist (`memman store create`).
+`export` only reads SOURCE. It writes `<SOURCE>_payload.pkl`, a full
+backup, and `<SOURCE>_current.json`, the current rows. `apply` takes
+PLAN, a TSV of `<id>\t<move|copy>` over current SOURCE rows, into a
+TARGET that `memman store create` already made.
 
 Notes
 -----
-- A planned row reaches TARGET with every row it replaced, so
-  `memman insights show <id> --history` works in TARGET.
-- A `move` row is then forgotten in SOURCE with the rows it replaced,
-  so `memman forget` would accept each step.
-- A re-run finishes a run that stopped part way: the copy skips ids
-  TARGET holds, and the forget skips forgotten rows.
+- Run `memman scheduler stop` first. A `replace` queued mid-run lands
+  in SOURCE after its row has moved.
+- Each row takes the rows it replaced along, so `--history` works in
+  TARGET. A `move` forgets all of them in SOURCE, and never forgets a
+  row TARGET does not hold as current.
+- A re-run finishes an interrupted run.
 """
 
 import argparse
@@ -43,7 +37,7 @@ from memman.store.model import insight_to_delta_dict
 
 
 def export(source: str, outdir: Path, data_dir: str) -> None:
-    """Write the SOURCE payload backup and its current rows as JSON.
+    """Write the full SOURCE payload as a pickle and its current rows as JSON.
     """
     payload = _migrator_for(source, data_dir).gather(source)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -71,17 +65,16 @@ def export(source: str, outdir: Path, data_dir: str) -> None:
 def apply(
         source: str, target: str, plan_path: Path, data_dir: str,
         dry_run: bool) -> None:
-    r"""Copy the planned rows to TARGET, then forget the `move` rows.
+    r"""Copy the planned rows to TARGET, then forget the `move` rows in SOURCE.
 
     Parameters
     ----------
     source : str
         Store the rows leave.
     target : str
-        Existing store with the same embed model as SOURCE.
+        Existing store, not SOURCE, with SOURCE's embed model.
     plan_path : Path
-        TSV of `<id>\t<move|copy>`. Every id must be a current row of
-        SOURCE.
+        TSV of `<id>\t<move|copy>`, each id a current SOURCE row.
     data_dir : str
         Base memman data directory.
     dry_run : bool
@@ -90,9 +83,10 @@ def apply(
     Raises
     ------
     SystemExit
-        A bad plan line, an id not current in SOURCE, an embed model
-        mismatch, or a queued replace in SOURCE of a planned row.
-        Nothing is written.
+        Before any write: a bad plan line, SOURCE equal to TARGET, an id
+        not current in SOURCE, an embed model mismatch, or a queued
+        replace of a planned row. After the copy: a `move` row not
+        current in TARGET, in which case SOURCE is left untouched.
     """
     action_by_id = {}
     for line in plan_path.read_text().splitlines():
@@ -216,7 +210,7 @@ where store = ? and status in ('pending', 'failed')
 
 
 def main() -> int:
-    """Parse the command line and run one subcommand.
+    """Run `export` or `apply` against MEMMAN_DATA_DIR, else ~/.memman.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)

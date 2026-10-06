@@ -1,29 +1,4 @@
-#!/usr/bin/env python3
-r"""Re-enrich stale insights via `enrich --stale-only`.
-
-Iterates a list of stores, runs `memman enrich --stale-only`
-per store, and streams a tqdm progress bar sized from the *stale*
-row count (rows whose persisted `prompt_version` no longer matches
-the active enrichment key, plus stranded rows), not the active-row
-count. Per-store output is captured and appended to a log file under
-`/tmp` so the rebuild can run in the background and the operator can
-tail it later.
-
-Stores with zero stale rows are skipped entirely (no LLM acquisition,
-no lock, no oplog entry). The pre-flight stale count comes from the
-`stale_insights` field of `memman --store X status` JSON, which is
-cheap (single sequential scan over insights, no LLM probes).
-
-Cross-store parallelism (`--parallel N`) runs N store-rebuilds at
-once via a subprocess thread pool; each rebuild process internally
-fires 2 concurrent LLM calls, so the steady-state in-flight chat
-completion count is ~2 * N. The default of 4 keeps that under
-typical OpenRouter rate ceilings for sonnet-class models. Bump for
-higher tiers; set 1 to revert to serial.
-
-Different stores live in different DBs (or different schemas on
-Postgres), so cross-store concurrency does not race the per-store
-`reembed_lock`. Same-store parallelism is unsafe and not exposed.
+r"""Run `memman enrich --stale-only` over many stores with one progress bar.
 
 Usage
 -----
@@ -31,8 +6,16 @@ Usage
                                     [--memman PATH] [--parallel N] \\
                                     [--continue-on-error]
 
-With no STORE arguments, runs against every store reported by
-`memman store list`. Skips stores whose stale-insight count is zero.
+With no STORE, every store `memman store list` reports runs. A store
+whose `memman status` shows no stale rows is skipped. Each store's
+output is appended to the log.
+
+Notes
+-----
+- Each store run makes two concurrent LLM calls, so `--parallel N`
+  holds about 2N in flight. Lower N on rate-limit errors.
+- Stores run in parallel, never one store twice at once: two runs on
+  one store race its `reembed_lock`.
 """
 
 from __future__ import annotations
@@ -57,15 +40,23 @@ DEFAULT_PARALLEL = 4
 
 
 def _resolve_memman(explicit: str | None) -> str:
-    """Return the absolute path to the memman binary to invoke.
+    """Path of the memman binary to run.
 
-    Prefers the sibling of the running Python interpreter so a
-    side-by-side install (e.g., a pipx production binary on PATH and
-    a Poetry editable dev install in a virtualenv) selects the dev
-    binary when running from the dev environment, instead of
-    silently picking up whichever binary PATH happens to surface
-    first. Falls back to `shutil.which` for system-python +
-    `pip install --user` layouts where the sibling is absent.
+    Parameters
+    ----------
+    explicit : str or None
+        The `--memman` value, which wins when set.
+
+    Returns
+    -------
+    str
+        `explicit`, else the `memman` beside the running interpreter, so
+        a dev virtualenv runs its own build, else the one on PATH.
+
+    Raises
+    ------
+    SystemExit
+        No memman binary is found.
     """
     if explicit:
         return explicit
@@ -80,7 +71,8 @@ def _resolve_memman(explicit: str | None) -> str:
 
 
 def _list_stores(memman: str) -> list[str]:
-    """Return every store name reported by `memman store list`."""
+    """Every store name `memman store list` reports.
+    """
     out = subprocess.run(
         [memman, 'store', 'list'],
         capture_output=True, text=True, check=True)
@@ -88,13 +80,13 @@ def _list_stores(memman: str) -> list[str]:
 
 
 def _store_stale_count(memman: str, store: str) -> int:
-    """Return the stale (provenance-drifted) insight count for `store`.
+    """Stale row count of `store`, from `memman --store <store> status`.
 
-    Uses `memman --store <store> status` (cheap, no LLM). The status
-    JSON exposes the count as `stale_insights`; null indicates the
-    active enrichment key couldn't be resolved (e.g., the store would
-    not open), in which case treat the store as having no work and
-    skip it.
+    Returns
+    -------
+    int
+        0 when the store does not open or reports no count, so the
+        caller skips it.
     """
     out = subprocess.run(
         [memman, '--store', store, 'status'],
@@ -116,14 +108,23 @@ _LOG_LOCK = Lock()
 
 def _rebuild_store(memman: str, store: str, log_path: Path,
                    on_row: Callable[[], None]) -> tuple[int, int, str]:
-    """Run rebuild for one store, streaming progress via stderr.
+    """Run `memman enrich --stale-only` on one store.
 
-    Each `done` event from the child (emitted because we pass
-    `--progress-jsonl`) calls `on_row()` so the parent's outer bar
-    can tick per row. Non-progress stderr lines are buffered and
-    appended to `log_path` along with the final stdout once the
-    child exits. Returns `(returncode, processed_count, raw_output)`.
-    Log writes are serialized across worker threads via `_LOG_LOCK`.
+    Parameters
+    ----------
+    memman : str
+        memman binary.
+    store : str
+        Store name.
+    log_path : Path
+        File the run's stdout and stderr are appended to.
+    on_row : Callable[[], None]
+        Called once per enriched row.
+
+    Returns
+    -------
+    tuple[int, int, str]
+        Exit code, rows processed, and the run's combined output.
     """
     proc = subprocess.Popen(
         [memman, '--store', store, 'enrich',
@@ -174,7 +175,13 @@ def _rebuild_store(memman: str, store: str, log_path: Path,
 
 
 def main() -> int:
-    """Drive the rebuild + progress bar."""
+    """Enrich every selected store under one progress bar.
+
+    Returns
+    -------
+    int
+        0, or 1 when any store failed.
+    """
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         'stores', nargs='*',
@@ -286,12 +293,33 @@ def _wrapped_rebuild(
         bar: tqdm, in_flight: set[str], in_flight_lock: Any,
         set_postfix: Callable[[], None],
         ) -> tuple[float, int, int, str]:
-    """Run `_rebuild_store`, ticking `bar` per row and tracking in_flight.
+    """Run `_rebuild_store` on one store inside the shared progress bar.
 
-    Reconciles the bar at the end so each store contributes exactly
-    `expected` units regardless of how many `done` events streamed
-    (e.g., if the child processed fewer rows than the pre-flight
-    `_store_stale_count` snapshot suggested).
+    Parameters
+    ----------
+    memman : str
+        memman binary.
+    store : str
+        Store name.
+    expected : int
+        The store's stale count, which the bar advances by in total
+        even when the run enriches fewer rows.
+    log_path : Path
+        File the run's output is appended to.
+    bar : tqdm
+        Shared progress bar, ticked once per enriched row.
+    in_flight : set[str]
+        Names of the stores running now. `store` is in it for the run.
+    in_flight_lock : Any
+        Lock guarding `in_flight`.
+    set_postfix : Callable[[], None]
+        Redraws the bar's list of running stores.
+
+    Returns
+    -------
+    tuple[float, int, int, str]
+        Start time from `time.monotonic`, exit code, rows processed,
+        and the run's combined output.
     """
     with in_flight_lock:
         in_flight.add(store)

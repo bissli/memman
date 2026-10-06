@@ -47,7 +47,7 @@ classifiers = [
   "Topic :: Text Processing :: Indexing",
   "Typing :: Typed",
 ]
-packages = [{ include = "memman", from = "src" }, { include = "scripts" }]
+packages = [{ include = "memman", from = "src" }]
 include = ["src/memman/setup/assets/**/*"]
 
 [tool.poetry.scripts]
