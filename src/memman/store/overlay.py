@@ -9,9 +9,8 @@ Notes
 - A store is a branch exactly when its meta holds `branch_parent`.
 - Every id the branch holds, in any state, hides the parent row with
   that id.
-- Only this module keeps branch work off the parent. The parent opens
-  with `read_only=True`, which on Postgres still returns a writable
-  connection.
+- The parent opens with `read_only=True`, so a write to it raises on
+  either backend.
 """
 
 import dataclasses

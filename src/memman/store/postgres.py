@@ -1086,13 +1086,28 @@ class PostgresBackend(Backend):
     meta: PostgresMetaStore
     oplog: PostgresOplog
 
-    def __init__(self, dsn: str, store: str) -> None:
+    def __init__(
+            self, dsn: str, store: str, *, read_only: bool = False) -> None:
+        """Open the primary connection, bound to the store's schema.
+
+        Parameters
+        ----------
+        dsn : str
+            Connection string.
+        store : str
+            Store name.
+        read_only : bool, default False
+            The server refuses every write on the primary connection
+            with `ReadOnlySqlTransaction`.
+        """
         self._dsn = dsn
         self._store = store
         self._schema = _store_schema(store)
         self._conn = _open_connection(dsn, autocommit=True)
         with self._conn.cursor() as cur:
             cur.execute(f'set search_path = {self._schema}, public')
+            if read_only:
+                cur.execute('set default_transaction_read_only = on')
         self.nodes = PostgresNodeStore(self._conn, self._schema)
         self.meta = PostgresMetaStore(self._conn, self._schema)
         self.oplog = PostgresOplog(self._conn, self._schema)
@@ -1420,9 +1435,11 @@ def open_postgres_backend(
     dsn : str
         Connection string.
     read_only : bool, default False
-        Skip the HNSW index ensure.
+        Run no schema statement and return a backend whose writes the
+        server refuses.
     create : bool, default False
-        Create the schema when it is missing.
+        Create the schema when it is missing. A writable open also
+        recreates a baseline or HNSW index dropped by name.
 
     Returns
     -------
@@ -1440,10 +1457,11 @@ def open_postgres_backend(
         raise StoreMissingError(store)
     stored = _read_stored_dim(dsn, store)
     target_dim = _resolve_active_dim(expected_dim=stored)
+    if read_only:
+        _assert_vector_dim_matches(dsn, store, target_dim)
+        return PostgresBackend(dsn, store, read_only=True)
     _ensure_baseline_schema(dsn, store, dim=target_dim)
     _assert_vector_dim_matches(dsn, store, target_dim)
-    if read_only:
-        return PostgresBackend(dsn, store)
     backend = PostgresBackend(dsn, store)
     try:
         _ensure_hnsw_index(dsn, _store_schema(store))

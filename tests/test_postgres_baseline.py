@@ -546,3 +546,49 @@ def test_read_stored_dim_distinguishes_absent_from_unreachable(
     with pytest.raises(BackendError) as caught:
         _read_stored_dim(bad_dsn, 'absent_store')
     assert isinstance(caught.value.__cause__, psycopg.OperationalError)
+
+
+def test_read_only_open_leaves_a_dropped_index_dropped(_pg_store_backend):
+    """Verify a read-only open runs no baseline schema statement.
+
+    Mutation: the baseline `create index if not exists` run on a
+        read-only open, so a branch's read of its parent rebuilds an
+        index on the parent.
+    Oracle: the catalog, after the index is dropped by name.
+    """
+    _, pg_dsn, store_name = _pg_store_backend
+    index_name = f'idx_insights_created_{_store_schema(store_name)}'
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        conn.execute(f'drop index {_store_schema(store_name)}.{index_name}')
+
+    open_postgres_backend(store_name, pg_dsn, read_only=True).close()
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        row = conn.execute(
+            'select 1 from pg_class where relname = %s',
+            (index_name,)).fetchone()
+    assert row is None
+
+
+def test_read_only_open_refuses_a_write(_pg_store_backend):
+    """Verify a write through a read-only backend raises and changes nothing.
+
+    Mutation: a read-only open handing back a writable connection, so
+        an overlay bug writes branch work into the parent.
+    Oracle: the server's read-only refusal, and the meta key read on a
+        fresh connection.
+    """
+    _, pg_dsn, store_name = _pg_store_backend
+    backend = open_postgres_backend(store_name, pg_dsn, read_only=True)
+
+    try:
+        with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+            backend.meta.set('probe', 'written')
+    finally:
+        backend.close()
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        row = conn.execute(
+            f'select value from {_store_schema(store_name)}.meta'
+            " where key = 'probe'").fetchone()
+    assert row is None
