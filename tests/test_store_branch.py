@@ -726,6 +726,82 @@ def test_merge_fault_after_the_inserts_leaves_the_parent_unchanged(
     assert 'branch_merging' in _snapshot(data_dir, branch)[1]
 
 
+@pytest.mark.no_auto_drain
+def test_merge_failing_before_the_parent_write_clears_its_flag(
+        mm_runner, monkeypatch):
+    """Verify a parent read failing in merge's checks leaves the branch writable.
+
+    Mutation: only the refusal path clears `branch_merging`, so a parent
+        outage during the checks freezes every branch write.
+    Oracle: the branch meta after the call, with a stub that raises on
+        the parent's read-only open behind a pending parent replace.
+    """
+    _, data_dir = mm_runner
+    invoke(mm_runner, ['store', 'create', 'work'])
+    target = json.loads(invoke(mm_runner, [
+        'remember', '--store', 'work',
+        'The retry cap for batch jobs is three.',
+        ]).output)['id']
+    force_drain(data_dir)
+    branch = _branch(data_dir, parent='work')
+    invoke(mm_runner, [
+        'replace', '--store', 'work', target,
+        'The retry cap for batch jobs is five.'])
+    real_open = factory.open_backend
+
+    def parent_down(store, data_dir_arg, *args, read_only=False, **kwargs):
+        if store == 'work' and read_only:
+            raise StoreMissingError('work')
+        return real_open(store, data_dir_arg, *args, read_only=read_only,
+                         **kwargs)
+
+    monkeypatch.setattr(factory, 'open_backend', parent_down)
+
+    result = invoke(mm_runner, ['store', 'merge', branch])
+
+    assert result.exit_code != 0
+    assert 'branch_merging' not in _snapshot(data_dir, branch)[1]
+
+
+def test_merge_failing_after_the_parent_commit_claims_no_empty_parent(
+        mm_runner, monkeypatch):
+    """Verify a failure after the parent commit never says nothing was written.
+
+    Mutation: the error for any failure in the parent step says merge
+        wrote nothing, though the commit already holds the copied rows.
+    Oracle: the branch row in the parent after the call, with a stub
+        whose close raises once the parent token is gone.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    own = _remember(mm_runner, 'The grackle colony nests by the river.', branch)
+    real_open = factory.open_backend
+
+    def lost_ack(store, data_dir_arg, *args, **kwargs):
+        backend = real_open(store, data_dir_arg, *args, **kwargs)
+        real_close = backend.close
+
+        def close():
+            committed = (
+                store == 'default'
+                and backend.meta.get(f'branch_token:{branch}') is None)
+            real_close()
+            if committed:
+                raise OSError('connection reset')
+
+        backend.close = close
+        return backend
+
+    with monkeypatch.context() as patch:
+        patch.setattr(factory, 'open_backend', lost_ack)
+        result = invoke(mm_runner, ['store', 'merge', branch])
+
+    assert result.exit_code != 0
+    assert f'memman store merge {branch}' in result.output
+    assert 'wrote nothing' not in result.output
+    assert own in _snapshot(data_dir, 'default')[0]
+
+
 @pytest.mark.parametrize('own_row', [False, True])
 def test_forget_on_a_merging_branch_refuses(mm_runner, own_row):
     """Verify the overlay refuses a forget once a merge set its flag.
@@ -1156,6 +1232,48 @@ def test_merge_copies_a_branch_row_whole_without_api_calls(
     assert reply['copied'] == 1
     assert parent_row == branch_row
     assert calls == []
+
+
+@pytest.mark.postgres
+def test_merge_after_a_width_changing_swap_reaches_a_postgres_parent(
+        mm_runner, env_file, pg_dsn, monkeypatch):
+    """Verify merge copies a retired branch row the swap left at the old width.
+
+    Mutation: merge copies a retired row's vector whatever its width, so
+        the Postgres parent rejects the old-width vector, the merge
+        fails on every re-run and the branch stays frozen.
+    Oracle: a branch row replaced before both stores swap to a model of
+        another width, and the parent's rows read after the merge.
+    """
+    _, data_dir = mm_runner
+    env_file('MEMMAN_BACKEND_mergepg', 'postgres')
+    env_file('MEMMAN_POSTGRES_DSN_mergepg', pg_dsn)
+    created = invoke(mm_runner, ['store', 'create', 'mergepg'])
+    assert created.exit_code == 0, created.output
+    try:
+        branch = _branch(data_dir, parent='mergepg')
+        old = _remember(
+            mm_runner, 'The retry cap for batch jobs is three.', branch)
+        new = _replace(
+            mm_runner, old, 'The retry cap for batch jobs is seven.', branch)
+        target = _FakeTargetProvider()
+        target.prepare()
+        monkeypatch.setitem(registry._GET_FOR_CACHE, target.model, target)
+        monkeypatch.setattr(
+            sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
+        for store in ('mergepg', branch):
+            swap = invoke(mm_runner, [
+                '--store', store, 'embed', 'swap', '--to', target.model])
+            assert swap.exit_code == 0, swap.output
+
+        result = invoke(mm_runner, ['store', 'merge', branch])
+
+        assert result.exit_code == 0, result.output
+        with factory.open_backend('mergepg', data_dir) as parent:
+            assert parent.nodes.get_raw(old).replaced_by == new
+            assert len(parent.nodes.get_raw(new).embedding) == target.dim
+    finally:
+        factory.drop_store('mergepg', data_dir)
 
 
 @pytest.mark.parametrize(('branch_state', 'parent_state', 'expected'), [

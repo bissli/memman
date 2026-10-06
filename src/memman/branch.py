@@ -18,6 +18,7 @@ Notes
   branch-only.
 """
 
+import dataclasses
 import logging
 import os
 import secrets
@@ -461,17 +462,20 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
     -------
     dict[str, Any]
         `action: merged`, `store`, `parent`, `copied` (branch-only rows
-        inserted by this run), `retired` (retirements this run applied
-        in the parent) and `conflicts`, the copied rows whose branch and
-        parent states disagree, left as the parent holds them (see
-        `_retire_copied`). A resumed run reports the conflicts as the
-        parent holds them now.
+        inserted by this run; a retired one whose vector width differs
+        from the parent's goes in with no vector), `retired`
+        (retirements this run applied in the parent) and `conflicts`,
+        the copied rows whose branch and parent states disagree, left
+        as the parent holds them (see `_retire_copied`). A resumed run
+        reports the conflicts as the parent holds them now.
 
     Raises
     ------
     click.ClickException
-        On every refusal, before the parent is written. A failure
-        inside the parent transaction rolls it back and says to re-run.
+        On every refusal, before the parent is written. Any failure
+        before the parent step clears the merge flag, so the branch
+        stays writable. A failure in the parent step says to re-run;
+        a re-run after a commit finishes the merge.
 
     Notes
     -----
@@ -539,53 +543,56 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                     data_dir, branch,
                     format_timestamp(datetime.now(timezone.utc)))
 
-        with open_sqlite_backend(branch, data_dir, read_only=True) as backend:
-            rows = [
-                backend.nodes.get_raw(row_id)
-                for row_id in sorted(backend.nodes.get_all_ids())
-                ]
-        if resume and not {row.id for row in rows} <= parent_ids:
-            raise click.ClickException(token_refusal)
-        retired_ids = {
-            row.id for row in rows
-            if row.replaced_by or row.deleted_at is not None
-            }
-        # In `begin immediate`, so a write enqueue let past the flag
-        # check has committed before this read.
-        with queue_db(data_dir) as conn:
-            conn.execute('begin immediate')
-            try:
-                refusal = _queued_refusal(conn, branch)
-                pending_targets = {
-                    row[0] for row in conn.execute(
-                        'select replaced_id from queue where store = ?'
-                        " and status in ('pending', 'failed')"
-                        ' and replaced_id is not null',
-                        (parent,)).fetchall()
-                    }
-            finally:
-                conn.execute('commit')
-        if not refusal and not resume and pending_targets:
-            # A retry follows its target's chain in the parent, so a
-            # target replaced since it was queued counts by its chain.
-            chained = set()
-            with factory.open_backend(
-                    parent, data_dir, read_only=True) as backend:
-                for row_id in pending_targets:
-                    while row_id is not None and row_id not in chained:
-                        chained.add(row_id)
-                        row = backend.nodes.get_include_deleted(row_id)
-                        row_id = row.replaced_by if row is not None else None
-            if retired_ids & chained:
-                refusal = (
-                    f'store {parent!r} has a pending or failed replace of a'
-                    ' row the branch retired, directly or by its chain; run'
-                    ' memman scheduler trigger and wait for the drain, or see'
-                    ' memman scheduler queue failed, then re-run')
-        if refusal:
+        try:
+            with open_sqlite_backend(branch, data_dir, read_only=True) as backend:
+                rows = [
+                    backend.nodes.get_raw(row_id)
+                    for row_id in sorted(backend.nodes.get_all_ids())
+                    ]
+            if resume and not {row.id for row in rows} <= parent_ids:
+                raise click.ClickException(token_refusal)
+            retired_ids = {
+                row.id for row in rows
+                if row.replaced_by or row.deleted_at is not None
+                }
+            # In `begin immediate`, so a write enqueue let past the flag
+            # check has committed before this read.
+            with queue_db(data_dir) as conn:
+                conn.execute('begin immediate')
+                try:
+                    refusal = _queued_refusal(conn, branch)
+                    pending_targets = {
+                        row[0] for row in conn.execute(
+                            'select replaced_id from queue where store = ?'
+                            " and status in ('pending', 'failed')"
+                            ' and replaced_id is not null',
+                            (parent,)).fetchall()
+                        }
+                finally:
+                    conn.execute('commit')
+            if not refusal and not resume and pending_targets:
+                # A retry follows its target's chain in the parent, so a
+                # target replaced since it was queued counts by its chain.
+                chained = set()
+                with factory.open_backend(
+                        parent, data_dir, read_only=True) as backend:
+                    for row_id in pending_targets:
+                        while row_id is not None and row_id not in chained:
+                            chained.add(row_id)
+                            row = backend.nodes.get_include_deleted(row_id)
+                            row_id = row.replaced_by if row is not None else None
+                if retired_ids & chained:
+                    refusal = (
+                        f'store {parent!r} has a pending or failed replace of a'
+                        ' row the branch retired, directly or by its chain; run'
+                        ' memman scheduler trigger and wait for the drain, or see'
+                        ' memman scheduler queue failed, then re-run')
+            if refusal:
+                raise click.ClickException(refusal)
+        except BaseException:
             if not resume:
                 _set_merging(data_dir, branch, None)
-            raise click.ClickException(refusal)
+            raise
 
         copied = retired = 0
         conflicts = []
@@ -599,10 +606,15 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                             f' during the merge; run {swap_command(branch)}'
                             " with the parent's model, then re-run memman"
                             f' store merge {branch}')
+                    dim = Fingerprint.from_json(meta[META_KEY]).dim
                     held = backend.nodes.get_all_ids()
                     for row in rows:
-                        if row.id not in held:
-                            copied += backend.nodes.insert_raw(row)
+                        if row.id in held:
+                            continue
+                        if (row.id in retired_ids and row.embedding is not None
+                                and len(row.embedding) != dim):
+                            row = dataclasses.replace(row, embedding=None)
+                        copied += backend.nodes.insert_raw(row)
                     for row in rows:
                         if row.id not in held or row.id not in retired_ids:
                             continue
@@ -617,9 +629,8 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                 raise
             except Exception as exc:
                 raise click.ClickException(
-                    f'merge of {branch!r} stopped and wrote nothing to'
-                    f' {parent!r}: {exc}; re-run memman store merge'
-                    f' {branch}') from exc
+                    f'merge of {branch!r} into {parent!r} stopped: {exc};'
+                    f' re-run memman store merge {branch}') from exc
         else:
             with factory.open_backend(
                     parent, data_dir, read_only=True) as backend:
