@@ -15,7 +15,7 @@ class TestInstanceIdDetected:
             prefix match.
         Oracle: hand-written sentence that holds a real 17-digit instance id.
         """
-        w = check_content_quality('Deployed i-0c220c2402a5245bc')
+        w = check_content_quality('Deployed i-0123456789abcdef0')
         assert 'AWS instance ID' in w
 
 
@@ -416,7 +416,7 @@ class TestCleanContentNoWarnings:
 
 
 class TestNoFalsePositives:
-    """Good entries from tradar DB produce zero warnings.
+    """Good entries from a live memory store produce zero warnings.
     """
 
     def test_ebsnvme_entry(self):
@@ -557,7 +557,7 @@ class TestMultipleWarnings:
         Oracle: hand-counted five labels for the five phrases in the input
         """
         content = (
-            'TC-DB-01 (i-0c220c2402a5245bc) deployed via Terraform.'
+            'HOST01 (i-0123456789abcdef0) deployed via Terraform.'
             ' 32 resources total. All drives verified. State is clean.')
         w = check_content_quality(content)
         assert 'AWS instance ID' in w
