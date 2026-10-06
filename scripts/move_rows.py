@@ -28,12 +28,23 @@ import sys
 from pathlib import Path
 
 from memman import config, drain_lock
-from memman.fork import _acquire_drain_lock, _migrator_for
-from memman.migrate import MigrateInsight, MigrationPayload
+from memman.branch import _acquire_drain_lock
+from memman.migrate import MigrateInsight, MigrationPayload, Migrator
 from memman.queue import queue_db
 from memman.store import factory
 from memman.store.db import default_data_dir
 from memman.store.model import insight_to_delta_dict
+from memman.store.sqlite import SqliteMigrator
+
+
+def _migrator_for(store: str, data_dir: str) -> Migrator:
+    """The migrator of the backend `store` resolves to.
+    """
+    if factory.resolve_store_backend(store, data_dir) == 'postgres':
+        from memman.store.postgres import PostgresMigrator
+        return PostgresMigrator(
+            dsn=factory.resolve_store_pg_dsn(store, data_dir))
+    return SqliteMigrator(data_dir)
 
 
 def export(source: str, outdir: Path, data_dir: str) -> None:
