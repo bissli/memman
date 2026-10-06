@@ -2470,7 +2470,29 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     Also drops the store's per-store env keys, so a removed store
     leaves no backend selection or Postgres DSN (password included)
     behind in the env file.
-    """
+
+    \b
+    Parameters
+    ----------
+    name : str
+        Store to remove. Refused when active, when a branch (`memman
+        store drop` removes one), or while it holds any
+        `branch_token:<branch>` key, a branch on another host included.
+        A SQLite store whose file cannot be read is removed unchecked.
+    yes : bool
+        Skip the confirmation prompt.
+
+    \b
+    Notes
+    -----
+    - A stale key, left by a drop that could not reach the store, is
+      deleted by hand from the store's meta table.
+
+    \b
+    Examples
+    --------
+    memman store remove scratch --yes
+    """  # noqa: D301, D410, D411
     data_dir = ctx.obj['data_dir']
     if name not in factory.list_stores(data_dir):
         raise click.ClickException(str(StoreMissingError(name)))
@@ -2479,6 +2501,42 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         raise click.ClickException(
             f"cannot remove the active store \"{name}\""
             f" (switch first with 'memman store use <other>')")
+    prefix = f'{branch_mod.BRANCH_TOKEN}:'
+    try:
+        info = branch_mod.read_branch_info(name, data_dir)
+        token_keys = []
+        if info is None:
+            with factory.open_backend(
+                    name, data_dir, read_only=True) as backend:
+                token_keys = sorted(
+                    key for key in backend.meta.keys()  # noqa: SIM118
+                    if key.startswith(prefix))
+    except (ConfigError, BackendError, sqlite3.Error) as exc:
+        if resolve_store_backend(name, data_dir) != 'sqlite':
+            raise click.ClickException(
+                f'cannot check store {name!r} for branch tokens: {exc}'
+                ) from exc
+        # A local file that cannot be read holds nothing to protect, and
+        # no other verb can remove it.
+        logger.debug(f'store remove of unreadable {name!r}: {exc}')
+        info, token_keys = None, []
+    if info is not None:
+        raise click.ClickException(
+            f'store {name!r} is a branch of {info["parent"]!r}; run memman'
+            f' store merge {name} to keep its rows, or memman store drop'
+            f' {name} to throw them away')
+    if token_keys:
+        listing = []
+        for key in token_keys:
+            holder = branch_mod.read_branch_info(
+                key.removeprefix(prefix), data_dir)
+            local = holder is not None and holder['parent'] == name
+            listing.append(key if local else f'{key} (no local branch)')
+        raise click.ClickException(
+            f'store {name!r} holds branch tokens: {", ".join(listing)}.'
+            ' Merge or drop each branch first. A branch on another host may'
+            ' hold a key with no local branch; once no host holds it,'
+            f' delete the key from the meta table of {name!r} by hand')
     if not yes:
         click.confirm(
             f'Drop store "{name}" (and all of its data)?',
@@ -4318,7 +4376,8 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     Always global: iterates all stores under the configured
     data_dir. The active embed model is set by a single global env
     var, so a sweep necessarily applies to every store; per-store
-    scoping is intentionally not supported.
+    scoping is intentionally not supported. A branch moves only with
+    its parent, so one over a Postgres parent is skipped.
 
     Three cases through one walk per store:
     1. Empty DB - zero rows; only the fingerprint is written.
@@ -4345,9 +4404,13 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
         raise click.ClickException(ec.unavailable_message())
 
     target = Fingerprint.from_client(ec)
-    names = [
+    sqlite_names = [
         n for n in list_local_store_dirs(data_dir)
         if resolve_store_backend(n, data_dir) == 'sqlite']
+    names = [
+        n for n in sqlite_names
+        if (info := branch_mod.read_branch_info(n, data_dir)) is None
+        or info['parent'] in sqlite_names]
 
     grand_total = 0
     for name in names:

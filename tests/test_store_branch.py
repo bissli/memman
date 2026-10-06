@@ -1635,6 +1635,106 @@ def test_doctor_lists_open_branches_and_warns_on_a_missing_parent(mm_runner):
     assert check['detail']['missing_parent'] == [orphan]
 
 
+@pytest.mark.parametrize('damage', ['corrupt database', 'missing database'])
+def test_store_remove_removes_a_sqlite_store_it_cannot_read(mm_runner, damage):
+    """Verify store remove still removes a SQLite store with a broken file.
+
+    Mutation: the branch or token read raising out of store remove, so
+        no verb can remove a corrupt store or a corrupt branch.
+    Oracle: the store directory, gone after the call.
+    """
+    _, data_dir = mm_runner
+    junk_dir = Path(store_dir(data_dir, 'junk'))
+    junk_dir.mkdir(parents=True)
+    if damage == 'corrupt database':
+        (junk_dir / 'memman.db').write_bytes(b'not a database' * 100)
+
+    result = invoke(mm_runner, ['store', 'remove', 'junk', '--yes'])
+
+    assert result.exit_code == 0, result.output
+    assert not junk_dir.exists()
+
+
+@pytest.mark.parametrize('holder', ['local branch', 'branch on another host'])
+def test_store_remove_refuses_a_parent_holding_a_branch_token(
+        mm_runner, holder):
+    """Verify store remove keeps a parent while any branch token is on it.
+
+    Mutation: no token check in store remove, or a check of local
+        branches only, which removes a Postgres parent shared with a
+        branch on another host.
+    Oracle: the parent's existence after the call, and the key named in
+        the refusal.
+    """
+    _, data_dir = mm_runner
+    invoke(mm_runner, ['store', 'create', 'work'])
+    if holder == 'local branch':
+        key = f'branch_token:{_branch(data_dir, parent="work")}'
+    else:
+        key = 'branch_token:work__elsewhere_1a2b'
+        _set_meta(data_dir, 'work', key, 'f00d')
+
+    result = invoke(mm_runner, ['store', 'remove', 'work', '--yes'])
+
+    assert result.exit_code != 0
+    assert key in result.output
+    assert factory.store_exists('work', data_dir)
+
+
+@pytest.mark.no_auto_drain
+def test_store_remove_refuses_a_branch_and_names_store_drop(mm_runner):
+    """Verify store remove keeps a branch and points at store drop.
+
+    Mutation: no branch check in store remove, so drop_store purges the
+        branch's pending writes with no warning.
+    Oracle: the branch's existence and its queued write after the call.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    queued = invoke(mm_runner, [
+        'remember', '--store', branch,
+        'The grackle colony nests by the river.'])
+    assert queued.exit_code == 0, queued.output
+
+    result = invoke(mm_runner, ['store', 'remove', branch, '--yes'])
+
+    assert result.exit_code != 0
+    assert f'memman store drop {branch}' in result.output
+    assert factory.store_exists(branch, data_dir)
+    assert queued_contents(data_dir) == [
+        'The grackle colony nests by the river.']
+
+
+def test_reembed_follows_the_parent_backend_of_each_branch(
+        mm_runner, env_file, pg_dsn, monkeypatch):
+    """Verify reembed moves a branch of a SQLite parent, skips a Postgres one.
+
+    Mutation: every branch skipped, so a branch keeps the old model
+        while its SQLite parent moves; or none, so a branch moves while
+        its Postgres parent stays.
+    Oracle: the store names in the sweep's per-store report.
+    """
+    _, data_dir = mm_runner
+    env_file('MEMMAN_BACKEND_reembedpg', 'postgres')
+    env_file('MEMMAN_POSTGRES_DSN_reembedpg', pg_dsn)
+    created = invoke(mm_runner, ['store', 'create', 'reembedpg'])
+    assert created.exit_code == 0, created.output
+    try:
+        sqlite_child = _branch(data_dir)
+        pg_child = _branch(data_dir, parent='reembedpg')
+        monkeypatch.setattr(
+            sched_mod, 'read_state', lambda: sched_mod.STATE_STOPPED)
+
+        result = invoke(mm_runner, ['embed', 'reembed'])
+
+        assert result.exit_code == 0, result.output
+        swept = {s['store'] for s in json.loads(result.output)['stores']}
+        assert sqlite_child in swept
+        assert pg_child not in swept
+    finally:
+        factory.drop_store('reembedpg', data_dir)
+
+
 def _env_keys(data_dir: str) -> dict[str, str]:
     """Keys of the env file under data_dir, empty when it is absent.
     """
