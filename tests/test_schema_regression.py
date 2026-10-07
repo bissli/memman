@@ -113,7 +113,7 @@ def test_insight_baselines_name_no_dropped_column():
         'content_hash', 'corroboration_count', 'model_id',
         'access_count', 'last_accessed_at', 'semantic_facts',
         'importance', 'entities', 'keywords', 'idx_insights_source',
-        'category')
+        'category', 'prompt_version')
     for name, ddl in (
             ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA),
             ('sqlite fts', ''.join(_FTS_STATEMENTS))):

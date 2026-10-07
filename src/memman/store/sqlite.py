@@ -42,16 +42,16 @@ from memman.store.backend import RecallSession
 from memman.store.db import DB
 from memman.store.errors import StoreMissingError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
+from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
+from memman.store.model import format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
 _RAW_COLUMNS = (
     'id, content, summary, embedding,'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
-    ' deleted_at, prompt_version, embedding_model,'
-    ' queue_uuid, replaced_by, author')
+    ' deleted_at, embedding_model,'
+    ' queue_uuid, replaced_by, author, summary_model')
 
 
 def _raw_values(row: MigrateInsight) -> tuple:
@@ -67,8 +67,8 @@ def _raw_values(row: MigrateInsight) -> tuple:
         format_timestamp(row.created_at),
         format_timestamp(row.updated_at),
         format_timestamp(row.deleted_at) if row.deleted_at else None,
-        row.prompt_version, row.embedding_model, row.queue_uuid,
-        row.replaced_by, row.author)
+        row.embedding_model, row.queue_uuid,
+        row.replaced_by, row.author, row.summary_model)
 
 
 def _raw_row(r: tuple) -> MigrateInsight:
@@ -82,8 +82,9 @@ def _raw_row(r: tuple) -> MigrateInsight:
         created_at=parse_timestamp(r[6]),
         updated_at=parse_timestamp(r[7]),
         deleted_at=parse_timestamp(r[8]) if r[8] else None,
-        prompt_version=r[9], embedding_model=r[10],
-        queue_uuid=r[11], replaced_by=r[12], author=r[13])
+        embedding_model=r[9],
+        queue_uuid=r[10], replaced_by=r[11], author=r[12],
+        summary_model=r[13])
 
 
 class SqliteNodeStore(NodeStore):
@@ -154,8 +155,9 @@ class SqliteNodeStore(NodeStore):
     def replacement_integrity(self) -> dict[str, list[Id]]:
         return _node.replacement_integrity(self._db)
 
-    def update_enrichment(self, id: Id, *, summary: str) -> None:
-        _node.update_enrichment(self._db, id, summary)
+    def update_enrichment(
+            self, id: Id, *, summary: str, summary_model: str) -> None:
+        _node.update_enrichment(self._db, id, summary, summary_model)
 
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
@@ -165,13 +167,6 @@ class SqliteNodeStore(NodeStore):
 
     def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
         return _node.has_row_with_queue_uuid(self._db, queue_uuid)
-
-    def provenance_distribution(self) -> list[ProvenanceCount]:
-        rows = _node.provenance_distribution(self._db)
-        return [
-            ProvenanceCount(prompt_version=r[0], count=r[1])
-            for r in rows
-            ]
 
     def get_all_active(self) -> list[Insight]:
         return _node.get_all_active_insights(self._db)
@@ -229,12 +224,9 @@ group by length(embedding)
         ts = format_timestamp(datetime.now(timezone.utc))
         _node.stamp_enrich_attempted(self._db, id, ts)
 
-    def stamp_enriched(
-            self, id: Id, *,
-            prompt_version: str | None = None) -> None:
+    def stamp_enriched(self, id: Id) -> None:
         ts = format_timestamp(datetime.now(timezone.utc))
-        _node.stamp_enriched(
-            self._db, id, ts, prompt_version=prompt_version)
+        _node.stamp_enriched(self._db, id, ts)
 
     def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
         return _node.get_pending_enrich_ids(self._db, limit)
@@ -250,12 +242,6 @@ group by length(embedding)
 
     def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
         return _node.get_unenriched_attempted_ids(self._db, limit)
-
-    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
-        return _node.iter_stale_insight_ids(self._db, active_pv)
-
-    def count_stale_insights(self, active_pv: str) -> int:
-        return _node.count_stale_insights(self._db, active_pv)
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         _node.reset_for_rebuild(self._db, ids)

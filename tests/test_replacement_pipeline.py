@@ -33,7 +33,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     def _replace(new_id, target_id):
         return _apply_plan(
             tmp_backend, make_insight(id=new_id, content='third'),
-            target_id, None, {})
+            target_id, None, {}, 'test-llm')
 
     late = _replace('late-1', 'old-1')
     assert late['action'] == 'add'

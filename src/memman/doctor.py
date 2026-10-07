@@ -23,7 +23,6 @@ from memman.embed.fingerprint import stored_fingerprint, swap_command
 from memman.exceptions import ConfigError
 from memman.llm import client as llm_client
 from memman.llm import usage as llm_usage
-from memman.pipeline.remember import compute_prompt_version
 from memman.queue import last_worker_run, queue_db
 from memman.queue import stats as queue_stats
 from memman.setup import scheduler as sch
@@ -75,7 +74,7 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
       100, so the worst single field decides the grade.
     - A stranded row (attempted, never enriched) warns even at full
       coverage: a failed call after a reset leaves the old summary
-      and vector in place, and only `enrich --stale-only` retries it
+      and vector in place, and only `enrich --stranded-only` retries it
       outside the drain's stranded sweep.
     """
     cov = backend.nodes.enrichment_coverage()
@@ -100,7 +99,7 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
         }
     if cov.stranded:
         detail['remediation'] = (
-            "Run 'memman enrich --stale-only' to re-enrich stranded"
+            "Run 'memman enrich --stranded-only' to re-enrich stranded"
             " rows.")
     return {
         'name': 'enrichment_coverage',
@@ -901,84 +900,6 @@ def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
         'detail': {'leftover_keys': leftover}}
 
 
-def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
-    """True when a stored prompt version has drifted from the active one.
-
-    Parameters
-    ----------
-    row_pv : str or None
-        The row's stored `prompt_version`.
-    active_pv : str
-        The active `compute_prompt_version()` key.
-
-    Returns
-    -------
-    bool
-        True when the row's key is present and differs.
-
-    Notes
-    -----
-    - `count_stale_insights` and `iter_stale_insight_ids`
-      (`store/node.py`, `store/postgres.py`) encode this predicate
-      in SQL; keep their key term aligned with this function when
-      the rule changes.
-    - Those queries also take stranded rows (attempted, never
-      enriched), which carry no drifted key. `enrichment_coverage`
-      reports those, so `stale_rows` here excludes them.
-    """
-    return row_pv is not None and row_pv != active_pv
-
-
-def check_provenance_drift(backend: Backend) -> dict[str, Any]:
-    """Warn when rows carry a prompt_version that differs from the active one.
-    """
-    detail: dict[str, Any] = {
-        'active_prompt_version': None,
-        'active_model': None,
-        'stale_rows': 0,
-        'breakdown': [],
-        }
-    try:
-        detail['active_prompt_version'] = compute_prompt_version()
-    except Exception as exc:
-        detail['error'] = f'compute_prompt_version: {exc}'
-        return {
-            'name': 'provenance_drift', 'status': 'fail',
-            'detail': detail}
-    try:
-        detail['active_model'] = config.require(config.LLM_MODEL)
-    except ConfigError:
-        detail['active_model'] = None
-
-    provenance = backend.nodes.provenance_distribution()
-
-    active_pv = detail['active_prompt_version']
-    breakdown: list[dict[str, Any]] = []
-    stale_rows = 0
-    for pc in provenance:
-        is_stale = _is_provenance_stale(pc.prompt_version, active_pv)
-        breakdown.append({
-            'prompt_version': pc.prompt_version,
-            'count': pc.count,
-            'stale': is_stale,
-            })
-        if is_stale:
-            stale_rows += pc.count
-    detail['breakdown'] = breakdown
-    detail['stale_rows'] = stale_rows
-
-    if stale_rows == 0:
-        return {
-            'name': 'provenance_drift', 'status': 'pass',
-            'detail': detail}
-    detail['remediation'] = (
-        "Run 'memman enrich --stale-only' to re-enrich only"
-        " drifted rows.")
-    return {
-        'name': 'provenance_drift', 'status': 'warn',
-        'detail': detail}
-
-
 def check_branches(data_dir: str) -> dict[str, Any]:
     """List each open branch with its parent and date.
 
@@ -1065,7 +986,6 @@ def run_all_checks(
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
-            check_provenance_drift(backend),
             ])
     else:
         checks.extend([

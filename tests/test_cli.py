@@ -17,7 +17,6 @@ from memman.cli import cli
 from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.embed.vector import serialize_vector
-from memman.pipeline.remember import compute_prompt_version
 from memman.queue import enqueue, list_rows, open_queue_db
 from memman.setup.scheduler import _write_env_keys
 from memman.store.db import open_db, open_read_only, store_dir, store_exists
@@ -1262,7 +1261,7 @@ class TestEnrichIsolation:
             command that clears the way; the autouse fixture holds the
             state at STARTED for this class.
         """
-        for extra in ([], ['--stale-only']):
+        for extra in ([], ['--stranded-only']):
             out = CliRunner().invoke(cli, [
                 '--data-dir', str(tmp_path), 'enrich'] + extra)
             assert out.exit_code != 0, out.output
@@ -1270,171 +1269,27 @@ class TestEnrichIsolation:
 
 
 @pytest.mark.scheduler_stopped
-class TestEnrichStaleOnly:
-    """Tests for `enrich --stale-only` flag.
+class TestEnrichStrandedOnly:
+    """Tests for `enrich --stranded-only` flag.
     """
 
-    def _seed_drift(self, store_path: pathlib.Path, active_pv: str) -> None:
-        """Insert one drifted row and one current row.
+    def _seed(self, store_path: pathlib.Path) -> None:
+        """Insert one stranded row and one enriched row.
 
         Parameters
         ----------
         store_path : Path
             Store directory to seed.
-        active_pv : str
-            Prompt version stamped on the current row.
         """
-        OLD_PV = 'old-prompt-version-deadbeef'
-        db = open_db(str(store_path))
-        backend = SqliteBackend(db)
-        write_fingerprint(backend, Fingerprint(
-            model='voyage-3-lite', dim=512))
-        insert_insight(db, make_insight(
-            id='drift-1', content='Drifted insight needing re-enrichment',
-            prompt_version=OLD_PV))
-        insert_insight(db, make_insight(
-            id='fresh-1', content='Fresh insight already on active config',
-            prompt_version=active_pv))
-        for iid in ('drift-1', 'fresh-1'):
-            update_enrichment(db, iid, 'sum')
-            db._conn.execute(
-                'update insights set enrich_attempted_at = ?, enriched_at = ?'
-                ' where id = ?',
-                ('2024-01-01T00:00:00+00:00',
-                 '2024-01-01T00:00:00+00:00', iid))
-        db.close()
-
-    def test_dry_run_reports_stale_count(self, tmp_path, monkeypatch):
-        """`--stale-only --dry-run` reports stale count without modifying.
-
-        Mutation: flipping `!=` to `==` in `count_stale_insights`'s
-            predicate, or skipping the `dry_run` branch so a real
-            rebuild runs instead of only counting.
-        Oracle: the one row seeded with a drifted `prompt_version`
-            against the two seeded current, so the flipped predicate
-            counts 2.
-        """
-
-        active_pv = compute_prompt_version()
-
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path / 'memman')
-        store_path = tmp_path / 'memman' / 'data' / 'default'
-        self._seed_drift(store_path, active_pv)
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='fresh-2', content='Second insight already on active config',
-            prompt_version=active_pv))
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'enrich',
-            '--stale-only', '--dry-run'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data['mode'] == 'stale-only'
-        assert data['total'] == 1
-        assert data['dry_run'] == 1
-
-    def test_empty_stale_fast_path(self, tmp_path, monkeypatch):
-        """Zero-stale store returns processed=0 without doing work.
-
-        Mutation: dropping the `total_count == 0` fast-path guard, or
-            widening the stale predicate to count a current row,
-            which drives the pipeline into a rebuild that needs an
-            LLM client this test never wires up.
-        Oracle: the literal `'skipped': 'no_stale_rows'` key against
-            the single row seeded on the active `prompt_version`.
-        """
-
-        active_pv = compute_prompt_version()
-
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path / 'memman')
-        store_path = tmp_path / 'memman' / 'data' / 'default'
-        db = open_db(str(store_path))
-        backend = SqliteBackend(db)
-        write_fingerprint(backend, Fingerprint(
-            model='voyage-3-lite', dim=512))
-        insert_insight(db, make_insight(
-            id='ok-1', content='Already on active config',
-            prompt_version=active_pv))
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'enrich', '--stale-only'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data['mode'] == 'stale-only'
-        assert data['processed'] == 0
-        assert data['skipped'] == 'no_stale_rows'
-
-    def test_stale_only_re_enriches_drifted_rows(self, tmp_path, monkeypatch):
-        """`--stale-only` clears enriched_at on drifted rows only.
-
-        Mutation: passing every row's id to `reset_for_rebuild`
-            instead of only the stale batch, which would also touch
-            `fresh-1`'s `enriched_at`.
-        Oracle: `enriched_at` and `prompt_version` read back per row,
-            before and after, for both the drifted and the fresh id.
-        """
-
-        active_pv = compute_prompt_version()
-
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path / 'memman')
-        store_path = tmp_path / 'memman' / 'data' / 'default'
-        self._seed_drift(store_path, active_pv)
-
-        db = open_db(str(store_path))
-        before = {
-            row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'select id, enriched_at, prompt_version from insights')
-            }
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'enrich', '--stale-only'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data['mode'] == 'stale-only'
-        assert data['processed'] == 1
-
-        db = open_db(str(store_path))
-        after = {
-            row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'select id, enriched_at, prompt_version from insights')
-            }
-        db.close()
-        assert after['fresh-1'] == before['fresh-1']
-        assert after['drift-1'][0] != before['drift-1'][0]
-        assert after['drift-1'][1] == active_pv
-
-    def test_stale_only_re_enriches_stranded_rows(self, tmp_path, monkeypatch):
-        """`--stale-only` re-enriches a stranded row and skips an enriched one.
-
-        Mutation: the stale predicate skipping every null
-            `prompt_version`, which leaves the stranded row behind; or
-            taking every null key, which re-bills `legacy-1`.
-        Oracle: `enriched_at` and `prompt_version` read back per row
-            against a stranded row and an enriched row, both seeded
-            with a null `prompt_version`.
-        """
-
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path / 'memman')
-        store_path = tmp_path / 'memman' / 'data' / 'default'
         db = open_db(str(store_path))
         write_fingerprint(SqliteBackend(db), Fingerprint(
             model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
-            id='strand-1', content='Stranded insight whose enrichment failed'))
+            id='strand-1',
+            content='Stranded insight whose enrichment failed'))
         insert_insight(db, make_insight(
-            id='legacy-1', content='Enriched insight from before provenance'))
-        update_enrichment(db, 'legacy-1', 'sum')
+            id='ok-1', content='Insight whose enrichment completed'))
+        update_enrichment(db, 'ok-1', 'sum', 'seed-model')
         db._conn.execute(
             'update insights set enrich_attempted_at = ? where id = ?',
             ('2024-01-01T00:00:00+00:00', 'strand-1'))
@@ -1442,31 +1297,116 @@ class TestEnrichStaleOnly:
             'update insights set enrich_attempted_at = ?, enriched_at = ?'
             ' where id = ?',
             ('2024-01-01T00:00:00+00:00',
-             '2024-01-01T00:00:00+00:00', 'legacy-1'))
+             '2024-01-01T00:00:00+00:00', 'ok-1'))
         db.close()
 
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'enrich', '--stale-only'])
+    def test_dry_run_reports_stranded_count(self, tmp_path, monkeypatch):
+        """`--stranded-only --dry-run` counts stranded rows and writes nothing.
+
+        Mutation: counting every active row, or skipping the `dry_run`
+            branch so a real rebuild runs instead of only counting.
+        Oracle: one stranded row seeded beside two enriched rows, so a
+            count of all active rows reads 3.
+        """
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
+        self._seed(store_path)
+        db = open_db(str(store_path))
+        insert_insight(db, make_insight(
+            id='ok-2', content='Second insight whose enrichment completed'))
+        db._conn.execute(
+            'update insights set enrich_attempted_at = ?, enriched_at = ?'
+            " where id = 'ok-2'",
+            ('2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00'))
+        db.close()
+
+        result = CliRunner().invoke(cli, [
+            '--data-dir', data_dir, 'enrich',
+            '--stranded-only', '--dry-run'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
+        assert data['mode'] == 'stranded-only'
+        assert data['total'] == 1
+        assert data['dry_run'] == 1
+
+        db = open_db(str(store_path))
+        enriched_at = db._conn.execute(
+            "select enriched_at from insights where id = 'ok-1'"
+            ).fetchone()[0]
+        db.close()
+        assert enriched_at == '2024-01-01T00:00:00+00:00'
+
+    def test_empty_stranded_fast_path(self, tmp_path, monkeypatch):
+        """A store with no stranded row returns processed=0 without work.
+
+        Mutation: dropping the `total_count == 0` fast-path guard, or
+            widening the predicate to count an enriched row, which
+            drives the pipeline into a rebuild that needs an LLM
+            client this test never wires up.
+        Oracle: the literal `'skipped': 'no_stranded_rows'` key against
+            a single enriched row.
+        """
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
+        db = open_db(str(store_path))
+        write_fingerprint(SqliteBackend(db), Fingerprint(
+            model='voyage-3-lite', dim=512))
+        insert_insight(db, make_insight(
+            id='ok-1', content='Insight whose enrichment completed'))
+        db._conn.execute(
+            'update insights set enrich_attempted_at = ?, enriched_at = ?'
+            " where id = 'ok-1'",
+            ('2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00'))
+        db.close()
+
+        result = CliRunner().invoke(cli, [
+            '--data-dir', data_dir, 'enrich', '--stranded-only'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['mode'] == 'stranded-only'
+        assert data['processed'] == 0
+        assert data['skipped'] == 'no_stranded_rows'
+
+    def test_stranded_only_re_enriches_stranded_rows(
+            self, tmp_path, monkeypatch):
+        """`--stranded-only` re-enriches a stranded row and skips an enriched one.
+
+        Mutation: the predicate dropping the stranded term, which
+            leaves the stranded row behind; or passing every row's id
+            to `reset_for_rebuild`, which re-bills `ok-1`.
+        Oracle: `enriched_at` and `summary_model` read back per row
+            against a stranded row and an enriched row.
+        """
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
+        self._seed(store_path)
+
+        result = CliRunner().invoke(cli, [
+            '--data-dir', data_dir, 'enrich', '--stranded-only'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['mode'] == 'stranded-only'
         assert data['processed'] == 1
 
         db = open_db(str(store_path))
         after = {
             row[0]: (row[1], row[2]) for row in db._conn.execute(
-                'select id, enriched_at, prompt_version from insights')
+                'select id, enriched_at, summary_model from insights')
             }
         db.close()
-        assert after['legacy-1'] == ('2024-01-01T00:00:00+00:00', None)
+        assert after['ok-1'] == ('2024-01-01T00:00:00+00:00', 'seed-model')
         assert after['strand-1'][0] is not None
-        assert after['strand-1'][1] == compute_prompt_version()
+        assert after['strand-1'][1] is not None
 
-    def test_stale_only_accepted_on_postgres_runner(self, cross_backend_runner):
-        """`--stale-only` does not trip the SQLite-only guard on Postgres.
+    def test_stranded_only_accepted_on_postgres_runner(
+            self, cross_backend_runner):
+        """`--stranded-only` does not trip the SQLite-only guard on Postgres.
 
         Mutation: reintroducing a backend-kind check ahead of the
-            `--stale-only` branch that raises on any non-sqlite
+            `--stranded-only` branch that raises on any non-sqlite
             backend.
         Oracle: exit code 0 and no `'SQLite-only'` text in the
             output against the Postgres-backed runner.
@@ -1474,10 +1414,10 @@ class TestEnrichStaleOnly:
         r, data_dir = cross_backend_runner
         out = r.invoke(cli, [
             '--data-dir', data_dir, 'enrich',
-            '--stale-only', '--dry-run'])
+            '--stranded-only', '--dry-run'])
         assert out.exit_code == 0, out.output
         data = json.loads(out.output)
-        assert data['mode'] == 'stale-only'
+        assert data['mode'] == 'stranded-only'
         assert 'SQLite-only' not in out.output
 
     def test_wholesale_rebuild_accepted_on_postgres_runner(
@@ -1485,7 +1425,7 @@ class TestEnrichStaleOnly:
         """Wholesale `enrich` runs on any backend, Postgres included.
 
         Mutation: reintroducing a backend-kind check ahead of the
-            wholesale (non-stale) enrich path that raises on any
+            wholesale (non-stranded) enrich path that raises on any
             non-sqlite backend.
         Oracle: exit code 0, a `total` and `dry_run` key in the JSON,
             and no `'SQLite-only'` text in the output against the

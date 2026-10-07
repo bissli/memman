@@ -29,8 +29,7 @@ from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession, chain_head
 from memman.store.errors import BackendError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import WorkerRun
+from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
 
 BRANCH_PARENT = 'branch_parent'
 BRANCH_MERGING = 'branch_merging'
@@ -235,10 +234,12 @@ class OverlayNodeStore(NodeStore):
             ]
         return result
 
-    def update_enrichment(self, id: Id, *, summary: str) -> None:
+    def update_enrichment(
+            self, id: Id, *, summary: str, summary_model: str) -> None:
         self._require_unmerged()
         self._require_held(id)
-        self._branch.update_enrichment(id, summary=summary)
+        self._branch.update_enrichment(
+            id, summary=summary, summary_model=summary_model)
 
     def count_active(self) -> int:
         """Rows recall sees: parent current rows not hidden, plus branch ones.
@@ -252,9 +253,6 @@ class OverlayNodeStore(NodeStore):
 
     def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
         return self._branch.has_row_with_queue_uuid(queue_uuid)
-
-    def provenance_distribution(self) -> list[ProvenanceCount]:
-        return self._branch.provenance_distribution()
 
     def get_all_active(self) -> list[Insight]:
         hidden = self._branch.get_all_ids()
@@ -292,12 +290,10 @@ class OverlayNodeStore(NodeStore):
         self._require_held(id)
         self._branch.stamp_enrich_attempted(id)
 
-    def stamp_enriched(
-            self, id: Id, *,
-            prompt_version: str | None = None) -> None:
+    def stamp_enriched(self, id: Id) -> None:
         self._require_unmerged()
         self._require_held(id)
-        self._branch.stamp_enriched(id, prompt_version=prompt_version)
+        self._branch.stamp_enriched(id)
 
     def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
         return self._branch.get_pending_enrich_ids(limit=limit)
@@ -313,12 +309,6 @@ class OverlayNodeStore(NodeStore):
 
     def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
         return self._branch.get_unenriched_attempted_ids(limit=limit)
-
-    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
-        return self._branch.iter_stale_insight_ids(active_pv)
-
-    def count_stale_insights(self, active_pv: str) -> int:
-        return self._branch.count_stale_insights(active_pv)
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         self._require_unmerged()

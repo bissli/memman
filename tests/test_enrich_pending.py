@@ -151,6 +151,8 @@ class TestEnrichPending:
         call_log = []
 
         class TxTrackingLLM:
+            model = 'tx-model'
+
             def complete(self, system, user, **kwargs):
                 call_log.append({
                     'in_tx': tmp_db._in_tx,
@@ -188,3 +190,78 @@ class TestEnrichPending:
         assert 'causal' not in stages
         assert 'done' in stages
         assert all(c[1] == 'pc-1' for c in calls)
+
+
+class _StubLLM:
+    """An LLM client that answers one fixed body under a fixed model id.
+    """
+
+    def __init__(self, model, body):
+        self.model = model
+        self.body = body
+
+    def complete(self, system, user, **kwargs):
+        if isinstance(self.body, Exception):
+            raise self.body
+        return self.body
+
+
+class TestSummaryModel:
+    """enrich_pending stores the client's model id beside the summary.
+    """
+
+    def test_stamps_the_clients_model(self, backend):
+        """Verify a pass stores the model id of the client it ran.
+
+        Mutation: `enrich_pending` passing the configured model or a
+            constant for `summary_model` instead of `llm_client.model`,
+            or dropping the argument so the column stays null.
+        Oracle: the stub client's model id, a string no config holds.
+        """
+        backend.nodes.insert(make_insight(
+            id='sm-1', content='Redis backs the session cache'))
+        client = _StubLLM('stub-vendor/stub-model', '{"summary": "Cache."}')
+
+        enrich_pending(backend, llm_client=client)
+
+        row = backend.nodes.get_raw('sm-1')
+        assert row.summary == 'Cache.'
+        assert row.summary_model == 'stub-vendor/stub-model'
+
+    def test_failed_enrichment_leaves_summary_model_unset(self, backend):
+        """Verify a failed enrichment call records no model.
+
+        Mutation: writing `summary_model` outside the `if enrichment`
+            guard, so a row the model never answered names a model.
+        Oracle: the stored row's `summary_model`, null beside its null
+            summary, after a client that raises.
+        """
+        backend.nodes.insert(make_insight(
+            id='sm-2', content='Redis backs the session cache'))
+        client = _StubLLM(
+            'stub-vendor/stub-model', ConnectionError('forced failure'))
+
+        enrich_pending(backend, llm_client=client)
+
+        row = backend.nodes.get_raw('sm-2')
+        assert row.summary is None
+        assert row.summary_model is None
+
+    def test_empty_summary_still_records_the_model(self, backend):
+        """Verify an empty summary is stored with the model that returned it.
+
+        Mutation: writing `summary_model` only when the summary is
+            non-empty, so a parse failure or a length-guard drop
+            hides which model produced it.
+        Oracle: a stub body whose summary is '', which `enrich_with_llm`
+            returns as `{'summary': ''}`.
+        """
+        backend.nodes.insert(make_insight(
+            id='sm-3', content='Redis backs the session cache'))
+        client = _StubLLM('stub-vendor/stub-model', '{"summary": ""}')
+
+        enrich_pending(backend, llm_client=client)
+
+        row = backend.nodes.get_raw('sm-3')
+        assert row.summary == ''
+        assert row.summary_model == 'stub-vendor/stub-model'

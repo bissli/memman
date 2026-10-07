@@ -69,14 +69,16 @@ def _build(backend, *, replace):
     # built seconds apart would tie-break differently.
     for n, (rid, content) in enumerate(_ROWS):
         backend.nodes.insert(make_insight(
-            id=rid, content=content, prompt_version='pv-1'))
+            id=rid, content=content))
         set_created_at(backend, rid,
                        datetime(2026, 3, 1, tzinfo=timezone.utc)
                        + timedelta(hours=n))
         backend.nodes.update_embedding(
             rid, _mock_embed(embedder, content), 'test-model')
-    backend.nodes.update_enrichment('p-1', summary='old broker')
-    backend.nodes.update_enrichment('q-1', summary='dashboard')
+    backend.nodes.update_enrichment(
+        'p-1', summary='old broker', summary_model='test-llm')
+    backend.nodes.update_enrichment(
+        'q-1', summary='dashboard', summary_model='test-llm')
     if replace:
         assert backend.nodes.mark_replaced('p-1', 'p-2') is True
     else:
@@ -99,7 +101,7 @@ def test_replacement_reads_identically_to_a_soft_delete(twin_backends):
     Mutation: any one of the active-predicate sites left on
         `deleted_at is null` alone -- `get_all_active` returns the
         row into the pool, `keyword_counts` scores it,
-        `provenance_distribution` reports it stale.
+        `enrichment_coverage` counts it.
     Oracle: store B, where the predecessor is soft-deleted, which is
         the shipped behavior every read already agrees on.
     """
@@ -117,12 +119,8 @@ def test_replacement_reads_identically_to_a_soft_delete(twin_backends):
     assert replaced.nodes.embedding_stats() == deleted.nodes.embedding_stats()
     assert (replaced.nodes.embedding_size_distribution()
             == deleted.nodes.embedding_size_distribution())
-    assert (replaced.nodes.provenance_distribution()
-            == deleted.nodes.provenance_distribution())
     assert (replaced.nodes.count_pending_enrich()
             == deleted.nodes.count_pending_enrich())
-    assert (replaced.nodes.count_stale_insights('pv-2')
-            == deleted.nodes.count_stale_insights('pv-2'))
     assert (replaced.nodes.stats().total_insights
             == deleted.nodes.stats().total_insights)
     assert (replaced.oplog.stats().total_active

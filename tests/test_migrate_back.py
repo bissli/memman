@@ -204,11 +204,11 @@ _FIDELITY_ROW = {
     'created_at': datetime(2026, 4, 5, 6, 7, 8, tzinfo=timezone.utc),
     'updated_at': datetime(2026, 5, 6, 7, 8, 9, tzinfo=timezone.utc),
     'deleted_at': None,
-    'prompt_version': 'pv-aaaa',
     'embedding_model': 'em-cccc',
     'queue_uuid': 'quuid-eeee',
     'replaced_by': 'rb-fid-successor',
     'author': 'author-ffff',
+    'summary_model': 'sm-gggg',
     }
 
 
@@ -223,9 +223,9 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
             'insert into insights ('
             ' id, content, summary,'
             ' enrich_attempted_at, enriched_at, created_at,'
-            ' updated_at, deleted_at, prompt_version,'
+            ' updated_at, deleted_at,'
             ' embedding_model, queue_uuid, replaced_by,'
-            ' author)'
+            ' author, summary_model)'
             ' values (?, ?, ?, ?, ?, ?,'
             ' ?, ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['summary'],
@@ -233,9 +233,9 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
-             r['prompt_version'], r['embedding_model'],
+             r['embedding_model'],
              r['queue_uuid'], r['replaced_by'],
-             r['author']))
+             r['author'], r['summary_model']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
                  '{"model":"voyage-3-lite","dim":512}')
@@ -289,9 +289,9 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             row = db.conn.execute(
                 'select content, summary,'
                 ' enrich_attempted_at, enriched_at, created_at,'
-                ' updated_at, deleted_at, prompt_version,'
+                ' updated_at, deleted_at,'
                 ' embedding_model, queue_uuid, replaced_by,'
-                ' author from insights where id = ?',
+                ' author, summary_model from insights where id = ?',
                 (_FIDELITY_ROW['id'],)).fetchone()
         finally:
             db.close()
@@ -301,9 +301,9 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             r['summary'],
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
-            r['prompt_version'], r['embedding_model'],
+            r['embedding_model'],
             r['queue_uuid'], r['replaced_by'],
-            r['author'])
+            r['author'], r['summary_model'])
     finally:
         _drop_schema(pg_dsn, store)
 

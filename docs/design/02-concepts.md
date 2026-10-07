@@ -46,11 +46,11 @@ insights (
   created_at        text not null,
   updated_at        text not null,
   deleted_at        text,                 -- set by forget
-  prompt_version    text,                 -- hash of enrichment prompt and model
   embedding_model   text,                 -- model that made the vector
   queue_uuid        text,                 -- the queued write this came from
   replaced_by       text,                 -- successor id, no foreign key
-  author            text
+  author            text,
+  summary_model     text                  -- LLM model that wrote the summary
 )
 
 insights_fts (content)                    -- SQLite only, FTS5
@@ -111,7 +111,7 @@ Generated fields carry markers for later maintenance:
 
 | Marker                                       | Purpose                                                                           |
 | -------------------------------------------- | --------------------------------------------------------------------------------- |
-| `prompt_version`                             | First 16 hex characters of a SHA-256 hash of the enrichment prompt and LLM model. |
+| `summary_model`                              | LLM model that wrote the memory's summary. Null when the enrichment call failed.  |
 | `embedding_model`                            | Model that produced the memory's vector.                                          |
 | `enrich_attempted_at`                        | Records an enrichment attempt.                                                    |
 | `enriched_at`                                | Records that enrichment and a vector were both saved.                             |
@@ -133,7 +133,6 @@ Generated fields carry markers for later maintenance:
 | Providers   | `llm/`, `embed/`, `rerank/`                                                                                                         | Model clients, usage accounting, embedding bindings, and model swaps.                               |
 | Storage     | `store/`, `migrate/`, `backup/`, `branch.py`                                                                                        | Backend interface, SQLite and Postgres, migration, snapshots, and store branches.                   |
 | Diagnostics | `doctor.py`, `trace.py`                                                                                                             | Health checks and debug events.                                                                     |
-| Scripts     | `scripts/enrich_stale.py`                                                                                                           | `enrich --stale-only` over many stores.                                                             |
 
 The `Backend` protocol in [store/backend.py](../../src/memman/store/backend.py) separates pipelines from database details. The shared queue and scheduler coordinate writes across stores.
 

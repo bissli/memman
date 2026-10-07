@@ -1,12 +1,12 @@
-"""Tests for `pipeline.remember`'s prompt-version pin and embed count.
+"""Tests for `pipeline.remember`'s embed count and summary model stamp.
 
-`compute_prompt_version` pins the replay hash the reconcile-free
-pipeline still depends on. `test_a_write_embeds_once_after_enrichment`
-pins the write's embed contract: one call, on the raw content.
+`test_a_write_embeds_once_after_enrichment` pins the write's embed
+contract: one call, on the raw content. The `summary_model` tests pin
+which model id a write records beside its summary.
 """
 
 from memman.embed.fingerprint import bound_embedder
-from memman.pipeline.remember import compute_prompt_version, run_remember
+from memman.pipeline.remember import run_remember
 from tests.conftest import make_insight
 
 
@@ -112,21 +112,66 @@ def test_a_write_whose_enrichment_call_fails_stays_unenriched(
     assert stored.enriched_at is None
 
 
-def test_prompt_version_is_pinned():
-    """Verify the enrichment prompt hash is pinned.
-
-    A move in the hash makes every stored row in every store stale at
-    once, and only `enrich --stale-only` clears it. Re-pin only after a
-    deliberate change to a hashed input.
-
-    Two inputs move the hash: the enrichment prompt, and the configured
-    `MEMMAN_LLM_MODEL`, which the suite seeds from `INSTALL_DEFAULTS`.
-    Changing that default re-pins this test.
-
-    Mutation: an incidental edit to the enrichment prompt, so the hash
-        moves and every stored row goes stale for a change nobody
-        intended.
-    Oracle: the hash of the replayable prompt plus the seeded LLM
-        model, pinned.
+class _StubLLM:
+    """An LLM client that answers one fixed body under a fixed model id.
     """
-    assert compute_prompt_version() == 'da9c0d1199937f4c'
+
+    def __init__(self, model, body):
+        self.model = model
+        self.body = body
+
+    def complete(self, system, user, **kwargs):
+        if isinstance(self.body, Exception):
+            raise self.body
+        return self.body
+
+
+def test_a_write_stamps_the_clients_model_on_its_summary(
+        backend, monkeypatch):
+    """Verify a write stores the model id of the client that summarized it.
+
+    Mutation: `run_remember` passing the configured model or a
+        constant to `_apply_plan` instead of `llm_client.model`, or
+        `_apply_plan` dropping the argument so the column stays null.
+    Oracle: the model id of the stub client, a string no config holds.
+    """
+    monkeypatch.setattr(
+        'memman.pipeline.remember.get_llm_client',
+        lambda: _StubLLM('stub-vendor/stub-model', '{"summary": "Cache."}'))
+    ec = bound_embedder(backend)
+
+    res = run_remember(
+        backend, make_insight(
+            id='sm-write-1',
+            content='Redis backs the session cache for the web tier'),
+        ec=ec)
+
+    row = backend.nodes.get_raw(res['id'])
+    assert row.summary == 'Cache.'
+    assert row.summary_model == 'stub-vendor/stub-model'
+
+
+def test_a_write_whose_enrichment_fails_leaves_summary_model_unset(
+        backend, monkeypatch):
+    """Verify a write whose enrichment call raised records no model.
+
+    Mutation: `_apply_plan` writing `summary_model` outside the
+        `if enrichment` guard, so a row that got no model outcome
+        names a model anyway.
+    Oracle: the stored row's `summary_model`, null beside its null
+        summary.
+    """
+    stub = _StubLLM(
+        'stub-vendor/stub-model', ConnectionError('forced failure'))
+    monkeypatch.setattr(
+        'memman.pipeline.remember.get_llm_client', lambda: stub)
+    ec = bound_embedder(backend)
+
+    res = run_remember(
+        backend, make_insight(
+            id='sm-write-2', content='Redis backs the session cache'),
+        ec=ec)
+
+    row = backend.nodes.get_raw(res['id'])
+    assert row.summary is None
+    assert row.summary_model is None

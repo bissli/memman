@@ -23,11 +23,9 @@ from memman.doctor import check_claude_hooks, check_drain_heartbeat
 from memman.doctor import check_embedding_consistency
 from memman.doctor import check_enrichment_coverage, check_env_completeness
 from memman.doctor import check_env_permissions, check_integrity
-from memman.doctor import check_per_store_keys, check_provenance_drift
-from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
-from memman.doctor import run_all_checks
+from memman.doctor import check_per_store_keys, check_scheduler_heartbeat
+from memman.doctor import check_scheduler_state, run_all_checks
 from memman.exceptions import ConfigError
-from memman.pipeline.remember import compute_prompt_version
 from memman.queue import finish_worker_run, open_queue_db, start_worker_run
 from memman.setup import scheduler as sch
 from memman.store.db import DB
@@ -46,10 +44,9 @@ def _fake_embedding(dim: int = 512) -> bytes:
 def _insert_healthy_insight(db: DB, id: str, content: str = 'Healthy test insight with enough content') -> None:
     """Insert an insight with all enrichment fields populated.
     """
-    ins = make_insight(
-        id=id, content=content, prompt_version=compute_prompt_version())
+    ins = make_insight(id=id, content=content)
     insert_insight(db, ins)
-    update_enrichment(db, id, 'summary text')
+    update_enrichment(db, id, 'summary text', 'test-llm')
     update_embedding(db, id, _fake_embedding(), 'voyage-3-lite')
 
 
@@ -114,7 +111,8 @@ class TestEnrichmentCoverage:
         for rid in ('ok-1', 'strand-1', 'pend-1'):
             backend.nodes.insert(make_insight(
                 id=rid, content=f'content for {rid} long enough'))
-            backend.nodes.update_enrichment(rid, summary='summary text')
+            backend.nodes.update_enrichment(
+                rid, summary='summary text', summary_model='test-llm')
             backend.nodes.update_embedding(rid, [0.1] * 512, 'test-model')
         for rid in ('ok-1', 'strand-1'):
             backend.nodes.stamp_enrich_attempted(rid)
@@ -122,7 +120,7 @@ class TestEnrichmentCoverage:
         result = check_enrichment_coverage(backend)
         assert result['status'] == 'warn'
         assert result['detail']['stranded'] == 1
-        assert 'memman enrich --stale-only' in result['detail']['remediation']
+        assert 'memman enrich --stranded-only' in result['detail']['remediation']
 
 
 class TestEmbeddingConsistency:
@@ -153,217 +151,6 @@ class TestEmbeddingConsistency:
         result = check_embedding_consistency(tmp_backend)
         assert result['status'] == 'fail'
         assert len(result['detail']['sizes']) > 1
-
-
-class TestProvenanceDrift:
-
-    def test_no_rows_pass(self, tmp_db, tmp_backend):
-        """Verify an empty store reports no stale rows.
-
-        Mutation: counting a phantom row, or raising on an empty table.
-        Oracle: an empty store has zero stale rows.
-        """
-        result = check_provenance_drift(tmp_backend)
-        assert result['name'] == 'provenance_drift'
-        assert result['status'] == 'pass'
-        assert result['detail']['stale_rows'] == 0
-
-    def test_reports_the_active_model(self, tmp_db, tmp_backend):
-        """provenance_drift names the configured model as `active_model`.
-
-        Mutation: the key renamed or dropped, or its value read from a
-            variable other than MEMMAN_LLM_MODEL.
-        Oracle: the model the autouse fixture seeds into the env file.
-        """
-        result = check_provenance_drift(tmp_backend)
-        assert result['detail']['active_model'] == \
-            config.INSTALL_DEFAULTS[config.LLM_MODEL]
-
-    def test_all_current_pass(self, tmp_db, tmp_backend):
-        """All rows stamped with the active prompt_version: pass.
-
-        Mutation: `_is_provenance_stale` reporting a row stale even
-            when its `prompt_version` equals `active_pv`.
-        Oracle: the row's `prompt_version` set to the freshly
-            computed `active_pv` before the check runs.
-        """
-
-        active_pv = compute_prompt_version()
-
-        _insert_healthy_insight(tmp_db, 'p-1')
-        tmp_db._exec(
-            'update insights set prompt_version = ? where id = ?',
-            (active_pv, 'p-1'))
-
-        result = check_provenance_drift(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['stale_rows'] == 0
-
-    def test_null_prompt_version_not_stale(self, tmp_db, tmp_backend):
-        """A row with no `prompt_version` never counts as stale.
-
-        Mutation: `_is_provenance_stale` comparing `None != active_pv`
-            as True, so a never-enriched row counts as drifted even
-            though `count_stale_insights` excludes it with its
-            `prompt_version is not null` clause.
-        Oracle: a row inserted with `prompt_version=None`, checked
-            against `check_provenance_drift`'s `stale_rows` output.
-        """
-
-        ins = make_insight(id='p-null', prompt_version=None)
-        insert_insight(tmp_db, ins)
-
-        result = check_provenance_drift(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['stale_rows'] == 0
-
-    def test_drift_warns(self, tmp_db, tmp_backend):
-        """A drifted prompt_version surfaces as warn with a remedy.
-
-        Mutation: comparing the row's key against a constant, or
-            dropping the warn so drift a rebuild CAN fix goes
-            unreported.
-        Oracle: two drifted rows against one carrying the active key,
-            counted.
-        """
-
-        active_pv = compute_prompt_version()
-
-        for i in range(2):
-            _insert_healthy_insight(tmp_db, f'p-stale-{i}')
-        _insert_healthy_insight(tmp_db, 'p-fresh')
-        tmp_db._exec(
-            'update insights set prompt_version = ?'
-            " where id in ('p-stale-0', 'p-stale-1')",
-            ('deadbeefdeadbeef',))
-        tmp_db._exec(
-            'update insights set prompt_version = ?'
-            " where id = 'p-fresh'",
-            (active_pv,))
-
-        result = check_provenance_drift(tmp_backend)
-        assert result['status'] == 'warn'
-        assert result['detail']['stale_rows'] == 2
-        assert 'remediation' in result['detail']
-
-
-class TestStaleHelpers:
-    """Cross-backend tests for iter_stale_insight_ids and count_stale_insights.
-    """
-
-    def _seed_stale_matrix(self, backend, active_pv: str) -> list[str]:
-        """Seed one current and two drifted rows; return the drifted ids.
-
-        Parameters
-        ----------
-        backend : Backend
-            Store to seed.
-        active_pv : str
-            Prompt version stamped on the current row.
-
-        Returns
-        -------
-        list[str]
-            Ids of the two rows stamped with an old prompt version.
-        """
-        OLD_PV = 'old-prompt-version-deadbeef'
-        rows = [
-            ('row-b', active_pv),
-            ('row-c', OLD_PV),
-            ('row-e', OLD_PV),
-            ]
-        for rid, pv in rows:
-            backend.nodes.insert(make_insight(
-                id=rid, content=f'content for {rid} long enough',
-                prompt_version=pv))
-        return ['row-c', 'row-e']
-
-    def test_iter_returns_only_drifted_rows(self, backend):
-        """iter_stale_insight_ids excludes the current row.
-
-        Mutation: the `!= active_pv` term dropped, which reports the
-            current row as stale too.
-        Oracle: the hand-built three-row matrix from
-            `_seed_stale_matrix`, whose only stale ids are the two
-            seeded on `OLD_PV`.
-        """
-
-        active_pv = compute_prompt_version()
-        expected = self._seed_stale_matrix(backend, active_pv)
-
-        ids = backend.nodes.iter_stale_insight_ids(active_pv)
-        assert sorted(ids) == sorted(expected)
-
-    def test_count_matches_iter(self, backend):
-        """count_stale_insights agrees with len(iter_stale_insight_ids).
-
-        Mutation: `count_stale_insights`'s SQL predicate drifting from
-            `iter_stale_insight_ids`'s, so the two disagree on the
-            seeded matrix.
-        Oracle: the hand-counted stale total of 2 from
-            `_seed_stale_matrix`.
-        """
-
-        active_pv = compute_prompt_version()
-        self._seed_stale_matrix(backend, active_pv)
-
-        n = backend.nodes.count_stale_insights(active_pv)
-        ids = backend.nodes.iter_stale_insight_ids(active_pv)
-        assert n == len(ids) == 2
-
-    def test_count_matches_doctor_stale_rows(self, backend):
-        """count_stale_insights agrees with check_provenance_drift's stale_rows.
-
-        Mutation: `check_provenance_drift`'s per-row
-            `_is_provenance_stale` predicate diverging from
-            `count_stale_insights`'s SQL predicate (e.g. treating a
-            NULL `prompt_version` as stale), so the two disagree on
-            the same seeded matrix.
-        Oracle: the store helper's own count, cross-checked against
-            the doctor check's `stale_rows` on the identical rows.
-        """
-
-        active_pv = compute_prompt_version()
-        self._seed_stale_matrix(backend, active_pv)
-
-        helper_count = backend.nodes.count_stale_insights(active_pv)
-        doctor_result = check_provenance_drift(backend)
-        assert helper_count == doctor_result['detail']['stale_rows']
-
-    def test_stranded_row_is_stale(self, backend):
-        """Verify a stranded row is stale while an enriched one is not.
-
-        Mutation: the stale predicate keeping its `prompt_version is
-            not null` guard alone, which skips a stranded row since
-            a failed enrichment stamps no key; or widening it to
-            every null key, which takes the enriched and the pending
-            row too; or the count and the iteration disagreeing.
-        Oracle: three rows with a null `prompt_version`, of which only
-            `strand-1` is attempted and never enriched.
-        """
-
-        active_pv = compute_prompt_version()
-        for rid in ('strand-1', 'legacy-1', 'pend-1'):
-            backend.nodes.insert(make_insight(
-                id=rid, content=f'content for {rid} long enough'))
-        for rid in ('strand-1', 'legacy-1'):
-            backend.nodes.stamp_enrich_attempted(rid)
-        backend.nodes.stamp_enriched('legacy-1')
-
-        assert backend.nodes.iter_stale_insight_ids(active_pv) == ['strand-1']
-        assert backend.nodes.count_stale_insights(active_pv) == 1
-
-    def test_empty_store(self, backend):
-        """Verify both stale helpers return nothing on an empty store.
-
-        Mutation: the count returning None, or the iterator yielding a row,
-            when the table is empty.
-        Oracle: hand-set `[]` and `0`.
-        """
-
-        active_pv = compute_prompt_version()
-        assert backend.nodes.iter_stale_insight_ids(active_pv) == []
-        assert backend.nodes.count_stale_insights(active_pv) == 0
 
 
 class TestRunAllChecks:

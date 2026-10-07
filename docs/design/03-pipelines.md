@@ -66,7 +66,7 @@ A replacement always creates a new memory with its own content, author, timestam
 
 Queue retries wait 60, 120, 240, and 480 seconds. After five failed attempts, the entry stays `failed` until an explicit retry ([queue commands](../USAGE.md#queue)).
 
-`enrich_attempted_at` records the attempt. `enriched_at` is set only when both enrichment and a vector were saved. A memory with an attempt but no completion is **stranded** and can be retried through maintenance or `enrich --stale-only`.
+`enrich_attempted_at` records the attempt. `enriched_at` is set only when both enrichment and a vector were saved. A memory with an attempt but no completion is **stranded** and can be retried through maintenance or `enrich --stranded-only`.
 
 ### Maintenance after each drain
 
@@ -191,17 +191,17 @@ Only the drain and serve loop attach the trace file handler. A standalone recall
 
 ## 3.5 Handling model changes
 
-Prompts, models, and providers change over time. memman does not aim for identical output across versions. It records the inputs behind each summary and vector, so an operator can rebuild only the affected fields. It applies no fixed similarity cutoff, because a cutoff would tie the code to one model's behavior.
+Prompts, models, and providers change over time. memman does not aim for identical output across versions. It records the models behind each summary and vector, so an operator can compare outcomes by model with SQL. It applies no fixed similarity cutoff, because a cutoff would tie the code to one model's behavior.
 
-| Record                                      | Detects                                 | Check or recovery                                           |
-| ------------------------------------------- | --------------------------------------- | ----------------------------------------------------------- |
-| `prompt_version`                            | Changed enrichment prompt or LLM model  | `provenance_drift`; `enrich --stale-only`                   |
-| `enrich_attempted_at` without `enriched_at` | Incomplete enrichment or missing vector | `enrichment_coverage`; maintenance or `enrich --stale-only` |
-| `embed_fingerprint`                         | Store's bound embedding model           | `embed status`; model swap or re-embed                      |
-| `embedding_model`                           | Model recorded for a memory's vector    | `embed reembed` checks model and vector width               |
-| `embed_swap_*`                              | Unfinished model swap                   | `no_stale_swap_meta`; resume or abort                       |
+| Record                                      | Detects                                 | Check or recovery                                              |
+| ------------------------------------------- | --------------------------------------- | -------------------------------------------------------------- |
+| `summary_model`                             | LLM model that wrote a summary          | SQL comparison; no command reads it                            |
+| `enrich_attempted_at` without `enriched_at` | Incomplete enrichment or missing vector | `enrichment_coverage`; maintenance or `enrich --stranded-only` |
+| `embed_fingerprint`                         | Store's bound embedding model           | `embed status`; model swap or re-embed                         |
+| `embedding_model`                           | Model recorded for a memory's vector    | `embed reembed` checks model and vector width                  |
+| `embed_swap_*`                              | Unfinished model swap                   | `no_stale_swap_meta`; resume or abort                          |
 
-An enriched memory with a null `prompt_version` counts as current. A change to the summary-length filter alone leaves the prompt hash unchanged. [Chapter 4](04-lifecycle.md) covers embedding model changes, and [re-enrichment](../USAGE.md#re-enrichment) covers the commands.
+`summary_model` stays null when the enrichment call failed. An empty summary, from an undecodable reply or the summary-length filter, still records the model. After a prompt or model change, `memman enrich` re-runs every current memory. [Chapter 4](04-lifecycle.md) covers embedding model changes, and [re-enrichment](../USAGE.md#re-enrichment) covers the commands.
 
 ## 3.6 Store branches
 

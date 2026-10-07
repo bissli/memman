@@ -20,8 +20,9 @@ def _row(row_id='row-a', content='grackle migrates north', **kwargs):
         'embedding': _vec(0.5, 0.25, -0.75),
         'enrich_attempted_at': ENRICHED, 'enriched_at': ENRICHED,
         'created_at': CREATED, 'updated_at': UPDATED, 'deleted_at': None,
-        'prompt_version': 'pv1', 'embedding_model': 'model-x',
+        'embedding_model': 'model-x',
         'queue_uuid': 'qu-a', 'replaced_by': None, 'author': 'alice',
+        'summary_model': 'summary-model-y',
         }
     fields.update(kwargs)
     return MigrateInsight(**fields)

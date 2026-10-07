@@ -1,9 +1,8 @@
 """Shared dataclasses for backend implementations and pipeline code.
 
 The domain type (Insight) plus DTOs returned by Backend Protocol
-verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount,
-WorkerRun). Includes the timestamp helper used across the
-package.
+verbs (OpLogEntry, OpLogStats, NodeStats, WorkerRun). Includes the
+timestamp helper used across the package.
 
 Protocol commitment: `Insight.created_at` and `Insight.updated_at`
 carry no `default_factory`. Backends stamp them server-side at the verb
@@ -31,7 +30,6 @@ class Insight:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
-    prompt_version: str | None = None
     embedding_model: str | None = None
     summary: str = ''
     enrich_attempted_at: datetime | None = None
@@ -179,15 +177,6 @@ class NodeStats:
     replaced_insights: int = 0
     deleted_insights: int = 0
     oplog_count: int = 0
-
-
-@dataclass
-class ProvenanceCount:
-    """One (prompt_version, count) tuple from provenance distribution.
-    """
-
-    prompt_version: str | None
-    count: int
 
 
 @dataclass

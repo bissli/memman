@@ -50,11 +50,11 @@ class MigrateInsight:
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
-    prompt_version: str | None
     embedding_model: str | None
     queue_uuid: str | None
     replaced_by: str | None
     author: str | None
+    summary_model: str | None
 
 
 @dataclass

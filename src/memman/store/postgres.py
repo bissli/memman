@@ -46,8 +46,8 @@ from memman.store.backend import RecallSession, _check_identifier
 from memman.store.errors import BackendError, ConfigError, StoreMissingError
 from memman.store.errors import SwapCutoverRefused
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
+from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
+from memman.store.model import format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
 from memman.store.oplog import MAX_OPLOG_ENTRIES, OPLOG_RETENTION_DAYS
 from memman.trace import redact_dsn
@@ -122,12 +122,12 @@ create table if not exists {schema}.insights (
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now(),
     deleted_at  timestamptz,
-    prompt_version text,
     embedding_model text,
     queue_uuid  text,
     kw_tokens   text[] not null,
     replaced_by text,
-    author      text
+    author      text,
+    summary_model text
 );
 
 create table if not exists {schema}.oplog (
@@ -310,14 +310,14 @@ _INSIGHT_COLS = (
 _RAW_SELECT = (
     'id, content, summary, embedding::real[],'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
-    ' deleted_at, prompt_version, embedding_model,'
-    ' queue_uuid, replaced_by, author')
+    ' deleted_at, embedding_model,'
+    ' queue_uuid, replaced_by, author, summary_model')
 
 _RAW_INSERT = (
     'id, content, summary, embedding,'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
-    ' deleted_at, prompt_version, embedding_model,'
-    ' queue_uuid, kw_tokens, replaced_by, author')
+    ' deleted_at, embedding_model,'
+    ' queue_uuid, kw_tokens, replaced_by, author, summary_model')
 
 
 def _raw_values(row: MigrateInsight) -> tuple:
@@ -339,10 +339,10 @@ def _raw_values(row: MigrateInsight) -> tuple:
         if row.embedding is not None else None,
         row.enrich_attempted_at, row.enriched_at,
         row.created_at, row.updated_at, row.deleted_at,
-        row.prompt_version, row.embedding_model, row.queue_uuid,
+        row.embedding_model, row.queue_uuid,
         [] if row.deleted_at else sorted(
             insight_tokens(Insight(content=row.content))),
-        row.replaced_by, row.author)
+        row.replaced_by, row.author, row.summary_model)
 
 
 class PostgresNodeStore(NodeStore):
@@ -378,15 +378,15 @@ class PostgresNodeStore(NodeStore):
         sql = self._q("""
 insert into {s}.insights
     (id, content, created_at, updated_at,
-     prompt_version, embedding_model,
+     embedding_model,
      queue_uuid, kw_tokens, author)
-values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+values (%s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 ins.id, ins.content,
                 now, now,
-                ins.prompt_version, ins.embedding_model,
+                ins.embedding_model,
                 ins.queue_uuid,
                 sorted(insight_tokens(ins)),
                 ins.author))
@@ -546,15 +546,17 @@ select id, replaced_by from {s}.insights where replaced_by is not null
             out['unterminated'] = unterminated_chains(dict(cur.fetchall()))
         return out
 
-    def update_enrichment(self, id: Id, *, summary: str) -> None:
+    def update_enrichment(
+            self, id: Id, *, summary: str, summary_model: str) -> None:
         sql = self._q("""
 update {s}.insights
 set summary = %s,
+    summary_model = %s,
     updated_at = now()
 where id = %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (summary, id))
+            cur.execute(sql, (summary, summary_model, id))
 
     def count_active(self) -> int:
         sql = self._q("""
@@ -580,21 +582,6 @@ limit 1
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
-
-    def provenance_distribution(self) -> list[ProvenanceCount]:
-        sql = self._q("""
-select prompt_version, count(*)
-from {s}.insights
-where deleted_at is null and replaced_by is null
-group by prompt_version
-order by count(*) desc
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql)
-            return [
-                ProvenanceCount(prompt_version=r[0], count=int(r[1]))
-                for r in cur.fetchall()
-                ]
 
     def get_all_active(self) -> list[Insight]:
         sql = self._q(f"""
@@ -701,20 +688,12 @@ group by vector_dims(embedding)
                 ' where id = %s'),
                 (id,))
 
-    def stamp_enriched(
-            self, id: Id, *,
-            prompt_version: str | None = None) -> None:
+    def stamp_enriched(self, id: Id) -> None:
         with self._conn.cursor() as cur:
-            if prompt_version is None:
-                cur.execute(self._q(
-                    'update {s}.insights set enriched_at = now()'
-                    ' where id = %s'),
-                    (id,))
-                return
             cur.execute(self._q(
-                'update {s}.insights set enriched_at = now(),'
-                ' prompt_version = %s where id = %s'),
-                (prompt_version, id))
+                'update {s}.insights set enriched_at = now()'
+                ' where id = %s'),
+                (id,))
 
     def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
         sql = self._q("""
@@ -766,30 +745,6 @@ limit %s
         with self._conn.cursor() as cur:
             cur.execute(sql, (limit,))
             return [r[0] for r in cur.fetchall()]
-
-    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
-        sql = self._q("""
-select id from {s}.insights
-where deleted_at is null and replaced_by is null
-  and ((prompt_version is not null and prompt_version != %s)
-       or (enrich_attempted_at is not null and enriched_at is null))
-order by created_at asc
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (active_pv,))
-            return [r[0] for r in cur.fetchall()]
-
-    def count_stale_insights(self, active_pv: str) -> int:
-        sql = self._q("""
-select count(*) from {s}.insights
-where deleted_at is null and replaced_by is null
-  and ((prompt_version is not null and prompt_version != %s)
-       or (enrich_attempted_at is not null and enriched_at is null))
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (active_pv,))
-            row = cur.fetchone()
-            return int(row[0]) if row else 0
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         if not ids:

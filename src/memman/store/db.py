@@ -311,11 +311,11 @@ create table if not exists insights (
     created_at  text not null,
     updated_at  text not null,
     deleted_at  text,
-    prompt_version text,
     embedding_model text,
     queue_uuid  text,
     replaced_by text,
-    author      text
+    author      text,
+    summary_model text
 );
 
 create index if not exists idx_insights_created on insights(created_at);

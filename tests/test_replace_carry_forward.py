@@ -22,7 +22,8 @@ def _replace_apply(backend, new_id, target_id, **insight_overrides):
         }
     overrides.update(insight_overrides)
     return _apply_plan(
-        backend, make_insight(**overrides), target_id, None, {})
+        backend, make_insight(**overrides), target_id, None, {},
+        'test-llm')
 
 
 def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
@@ -75,7 +76,7 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
 
     result = _apply_plan(
         tmp_backend, make_insight(id='new-1', content='the correction'),
-        'gone-1', None, {})
+        'gone-1', None, {}, 'test-llm')
 
     assert result['action'] == 'add'
     ops = {(e.operation, e.insight_id): e.detail

@@ -110,10 +110,8 @@ def enrich_pending(
     backend : Backend
         The store to work through.
     llm_client : MemmanLLMClient | None, default None
-        Serves the enrichment call. None resolves `get_llm_client()`,
-        whose model `compute_prompt_version` stamps on every row this
-        pass writes; a client on any other model makes that stamp name
-        a model that did not run.
+        Serves the enrichment call, and its `model` is stored as each
+        row's `summary_model`. None resolves `get_llm_client()`.
     embed_client : EmbeddingProvider | None, default None
         The store-bound embedder; None stores no vector.
     max_batch : int, default MAX_ENRICH_BATCH
@@ -138,16 +136,6 @@ def enrich_pending(
     pending_ids = backend.nodes.get_pending_enrich_ids(limit=max_batch)
     if not pending_ids:
         return 0
-
-    from memman.pipeline.remember import compute_prompt_version
-
-    try:
-        active_pv: str | None = compute_prompt_version()
-    except Exception as exc:
-        logger.debug(
-            f'compute_prompt_version failed; provenance left null:'
-            f' {type(exc).__name__}: {exc}')
-        active_pv = None
 
     processed = 0
 
@@ -189,7 +177,8 @@ def enrich_pending(
         with backend.transaction():
             if enrichment:
                 backend.nodes.update_enrichment(
-                    insight.id, summary=enrichment.get('summary', ''))
+                    insight.id, summary=enrichment.get('summary', ''),
+                    summary_model=llm_client.model)
 
             if new_vec is not None:
                 backend.nodes.update_embedding(
@@ -199,8 +188,7 @@ def enrich_pending(
             # No vector this pass, no stamp: an embed that failed or
             # could not run leaves the row for the stranded-row sweep.
             if enrichment and new_vec is not None:
-                backend.nodes.stamp_enriched(
-                    insight_id, prompt_version=active_pv)
+                backend.nodes.stamp_enriched(insight_id)
         if on_progress:
             on_progress('done', insight)
         processed += 1

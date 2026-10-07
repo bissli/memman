@@ -342,7 +342,7 @@ row it replaced is forgotten, `forget` takes it.
 ## Status and health
 
 ```bash
-memman status                         # store, backend, insight counts, stale_insights, oplog size
+memman status                         # store, backend, insight counts, oplog size
 memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 ```
 

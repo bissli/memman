@@ -28,14 +28,14 @@ def insert_insight(db: 'DB', i: Insight) -> None:
     sql = """
 insert into insights
     (id, content, created_at, updated_at,
-     prompt_version, embedding_model,
+     embedding_model,
      queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content,
         now, now,
-        i.prompt_version, i.embedding_model,
+        i.embedding_model,
         i.queue_uuid, i.author))
 
 
@@ -248,10 +248,14 @@ order by created_at, id
     return [_scan_insight(r) for r in rows]
 
 
-def update_enrichment(db: 'DB', id: str, summary: str) -> None:
-    """Store the enrichment summary for an insight.
+def update_enrichment(
+        db: 'DB', id: str, summary: str, summary_model: str) -> None:
+    """Store the enrichment summary and the model that wrote it.
     """
-    db._exec('update insights set summary = ? where id = ?', (summary, id))
+    db._exec(
+        'update insights set summary = ?, summary_model = ?'
+        ' where id = ?',
+        (summary, summary_model, id))
 
 
 def count_active_insights(db: 'DB') -> int:
@@ -331,23 +335,6 @@ limit ?
 """
     rows = db._query(sql, (cursor, batch)).fetchall()
     return list(rows)
-
-
-def provenance_distribution(
-        db: 'DB') -> list[tuple[str | None, int]]:
-    """Return (prompt_version, count) groups for active rows.
-
-    Sorted by count descending.
-    """
-    sql = """
-select prompt_version, count(*) as n
-from insights
-where deleted_at is null and replaced_by is null
-group by prompt_version
-order by n desc
-"""
-    rows = db._query(sql).fetchall()
-    return [(r[0], r[1]) for r in rows]
 
 
 def get_all_active_insights(db: 'DB') -> list[Insight]:
@@ -489,32 +476,12 @@ def stamp_enrich_attempted(db: 'DB', insight_id: str, ts: str) -> None:
         (ts, insight_id))
 
 
-def stamp_enriched(
-        db: 'DB', insight_id: str, ts: str, *,
-        prompt_version: str | None = None) -> None:
-    """Set enriched_at, and the staleness key when one is given.
-
-    Parameters
-    ----------
-    db : DB
-        Open store handle.
-    insight_id : str
-        Row to stamp.
-    ts : str
-        Formatted `enriched_at` timestamp.
-    prompt_version : str or None, default None
-        The `compute_prompt_version()` key this enrichment ran under.
-        Omitted by the write path, which already set it at insert.
+def stamp_enriched(db: 'DB', insight_id: str, ts: str) -> None:
+    """Set enriched_at for an insight.
     """
-    if prompt_version is None:
-        db._exec(
-            'update insights set enriched_at = ? where id = ?',
-            (ts, insight_id))
-        return
     db._exec(
-        'update insights set enriched_at = ?, prompt_version = ?'
-        ' where id = ?',
-        (ts, prompt_version, insight_id))
+        'update insights set enriched_at = ? where id = ?',
+        (ts, insight_id))
 
 
 def get_pending_enrich_ids(db: 'DB', limit: int) -> list[str]:
@@ -575,54 +542,6 @@ limit ?
 """
     rows = db._query(sql, (limit,)).fetchall()
     return [r[0] for r in rows]
-
-
-def iter_stale_insight_ids(
-        db: 'DB', active_pv: str) -> list[str]:
-    """Return ids of the active insights `enrich --stale-only` replays.
-
-    Parameters
-    ----------
-    db : DB
-        The open SQLite store.
-    active_pv : str
-        The active `compute_prompt_version()` key.
-
-    Returns
-    -------
-    list[str]
-        Ids oldest first: rows whose `prompt_version` is present and
-        differs from `active_pv`, plus stranded rows (attempted,
-        never enriched), whatever their key. An enriched row with a
-        null key stays out.
-    """
-    # Keep the key term aligned with `doctor._is_provenance_stale`,
-    # and the whole predicate aligned with `count_stale_insights` and
-    # the Postgres copies.
-    sql = """
-select id from insights
-where deleted_at is null and replaced_by is null
-  and ((prompt_version is not null and prompt_version != ?)
-       or (enrich_attempted_at is not null and enriched_at is null))
-order by created_at asc
-"""
-    rows = db._query(sql, (active_pv,)).fetchall()
-    return [r[0] for r in rows]
-
-
-def count_stale_insights(db: 'DB', active_pv: str) -> int:
-    """Count the active insights `enrich --stale-only` replays.
-
-    Same predicate as `iter_stale_insight_ids`.
-    """
-    sql = """
-select count(*) from insights
-where deleted_at is null and replaced_by is null
-  and ((prompt_version is not null and prompt_version != ?)
-       or (enrich_attempted_at is not null and enriched_at is null))
-"""
-    row = db._query(sql, (active_pv,)).fetchone()
-    return row[0] if row else 0
 
 
 def reset_for_rebuild(

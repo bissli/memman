@@ -90,6 +90,7 @@ class TestEnrichedAtOnEnrichPending:
             " where id = 'ls-1'")
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = '{"summary": "test"}'
 
         enrich_pending(
@@ -120,6 +121,7 @@ class TestEnrichedAtOnEnrichPending:
             " where id = 'rf-1'")
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = '{"summary": "s"}'
 
         class _FailingClient:
@@ -161,6 +163,7 @@ class TestEnrichedAtOnEnrichPending:
             " where id = 'sk-1'")
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = '{"summary": "s"}'
         unavailable = MagicMock()
         unavailable.available.return_value = False
@@ -195,6 +198,7 @@ class TestEnrichedAtOnEnrichPending:
         assert before[0] is None
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = '{"summary": "s"}'
 
         enrich_pending(

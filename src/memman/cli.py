@@ -2927,13 +2927,6 @@ def status(ctx: click.Context) -> None:
         backends_in_use = sorted({
             resolve_store_backend(s, data_dir) for s in all_stores
             })
-        try:
-            from memman.pipeline.remember import compute_prompt_version
-            active_pv = compute_prompt_version()
-            stale_insights: int | None = backend.nodes.count_stale_insights(
-                active_pv)
-        except Exception:
-            stale_insights = None
         out = {
             'store': store_name,
             'backend': resolve_store_backend(store_name, data_dir),
@@ -2941,7 +2934,6 @@ def status(ctx: click.Context) -> None:
             'total_insights': node_stats.total_insights,
             'replaced_insights': node_stats.replaced_insights,
             'deleted_insights': node_stats.deleted_insights,
-            'stale_insights': stale_insights,
             'oplog_count': node_stats.oplog_count,
             'storage_path': backend.path,
             }
@@ -3992,46 +3984,27 @@ def prime() -> None:
     click.echo(shipped, nl=False)
 
 
-def _enrich_stale_only(
+def _enrich_stranded_only(
         ctx: click.Context, *, dry_run: bool,
         progress_jsonl: bool) -> None:
-    """Stale-only branch of `enrich`.
+    """Stranded-only branch of `enrich`.
 
-    Filters work to rows whose persisted `prompt_version` no longer
-    matches `compute_prompt_version()` -- the enrichment prompt plus
-    the LLM model, which is exactly the set this command
-    replays -- and to stranded rows, whose enrichment call failed
-    after the attempt stamp. Works on SQLite and Postgres. Lock +
-    predicate + reset run inside a single `reembed_lock('rebuild')`
-    window so a concurrent wholesale rebuild cannot race.
+    Filters work to stranded rows: attempted, never enriched. Works on
+    SQLite and Postgres. Lock + predicate + reset run inside a single
+    `reembed_lock('rebuild')` window so a concurrent wholesale rebuild
+    cannot race.
     """
     from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
-    from memman.pipeline.remember import compute_prompt_version
 
     if not dry_run:
         _require_stopped('rebuild')
 
-    try:
-        active_pv = compute_prompt_version()
-    except Exception as exc:
-        raise click.ClickException(
-            f'cannot resolve active prompt version: {exc}')
-    # `active_pv` already folds this model in. The payload names it so
-    # a reader can tell which input drifted without un-folding the
-    # hash.
-    try:
-        enrich_model: str | None = config.require(
-            config.LLM_MODEL)
-    except Exception:
-        enrich_model = None
-
     with _active_backend(ctx) as backend:
+        stranded = backend.nodes.enrichment_coverage().stranded
         if dry_run:
-            stale = backend.nodes.count_stale_insights(active_pv)
             _json_out({
-                'mode': 'stale-only', 'total': stale, 'dry_run': 1,
-                'active_pv': active_pv,
-                'active_enrich_model': enrich_model,
+                'mode': 'stranded-only', 'total': stranded,
+                'dry_run': 1,
                 })
             return
 
@@ -4040,16 +4013,15 @@ def _enrich_stale_only(
                 raise click.ClickException(
                     'another enrich run is in progress on this store')
 
-            stale_ids = backend.nodes.iter_stale_insight_ids(active_pv)
-            total_count = len(stale_ids)
+            stranded_ids = backend.nodes.get_unenriched_attempted_ids(
+                limit=stranded)
+            total_count = len(stranded_ids)
 
             if total_count == 0:
                 stats = {
                     'processed': 0, 'remaining': 0,
-                    'mode': 'stale-only',
-                    'skipped': 'no_stale_rows',
-                    'active_pv': active_pv,
-                    'active_enrich_model': enrich_model,
+                    'mode': 'stranded-only',
+                    'skipped': 'no_stranded_rows',
                     }
                 _json_out(stats)
                 return
@@ -4060,7 +4032,7 @@ def _enrich_stale_only(
             processed = 0
 
             bar = tqdm(
-                total=total_count, desc='Rebuilding (stale)',
+                total=total_count, desc='Rebuilding (stranded)',
                 unit='insight', file=sys.stderr,
                 dynamic_ncols=True,
                 disable=not sys.stderr.isatty())
@@ -4084,7 +4056,7 @@ def _enrich_stale_only(
                         sys.stderr.flush()
 
             for i in range(0, total_count, MAX_ENRICH_BATCH):
-                batch_ids = stale_ids[i:i + MAX_ENRICH_BATCH]
+                batch_ids = stranded_ids[i:i + MAX_ENRICH_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
 
                 while True:
@@ -4104,9 +4076,7 @@ def _enrich_stale_only(
 
             stats = {
                 'processed': processed, 'remaining': remaining,
-                'mode': 'stale-only',
-                'active_pv': active_pv,
-                'active_enrich_model': enrich_model,
+                'mode': 'stranded-only',
                 }
             backend.oplog.log(
                 operation='rebuild', insight_id='',
@@ -4121,22 +4091,16 @@ def _enrich_stale_only(
               help='Emit one JSON line per done event to stderr'
                    ' (for parents that capture stderr and need streaming'
                    ' progress while the inner tqdm bar is suppressed).')
-@click.option('--stale-only', is_flag=True, default=False,
-              help='Re-enrich only rows whose prompt_version no longer'
-                   ' matches the active config -- the enrichment prompt'
-                   ' plus the LLM model, which is exactly what'
-                   ' this command replays -- and stranded rows, whose'
-                   ' enrichment call failed. Cross-backend'
-                   ' (works on Postgres). An enriched row with NULL'
-                   ' provenance is not swept; it needs a separate'
-                   ' backfill.')
+@click.option('--stranded-only', is_flag=True, default=False,
+              help='Re-enrich only stranded rows: attempted, never'
+                   ' enriched. Cross-backend (works on Postgres).')
 @click.pass_context
 def enrich(ctx: click.Context, dry_run: bool,
-           progress_jsonl: bool, stale_only: bool) -> None:
+           progress_jsonl: bool, stranded_only: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline.
     """
-    if stale_only:
-        _enrich_stale_only(
+    if stranded_only:
+        _enrich_stranded_only(
             ctx, dry_run=dry_run, progress_jsonl=progress_jsonl)
         return
 

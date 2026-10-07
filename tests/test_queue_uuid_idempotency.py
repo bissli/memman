@@ -167,7 +167,7 @@ def test_insight_column_lists_are_identical_across_backends():
 
 
 EXPECTED_INSIGHT_COLUMNS = {
-    'prompt_version', 'embedding_model',
+    'summary_model', 'embedding_model',
     'enrich_attempted_at', 'enriched_at',
     'summary',
     'queue_uuid',

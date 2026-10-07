@@ -16,15 +16,12 @@ A crash during planning leaves the DB untouched, and the retry path
 re-runs the whole pipeline.
 """
 
-import functools
-import hashlib
 import logging
 from typing import Any
 
 import httpx
-from memman import config
 from memman.embed import EmbeddingProvider
-from memman.exceptions import ConfigError, EmbedCredentialError
+from memman.exceptions import EmbedCredentialError
 from memman.llm.client import get_llm_client
 from memman.pipeline.enrich import enrich_with_llm
 from memman.search.quality import check_content_quality
@@ -32,42 +29,6 @@ from memman.store.backend import Backend
 from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
 
 logger = logging.getLogger('memman')
-
-
-@functools.lru_cache(maxsize=1)
-def compute_prompt_version() -> str:
-    """Hash of the inputs a rebuild replays.
-
-    Returns
-    -------
-    str
-        First 16 hex chars of a SHA-256 over the enrichment prompt
-        and the resolved `MEMMAN_LLM_MODEL` id.
-
-    Notes
-    -----
-    - THE INVARIANT: this hashes exactly the inputs `enrich_pending`
-      (`pipeline/enrich.py`) re-runs, and nothing else. It is both the
-      value `stamp_enriched` writes and the key
-      `count_stale_insights` compares, so a key covering more than
-      the remedy replays reports rows stale for a change
-      re-enrichment cannot address - and `enrich --stale-only`
-      then clears the report by doing unrelated work, which is worse
-      than having no remedy at all.
-    - Cached for the life of the process. Every consumer (`status`,
-      one drain tick, one rebuild) is a fresh process. A test that
-      varies the inputs calls `cache_clear()`.
-    """
-    from memman.pipeline.enrich import ENRICHMENT_SYSTEM_PROMPT
-
-    try:
-        llm_model = config.require(config.LLM_MODEL)
-    except ConfigError:
-        # An unresolvable model hashes as '', so a store with no model
-        # configured still yields a stable key on the `status` path.
-        llm_model = ''
-    blob = f'{ENRICHMENT_SYSTEM_PROMPT}\x00{llm_model}'
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def run_remember(
@@ -119,12 +80,12 @@ def run_remember(
         logger.warning(
             f'fact embed failed; row stored without vector: {exc}')
 
-    insight.prompt_version = compute_prompt_version()
     insight.embedding_model = ec.model
 
     with backend.transaction():
         result = _apply_plan(
-            backend, insight, replaced_id, embed_vec, enrichment)
+            backend, insight, replaced_id, embed_vec, enrichment,
+            llm_client.model)
 
     result['quality_warnings'] = quality_warnings
     return result
@@ -136,6 +97,7 @@ def _apply_plan(
         replaced_id: str,
         embed_vec: list[float] | None,
         enrichment: dict[str, Any],
+        summary_model: str,
         ) -> dict[str, Any]:
     """Store one insight. Must be invoked inside a transaction.
 
@@ -154,6 +116,9 @@ def _apply_plan(
         The content vector; None stores the row without one.
     enrichment : dict[str, Any]
         Output of `enrich_with_llm`; empty leaves the row unenriched.
+    summary_model : str
+        The LLM model id stored with the summary; unused when
+        `enrichment` is empty.
 
     Returns
     -------
@@ -217,7 +182,8 @@ def _apply_plan(
     backend.nodes.stamp_enrich_attempted(insight.id)
     if enrichment:
         backend.nodes.update_enrichment(
-            insight.id, summary=enrichment.get('summary', ''))
+            insight.id, summary=enrichment.get('summary', ''),
+            summary_model=summary_model)
     # A vectorless row stays unstamped: the stranded-row sweep selects
     # `enriched_at is null`, and it is the only path that embeds the
     # row again.

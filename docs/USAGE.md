@@ -322,13 +322,13 @@ memman insights review [--limit N]     # memories with quality warnings
 ```bash
 memman enrich --dry-run     # print the count and change nothing, scheduler running
 memman scheduler stop
-memman enrich --stale-only  # rebuild outdated or incomplete generated fields
+memman enrich --stranded-only  # retry memories whose enrichment never completed
 memman scheduler start
 ```
 
-- Without `--stale-only`, `enrich` processes every current memory. Both modes support SQLite and Postgres and require a stopped scheduler, except with `--dry-run`.
+- Without `--stranded-only`, `enrich` processes every current memory. Both modes support SQLite and Postgres and require a stopped scheduler, except with `--dry-run`.
 - The command works in batches of 20 and prints `{processed, remaining}`. `remaining` counts memories still waiting for enrichment after the run.
-- `--stale-only` selects outdated prompt/model versions and incomplete enrichment. It skips an enriched memory with no version marker. `status` reports the same selection count as `stale_insights`.
+- `--stranded-only` selects memories with an enrichment attempt and no completion. `doctor` reports their count as `stranded`.
 - `--progress-jsonl` writes one JSON progress line per memory to stderr.
 - A second rebuild on the same store is refused while one runs.
 
@@ -488,20 +488,20 @@ memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
 
-**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, and the storage path.
+**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, the oplog size, and the storage path.
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
 
 | Group              | Checks                                                                                                                                              |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
+| Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`                            |
 | Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                        |
 | Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `codex_skill`, `optional_extras`              |
 | Providers          | `llm_probe`, `embed_probe`                                                                                                                          |
 
-A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_consistency`, and `provenance_drift`.
+A store with no memories skips `integrity`, `enrichment_coverage`, and `embedding_consistency`.
 
-`enrichment_coverage` warns on any memory whose enrichment never completed, reports the count as `stranded`, and names `memman enrich --stale-only` as the fix.
+`enrichment_coverage` warns on any memory whose enrichment never completed, reports the count as `stranded`, and names `memman enrich --stranded-only` as the fix.
 
 **`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
 
@@ -721,7 +721,7 @@ These variables are not installable. The component that uses each one reads it f
 | Writes report that the scheduler is stopped       | `scheduler status`                              | Run `scheduler start` when maintenance is finished.                                                                                         |
 | Recall warns about embedding or reranking         | `embed status`, then endpoint settings          | Restore the required key or endpoint; reranking can be disabled separately.                                                                 |
 | Even `recall --basic` fails on a missing key      | Global embedding model and endpoint             | Supply the key required during store opening.                                                                                               |
-| Doctor reports incomplete enrichment              | `doctor --text`                                 | Stop the scheduler, run `enrich --stale-only`, then restart it.                                                                             |
+| Doctor reports incomplete enrichment              | `doctor --text`                                 | Stop the scheduler, run `enrich --stranded-only`, then restart it.                                                                             |
 | A model swap was interrupted                      | `embed status`                                  | Resume or abort the swap.                                                                                                                   |
 | Claude Code has no memory reminders               | `doctor --text`                                 | Re-run `memman install` and start a new session.                                                                                            |
 | A memory verb reports that a store does not exist | `store list`                                    | Create it with `store create NAME`, or correct `--store`, `MEMMAN_STORE`, or a stale branch instruction line so it names an existing store. |

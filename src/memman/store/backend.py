@@ -29,8 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import WorkerRun
+from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
 
 if TYPE_CHECKING:
     from memman.embed.fingerprint import Fingerprint
@@ -200,8 +199,18 @@ class NodeStore(Protocol):
         """
         ...
 
-    def update_enrichment(self, id: Id, *, summary: str) -> None:
-        """Store the enrichment summary for an insight.
+    def update_enrichment(
+            self, id: Id, *, summary: str, summary_model: str) -> None:
+        """Store the enrichment summary and the model that wrote it.
+
+        Parameters
+        ----------
+        id : Id
+            Row to update.
+        summary : str
+            The summary; '' records a model that returned none.
+        summary_model : str
+            The LLM model id that produced `summary`.
         """
         ...
 
@@ -221,11 +230,6 @@ class NodeStore(Protocol):
         Answers "did this write land" for queue replays, so a replaced
         or forgotten row counts. Backends match in SQL, so a null
         `queue_uuid` never matches.
-        """
-        ...
-
-    def provenance_distribution(self) -> list[ProvenanceCount]:
-        """Return (prompt_version, count) for active rows.
         """
         ...
 
@@ -282,21 +286,8 @@ class NodeStore(Protocol):
         """
         ...
 
-    def stamp_enriched(
-            self, id: Id, *,
-            prompt_version: str | None = None) -> None:
+    def stamp_enriched(self, id: Id) -> None:
         """Mark an insight as enriched. Backend stamps `enriched_at` now.
-
-        Parameters
-        ----------
-        id : Id
-            Row to stamp.
-        prompt_version : str or None, default None
-            The `compute_prompt_version()` key this enrichment ran
-            under. Pass it from the driver that knows the active
-            config (the enrich/rebuild path) so the re-enrichment
-            clears the row's staleness, not just its timestamp. The
-            write path omits it, having set it at insert.
         """
         ...
 
@@ -322,22 +313,6 @@ class NodeStore(Protocol):
 
     def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
         """Ids of stranded active insights: attempted, never enriched.
-        """
-        ...
-
-    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
-        """Return ids of the active insights `enrich --stale-only` replays.
-
-        Stale means a present `prompt_version` that differs from
-        `active_pv`, or a stranded row (attempted, never enriched)
-        whatever its key. There is no model argument: `active_pv`
-        folds in the LLM model already, and that is the only model a
-        rebuild re-runs.
-        """
-        ...
-
-    def count_stale_insights(self, active_pv: str) -> int:
-        """Count the rows `iter_stale_insight_ids` returns.
         """
         ...
 

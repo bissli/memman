@@ -199,6 +199,7 @@ class TestReEmbed:
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = json.dumps({
             'keywords': ['web', 'framework'],
             'summary': 'A framework.'})
@@ -227,6 +228,7 @@ class TestReEmbed:
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = _make_enrichment_response()
 
         enrich_pending(
@@ -250,6 +252,7 @@ class TestReEmbed:
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
+        mock_llm.model = 'test-llm'
         mock_llm.complete.return_value = _make_enrichment_response()
 
         mock_embed = MagicMock()
@@ -345,7 +348,7 @@ def test_enrichment_rerolls_a_body_that_does_not_parse():
     """Verify an unparsable enrichment body is re-rolled, not dropped.
 
     Mutation: dropping the re-roll, so a cut body leaves the row
-        unenriched while the drain stamps a prompt_version on it, and
+        unenriched while the drain stamps it enriched, and
         no later stage retries.
     Oracle: the summary of the second response, and two calls.
     """
