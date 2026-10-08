@@ -22,6 +22,7 @@ from memman.store import db as _db
 from memman.store.backend import Backend
 from memman.store.config import validate_all
 from memman.store.errors import ConfigError
+from memman.trace import redact_dsn
 
 logger = logging.getLogger('memman')
 
@@ -166,7 +167,7 @@ def _build_postgres_descriptor() -> BackendDescriptor:
             except Exception as exc:
                 logger.warning(
                     'postgres store probe failed for dsn %r: %s',
-                    dsn, exc)
+                    redact_dsn(dsn), exc)
         return names
 
     def _drop(store: str, data_dir: str) -> None:

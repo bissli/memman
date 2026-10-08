@@ -99,6 +99,24 @@ def test_sqlite_descriptor_declares_no_extras():
     assert sql.extras_packages == ()
 
 
+def test_postgres_probe_failure_log_masks_dsn_password(monkeypatch, caplog):
+    """Verify a failed Postgres store probe logs the DSN without its password.
+
+    Mutation: logging the raw DSN in the probe-failure warning.
+    Oracle: a stub connection that raises, and the literal password.
+    """
+    def refuse(*args, **kwargs):
+        raise OSError('connection refused')
+    monkeypatch.setattr('memman.store.postgres._connection', refuse)
+    env_values = {
+        'MEMMAN_DEFAULT_POSTGRES_DSN': 'postgresql://memman:s3cret@db/memman',
+        }
+    with caplog.at_level('WARNING', logger='memman'):
+        descriptor('postgres').list_stores_keys('/unused', env_values)
+    assert 'probe failed' in caplog.text
+    assert 's3cret' not in caplog.text
+
+
 def test_extras_detect_active_extras_reads_from_registry():
     """Verify detect_active_extras returns only registered backend names.
 
