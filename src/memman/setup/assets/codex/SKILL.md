@@ -274,10 +274,10 @@ else:
   show <id8>` carries the full timestamp when same-day order matters.
 - `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
   `.envrc`, else the OS username - or `-` when unset.
-- `text`: the stored summary, else the first 200 characters of the
-  content, with `...` where the cut dropped anything. Every whitespace
-  run in either folds to one space. A summarized row carries no
-  marker however much its summary left out.
+- `text`: the stored summary, else the content. Either folds every
+  whitespace run to one space, then keeps its first 200 characters
+  with `...` when longer. A summary that fits carries no marker
+  however much of the content it left out.
 
 The page is for choosing which row to open: `memman insights show
 <id8>` reads the rest of any row worth more than a scan. `--limit`

@@ -100,16 +100,16 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
         UTC date, `YYYY-MM-DD`, with no time of day. `-` stands for an
         unset author, and `_` joins any whitespace inside one, so
         every field before `|` is one space-free token. `text` is the
-        summary, else the first `BRIEF_CONTENT_CHARS` characters of
-        `content` with `...` when cut. Whitespace runs fold to one
-        space, so a row never spans two lines.
+        summary, else `content`. Either folds whitespace runs to one
+        space, so a row never spans two lines, then keeps its first
+        `BRIEF_CONTENT_CHARS` characters with `...` when longer.
     """
     if ins.summary.strip():
         text = ' '.join(ins.summary.split())
     else:
         text = ' '.join(ins.content.split())
-        if len(text) > BRIEF_CONTENT_CHARS:
-            text = text[:BRIEF_CONTENT_CHARS] + '...'
+    if len(text) > BRIEF_CONTENT_CHARS:
+        text = text[:BRIEF_CONTENT_CHARS] + '...'
     fields = [ins.id[:8]]
     if score is not None:
         fields.append(f'{score:.2f}')

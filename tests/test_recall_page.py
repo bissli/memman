@@ -220,6 +220,24 @@ def test_page_date_is_utc_for_a_zoned_timestamp():
     assert insight_to_recall_line(ins, None).split()[1] == '2024-01-16'
 
 
+def test_page_cuts_a_long_summary_like_long_content():
+    """Verify a summary over 200 characters prints cut, with '...'.
+
+    Mutation: printing the summary whole, so a model that ignores the
+        prompt's length cap widens every recall line it wrote.
+    Oracle: a 250-character summary, whose first 200 characters and
+        '...' end the line.
+    """
+    summary = 'x' * 250
+    ins = make_insight(
+        id='hhhhhhhh-0008', content='zulu row with a long summary')
+    ins.summary = summary
+
+    line = insight_to_recall_line(ins, None)
+
+    assert line.endswith('| ' + summary[:200] + '...')
+
+
 def test_basic_page_prints_the_line_without_a_score(page_rows):
     """Verify recall --basic prints the page line with no score field.
 
