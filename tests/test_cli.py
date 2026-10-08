@@ -17,6 +17,7 @@ from memman.cli import cli
 from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.embed.vector import serialize_vector
+from memman.exceptions import ConfigError
 from memman.queue import enqueue, list_rows, open_queue_db
 from memman.setup.scheduler import _write_env_keys
 from memman.store.db import open_db, open_read_only, store_dir, store_exists
@@ -1036,6 +1037,21 @@ class TestSingleTierEnrichment:
             ' where enrich_attempted_at is null and deleted_at is null').fetchone()
         ro.close()
         assert row[0] == 0
+
+    def test_enrich_dry_run_needs_no_llm_client(self, runner):
+        """`enrich --dry-run` reports its count with no LLM configured.
+
+        Mutation: resolving the LLM client before the dry-run check, so
+            a dry run on a host with no endpoint or key exits 1.
+        Oracle: a get_llm_client stub that raises ConfigError, and the
+            one row remember wrote.
+        """
+        invoke(runner, ['remember', 'Dry runs read counts and call no LLM'])
+        with patch('memman.llm.client.get_llm_client',
+                   side_effect=ConfigError('MEMMAN_API_KEY is not set')):
+            result = invoke(runner, ['enrich', '--dry-run'])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {'total': 1, 'dry_run': 1}
 
     def test_enriched_at_stamped_after_remember(self, runner):
         """Verify enriched_at is set once `remember` returns.

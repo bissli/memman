@@ -4109,15 +4109,15 @@ def enrich(ctx: click.Context, dry_run: bool,
     from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
 
     with _active_backend(ctx) as backend:
-        llm_client = _get_llm_client_or_fail()
-        ec = fingerprint.bound_embedder(backend)
-
         all_ids = backend.nodes.get_active_ids()
         total_count = len(all_ids)
 
         if dry_run:
             _json_out({'total': total_count, 'dry_run': 1})
             return
+
+        llm_client = _get_llm_client_or_fail()
+        ec = fingerprint.bound_embedder(backend)
 
         if total_count == 0:
             _json_out({'processed': 0, 'remaining': 0})
