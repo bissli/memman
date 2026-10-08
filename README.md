@@ -72,17 +72,17 @@ memman store use work                             # the default for every proces
 
 ## Cost
 
-On the default models, summaries for 1,000 stored memories cost $0.40. MongoDB Atlas bills the embedding and rerank calls that OpenRouter forwards, so this table states no price for them.
+On the default models, summaries for 1,000 stored memories cost $0.17. MongoDB Atlas bills the embedding and rerank calls that OpenRouter forwards, so this table states no price for them.
 
-| Step                                            | Default model               | Cost            |
-| ----------------------------------------------- | --------------------------- | --------------- |
-| Summaries for 1,000 memories                    | `qwen/qwen3-235b-a22b-2507` | $0.40           |
-| Embeddings for 1,000 memories and 1,000 queries | `voyageai/voyage-4-lite`    | billed by Atlas |
-| Reranking for 1,000 recalls                     | `voyageai/rerank-3-lite`    | billed by Atlas |
+| Step                                            | Default model                    | Cost            |
+| ----------------------------------------------- | -------------------------------- | --------------- |
+| Summaries for 1,000 memories                    | `~anthropic/claude-haiku-latest` | $0.17           |
+| Embeddings for 1,000 memories and 1,000 queries | `voyageai/voyage-4-lite`         | billed by Atlas |
+| Reranking for 1,000 recalls                     | `voyageai/rerank-3-lite`         | billed by Atlas |
 
 The summary figure rests on these assumptions:
 
-- **Summaries.** 1,200 input and 100 output tokens per memory, at $0.25 in and $1.00 out per million tokens ([OpenRouter pricing](https://openrouter.ai/qwen/qwen3-235b-a22b-2507)).
+- **Summaries.** 1,200 input and 100 output tokens per memory, at $0.10 in and $0.50 out per million tokens ([OpenRouter pricing](https://openrouter.ai/anthropic/claude-haiku-5.5)).
 - **Embeddings.** Memories of 150 - 250 tokens and short queries.
 - **Reranking.** Up to 100 candidates per recall, 150 - 250 tokens per query and memory pair. A query of two words or fewer skips reranking.
 

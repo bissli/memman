@@ -100,13 +100,13 @@ Each request allows up to 4,096 output tokens and has a 60-second timeout. The c
 
 On OpenRouter, the client adds attribution headers. Other endpoints receive none.
 
-The OpenRouter install default is `qwen/qwen3-235b-a22b-2507`. Other endpoints require an explicit model ID, because the installed default is an OpenRouter model ID that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
+The OpenRouter install default is `~anthropic/claude-haiku-latest`, an OpenRouter alias that follows the newest Claude Haiku. Other endpoints require an explicit model ID, because the installed default is an OpenRouter model ID that another endpoint rejects. memman never changes the selected model on its own ([provider setup](../USAGE.md#provider-setup)).
 
 ### Daily model check
 
 For OpenRouter, installation and the worker check public catalogs without an API key or an LLM request:
 
-- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id, on any vendor.
+- `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id, on any vendor. For a `~` alias, the id checked is the alias's `alias_target` in `/models`.
 - `/models` must not list an expiration date for it.
 
 The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). A model change therefore triggers a check on the next drain. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.

@@ -109,7 +109,6 @@ The wizard runs only in a terminal and only without `--no-wizard`. Each step pro
 1. **Endpoint.** Any OpenAI-compatible URL that answers `/chat/completions`, `/embeddings`, and `/rerank`. The default is `https://openrouter.ai/api/v1`.
 2. **API key.** `MEMMAN_API_KEY`. Required for any endpoint outside the local machine and optional for `localhost`. On an OpenRouter endpoint with no key set, the prompt offers the shell's `OPENROUTER_API_KEY` as its default.
 3. **Models.** Asked only on an endpoint other than OpenRouter, because the shipped defaults for `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` are OpenRouter ids. Each model ID passes unchanged to the endpoint.
-5. **Model.** Asked only on an endpoint other than OpenRouter, because the default model `qwen/qwen3-235b-a22b-2507` is an OpenRouter id. The model ID passes unchanged to `/chat/completions`.
 4. **Backend.** `sqlite` or `postgres`. Offered only when the `memman[postgres]` extra is installed.
 5. **Postgres DSN.** Asked for the `postgres` backend. The wizard connects, checks that the `pgvector` extension exists, and allows three attempts. A DSN that names a host other than `localhost` prints a hint to run Postgres behind PgBouncer in transaction-pooling mode.
 
@@ -140,13 +139,13 @@ It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, 
 
 memman sends summaries, embeddings, and reranking to one OpenAI-compatible endpoint with one key. The defaults below are the models included in this version. The [README cost table](../README.md#cost) estimates their combined cost.
 
-| Setting               | Default                        | Purpose                                                              |
-| --------------------- | ------------------------------ | -------------------------------------------------------------------- |
-| `MEMMAN_ENDPOINT`     | `https://openrouter.ai/api/v1` | Base URL. Must answer `/chat/completions`, `/embeddings`, `/rerank`. |
-| `MEMMAN_API_KEY`      | None                           | Secret. Required off a loopback endpoint.                            |
-| `MEMMAN_LLM_MODEL`    | `qwen/qwen3-235b-a22b-2507`    | Summary model.                                                       |
-| `MEMMAN_EMBED_MODEL`  | `voyageai/voyage-4-lite`       | Embedding model. Returns 1024-dimension vectors.                     |
-| `MEMMAN_RERANK_MODEL` | `voyageai/rerank-3-lite`       | Rerank model.                                                        |
+| Setting               | Default                          | Purpose                                                              |
+| --------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| `MEMMAN_ENDPOINT`     | `https://openrouter.ai/api/v1`   | Base URL. Must answer `/chat/completions`, `/embeddings`, `/rerank`. |
+| `MEMMAN_API_KEY`      | None                             | Secret. Required off a loopback endpoint.                            |
+| `MEMMAN_LLM_MODEL`    | `~anthropic/claude-haiku-latest` | Summary model. An OpenRouter alias for the newest Claude Haiku.      |
+| `MEMMAN_EMBED_MODEL`  | `voyageai/voyage-4-lite`         | Embedding model. Returns 1024-dimension vectors.                     |
+| `MEMMAN_RERANK_MODEL` | `voyageai/rerank-3-lite`         | Rerank model.                                                        |
 
 Model IDs are specific to the endpoint. The shipped defaults are OpenRouter ids, so an install on another endpoint requires all three model settings.
 

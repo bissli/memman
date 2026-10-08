@@ -200,7 +200,7 @@ def api_key_for(endpoint: str) -> str:
 
 INSTALL_DEFAULTS: dict[str, str] = {
     ENDPOINT: 'https://openrouter.ai/api/v1',
-    LLM_MODEL: 'qwen/qwen3-235b-a22b-2507',
+    LLM_MODEL: '~anthropic/claude-haiku-latest',
     EMBED_MODEL: 'voyageai/voyage-4-lite',
     RERANK_MODEL: 'voyageai/rerank-3-lite',
     RERANK_ENABLED: 'true',

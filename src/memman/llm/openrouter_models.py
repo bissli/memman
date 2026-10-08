@@ -41,7 +41,9 @@ def model_notice(
     zdr_endpoints : list[dict]
         The `data` rows of `GET /endpoints/zdr`.
     model : str
-        The configured `MEMMAN_LLM_MODEL`, matched exactly.
+        The configured `MEMMAN_LLM_MODEL`, matched exactly. A `~` alias
+        is checked for ZDR through its `/models` `alias_target`, and for
+        retirement as the alias itself.
 
     Returns
     -------
@@ -50,7 +52,11 @@ def model_notice(
         `RETIRING_NOTICE` when `/models` carries an `expiration_date`
         for it; else ''.
     """
-    if not any(endpoint['model_id'] == model for endpoint in zdr_endpoints):
+    routed_model = next(
+        (entry['alias_target']['slug'] for entry in models
+         if entry['id'] == model and entry.get('alias_target')),
+        model)
+    if not any(endpoint['model_id'] == routed_model for endpoint in zdr_endpoints):
         return UNROUTABLE_NOTICE.format(model=model)
     for entry in models:
         if entry['id'] == model and entry.get('expiration_date'):

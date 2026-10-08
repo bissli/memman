@@ -287,7 +287,7 @@ class TestCollectInstallKnobs:
             self, tmp_path, monkeypatch):
         """A non-OpenRouter install with no model names the missing key.
 
-        Mutation: the install falls back to the OpenRouter qwen default,
+        Mutation: the install falls back to the OpenRouter default,
             which the endpoint rejects on the first enrichment call.
         Oracle: an Anthropic endpoint with the model absent from both
             the env file and the shell.

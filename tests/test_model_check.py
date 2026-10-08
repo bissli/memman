@@ -13,7 +13,7 @@ from memman.cli import cli
 from memman.llm import openrouter_models as om
 from memman.setup import claude
 
-MODEL = 'qwen/qwen3-235b-a22b-2507'
+MODEL = config.INSTALL_DEFAULTS[config.LLM_MODEL]
 ENDPOINT = 'https://openrouter.ai/api/v1'
 
 
@@ -110,6 +110,24 @@ def test_a_longer_id_sharing_the_prefix_does_not_route_the_model():
     """
     sibling = MODEL + '-thinking'
     assert _notice([_model(sibling)], [_zdr(sibling)]) == _unroutable()
+
+
+def test_an_alias_routes_through_its_own_target():
+    """A `~` alias is checked against the ZDR rows of its own target.
+
+    Mutation: the alias matched against the ZDR catalog as is, which
+        never lists an alias, or resolved through another alias's
+        target.
+    Oracle: the live `/models` shape of `~anthropic/claude-haiku-latest`,
+        behind a decoy alias whose target has no ZDR row.
+    """
+    alias, target = '~vendor/model-latest', 'vendor/model-5'
+    models = [
+        {'id': '~vendor/other-latest', 'alias_target': {'slug': 'vendor/other'}},
+        {'id': alias, 'alias_target': {'slug': target}},
+        _model(target),
+        ]
+    assert om.model_notice(models, [_zdr(target)], model=alias) == ''
 
 
 def test_a_retirement_date_yields_the_retiring_notice():
