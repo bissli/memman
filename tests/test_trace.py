@@ -323,6 +323,47 @@ class TestRedaction:
         assert trace.redact_dsn(
             'postgres://u:p@h/db') == 'postgres://u:***@h/db'
 
+    @pytest.mark.parametrize(('dsn', 'expected'), [
+        ('POSTGRESQL://u:p@h/db', 'POSTGRESQL://u:***@h/db'),
+        ('postgresql://:pw@h/db', 'postgresql://:***@h/db'),
+        ])
+    def test_masks_uppercase_scheme_and_empty_user(self, dsn, expected):
+        """Verify redact_dsn() masks the password under an upper-case scheme
+        or an empty user name.
+
+        Mutation: a case-sensitive scheme pattern, or a user class that
+            needs one character, so either DSN keeps its password.
+        Oracle: hand-written expected DSNs with '***' in the password slot.
+        """
+        assert trace.redact_dsn(dsn) == expected
+
+    @pytest.mark.parametrize(('dsn', 'expected'), [
+        ('host=h user=u password=sekret dbname=d',
+         'host=h user=u password=*** dbname=d'),
+        ("host=h password='se cret' dbname=d",
+         'host=h password=*** dbname=d'),
+        ('host=h PASSWORD = sekret', 'host=h PASSWORD = ***'),
+        ('postgresql://u@h/db?sslmode=require&password=sekret&x=1',
+         'postgresql://u@h/db?sslmode=require&password=***&x=1'),
+        ('host=h password=ab&cd dbname=d', 'host=h password=*** dbname=d'),
+        ('host=h password=ab\\ cd dbname=d',
+         'host=h password=*** dbname=d'),
+        ("host=h password='abc dbname=d", 'host=h password=***'),
+        ('host=h sslpassword=sekret', 'host=h sslpassword=***'),
+        ('postgresql://u@h/db?sslpassword=sekret',
+         'postgresql://u@h/db?sslpassword=***'),
+        ])
+    def test_masks_password_keyword(self, dsn, expected):
+        """Verify redact_dsn() masks a password given as `password=value`.
+
+        Mutation: matching only the userinfo slot, so a libpq key=value
+            DSN or a query-string password leaks; a value class that
+            stops at a quoted space, an escaped space or '&'; a quoted
+            branch that needs its closing quote; or no sslpassword.
+        Oracle: hand-written expected DSNs with '***' as the value.
+        """
+        assert trace.redact_dsn(dsn) == expected
+
     def test_masks_whole_password_containing_literal_at_sign(self):
         """Verify redact_dsn() masks a password that holds a literal '@'.
 

@@ -42,17 +42,28 @@ REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
 REDACT_VALUE = '***REDACTED***'
 
 _DSN_PASSWORD_RE = re.compile(
-    r'(?P<scheme>[a-z][a-z0-9+.-]*://[^:@/\s]+):[^/\s]+@')
+    r'(?P<scheme>[a-z][a-z0-9+.-]*://[^:@/\s]*):[^/\s]+@', re.IGNORECASE)
+_DSN_QUERY_PASSWORD_RE = re.compile(
+    r'(?P<key>[?&](?:ssl)?password=)[^&#\s]*', re.IGNORECASE)
+_DSN_KEYWORD_PASSWORD_RE = re.compile(
+    r"(?P<key>(?<!\S)(?:ssl)?password\s*=\s*)"
+    r"(?:'(?:[^'\\]|\\.)*(?:'|$)|(?:\\.|[^\s\\])+)",
+    re.IGNORECASE)
 
 
 def redact_dsn(value: str) -> str:
-    """Mask the password in a DSN of the form `scheme://user:pass@host`.
+    """Mask the password in a URI or libpq key=value DSN.
 
-    A passwordless DSN, or a string that does not match, returns
-    unchanged. Call at any log site that may carry a postgres
-    connection string.
+    Masks the userinfo password of `scheme://user:pass@host`, a
+    `password=` or `sslpassword=` URI query parameter, and the value of
+    a `password` or `sslpassword` keyword, quoted or bare. A quote left
+    open masks to the end of the string. A passwordless DSN, or a
+    string that does not match, returns unchanged. Call at any log site
+    that may carry a postgres connection string.
     """
-    return _DSN_PASSWORD_RE.sub(r'\g<scheme>:***@', value)
+    masked = _DSN_PASSWORD_RE.sub(r'\g<scheme>:***@', value)
+    masked = _DSN_QUERY_PASSWORD_RE.sub(r'\g<key>***', masked)
+    return _DSN_KEYWORD_PASSWORD_RE.sub(r'\g<key>***', masked)
 
 
 def is_enabled() -> bool:
