@@ -103,6 +103,9 @@ Each of these is a correction:
 - a later write in the same session that changes an earlier claim is
   a `replace` of that write; one that only adds a claim carries that
   claim alone
+- the work at hand (the code, a command's output, the user) showing
+  a recalled row false corrects that row, with or without a write on
+  that topic
 
 `forget` removes a row that never belonged in the store, or an outdated
 row whose every still-true claim a queued write already holds. Every
