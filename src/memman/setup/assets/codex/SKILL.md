@@ -5,17 +5,16 @@ description: Persistent memory CLI for LLM agents. Store facts, recall past know
 
 # memman
 
-`memman` is a CLI on PATH. Invoke commands directly through the
-shell. A memory is one stored insight. A write goes to a queue. A
+`memman` is a CLI on PATH, run through the shell. A memory is one
+stored insight. A write goes to a queue. A
 background worker stores and enriches it on its next drain, one
 worker run that processes the queued writes.
 
 ## Codex
 
-Codex has no memman hooks. Nothing injects the memman guide at session
-start or reminds the agent at a new task, a plan, or after compaction,
-so the recall and write rules below bind whenever this skill is
-loaded.
+Codex has no memman hooks: nothing injects a guide at session start
+or reminds the agent at a new task, a plan, or after compaction. The
+recall and write rules below bind whenever this skill is loaded.
 
 The Codex sandbox blocks memman's writes to its data dir and its
 provider network calls. `memman install --codex` writes allow rules to
@@ -51,8 +50,6 @@ memman remember "<thought>"
 
 Store a user directive - a stated preference, a decision, a
 correction, or "remember this" - at once, even mid-conversation.
-Defer deliberation that has reached no conclusion: an intermediate
-conclusion that will shift with further discussion wastes a write.
 The stability test for everything else: would this be worth storing
 as-is if the exchange stopped here? If yes, store it. If the next
 exchange might change it, defer.
@@ -103,6 +100,10 @@ row it corrects. `remember` only adds a row and retires nothing, so a
 correction written with `remember` leaves the outdated row current in
 recall. When that has happened, replace the outdated row with the
 current claim.
+
+```bash
+memman replace <id> "<new content>"
+```
 
 The id is one of:
 
@@ -197,28 +198,18 @@ enrichment.
 
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write is stored as its own row:
-a second write of the same text is a second row. A `remember` retires
-nothing. Only `replace` does.
+a second write of the same text is a second row.
 
-To correct a stored memory by id:
-
-```bash
-memman replace <id> "<new content>"
-```
-
-`<id>` is a current stored row's id or an unambiguous prefix of one,
-or the `id` of a write still queued for the same store, so the agent
-can replace its own write before the drain runs. `replace` refuses a
-forgotten target. It refuses a target already replaced, and the
-message names the current row at the end of its chain, which is the
-row to replace instead, or says the chain ends in a forgotten row. It
-refuses a target, stored or queued, that a queued `replace` in the
-same store already names, and the message quotes that replace's id
-and full text, so an agent in another session or past a compaction
-sees the first correction. The fix is to `replace` the queued
-replace's id with text that keeps its correction and adds the second:
-on the drain, a second replace of the same target retires the first,
-and any claim only the first text held is lost.
+`replace` refuses a forgotten target. It refuses a target already
+replaced, and the message names the current row at the end of its
+chain, which is the row to replace instead, or says the chain ends in
+a forgotten row. It refuses a target, stored or queued, that a queued
+`replace` in the same store already names, and the message quotes
+that replace's id and full text, so an agent in another session or
+past a compaction sees the first correction. The fix is to `replace`
+the queued replace's id with text that keeps its correction and adds
+the second: on the drain, a second replace of the same target retires
+the first, and any claim only the first text held is lost.
 
 On the drain the worker stores the replacement under the `id` that
 `replace` printed and retires the old row, which keeps its content behind
@@ -237,9 +228,7 @@ a topic already in context, it refers to no past session, decision, or
 preference, and it depends on nothing outside the current
 conversation. Recall always runs before:
 
-- launching an explore, plan, or code agent - recall precedes
-  delegation
-- starting a new task or switching topics
+- launching an explore, plan, or code agent
 - a web search, since stored context sharpens the query
 - an architectural or design decision
 - writing code that touches a pattern discussed in a past session
@@ -248,8 +237,8 @@ The query is focused and keyword-rich, never the raw user prompt.
 
 Recall fuses keyword, vector, and recency anchors, blends keyword,
 similarity, and the fused-anchor score, and reranks with a
-cross-encoder. Every query ranks the same way. The reranker runs by
-default on queries of three or more words, stopwords counted.
+cross-encoder. The reranker runs by default on queries of three or
+more words, stopwords counted.
 
 ```bash
 memman recall "<query>"
@@ -272,8 +261,8 @@ else:
   timeline question sorts on this field, since row order is relevance
   order. Rows from one day tie. `memman insights
   show <id8>` carries the full timestamp when same-day order matters.
-- `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
-  `.envrc`, else the OS username - or `-` when unset.
+- `author`: `MEMMAN_AUTHOR` from the writer's environment, else the
+  OS username; `-` when the row has none.
 - `text`: the stored summary, else the content. Either folds every
   whitespace run to one space, then keeps its first 200 characters
   with `...` when longer. A summary that fits carries no marker
@@ -292,9 +281,8 @@ the newest rows as anchors whatever the query. A scored page with no
 line therefore means the store holds no memory, not that the query
 failed. A full page is not evidence that anything on it is relevant.
 Read a thin-looking page in full: rows from the same work often bear
-on the query. Judge each row on its merits against the
-query and against its siblings on the page. Report that nothing
-relevant is stored only when no row bears on the query. If a
+on the query. Report that nothing relevant is stored only when no
+row bears on the query. If a
 paraphrase returns nothing that bears on the query, re-ask in the
 store's own words before concluding it is empty.
 
@@ -308,8 +296,8 @@ the path is not in this repo, since a store can hold rows from
 several repos. `git log -1 -- <path>` confirms the path exists here
 before an empty result is taken to mean the row is current.
 
-For a fast token-only lookup that skips vector search and reranking
-(cheap: no query embed and no rerank; rows come back newest first):
+For a keyword-only lookup with no query embed and no rerank, newest
+first:
 
 ```bash
 memman recall "<keyword>" --basic
@@ -318,8 +306,6 @@ memman recall "<keyword>" --basic
 `--basic` computes no score, so it prints the same line without the
 score field. It has no recency channel: an empty `--basic` page means
 no row matched the keyword.
-
-Read a single insight by ID:
 
 ```bash
 memman insights show <id>
@@ -351,9 +337,7 @@ memman insights review                # scan for content quality issues
 `insights review` only lists rows. It deletes nothing. Use
 `forget <id>` to remove. Nothing else deletes: the store is
 uncapped and a stored insight persists until someone forgets it.
-`replace` retires without deleting: the old row keeps its content
-behind `replaced_by`, and `memman insights show <id> --history`
-reads it back. `forget` refuses a current row that replaced a row not
+`forget` refuses a current row that replaced a row not
 yet forgotten, because that row stays retired either way. Once every
 row it replaced is forgotten, `forget` takes it.
 
@@ -361,12 +345,12 @@ row it replaced is forgotten, `forget` takes it.
 
 ```bash
 memman status                         # store, backend, insight counts, oplog size
-memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
+memman doctor                         # health checks, each pass/warn/fail
 ```
 
 Every memory verb refuses a store that does not exist and writes
-nothing. Only `memman store create <name>` or `store branch` makes a
-store.
+nothing. Only `memman install`, `memman store create <name>` or
+`store branch` makes a store.
 
 ## Branches
 
@@ -431,11 +415,6 @@ the line.
 
 ## Scheduler controls
 
-memman has a single write path: every `remember` / `replace` enqueues,
-and a worker drains the queue. The trigger varies by environment: a
-systemd timer on Linux, a launchd agent on macOS, and a long-running
-`memman scheduler serve` process inside containers.
-
 When the scheduler is stopped, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
 scheduler start' to enable.` The serve loop polls the state file every
@@ -443,16 +422,17 @@ iteration and mid-drain, so a pause takes effect even during a long
 drain.
 
 Drains never overlap: a lock on `<data dir>/drain.lock` gates entry to
-the drain. A manual `scheduler trigger` run while a timer-driven
-drain is running logs `drain: another drain is in progress, skipping`
-and exits 0.
+the drain. A second drain started while one holds the lock logs
+`drain: another drain is in progress, skipping` and exits 0. A
+`scheduler trigger` during a running systemd drain answers `a
+scheduled run is already in progress`.
 
 - `memman scheduler serve [--interval N] [--once]` - long-running
   drain loop. `--interval 0` means continuous:
   drains run back-to-back, with a 100 ms idle backoff when the queue
   is empty.
 - `memman scheduler status` - platform, interval, next run, state,
-  last heartbeat, and the three worker-log paths.
+  last run, and the three worker-log paths.
 - `memman scheduler start` - set state to STARTED (resume drains and
   writes).
 - `memman scheduler stop` - set state to STOPPED (pause drains and
@@ -480,7 +460,6 @@ and exits 0.
 | Command                                              | Purpose                            |
 | ---------------------------------------------------- | ---------------------------------- |
 | `memman log list [--since 7d --stats --text]`        | Operation audit log                |
-| `memman scheduler status`                            | Worker state, next run, log paths  |
 | `memman scheduler queue list`                        | Inspect deferred-write queue       |
 | `memman store list` / `use <name>` / `create <name>` | Multi-store management             |
 | `memman config show`                                 | Effective settings (env + on-disk) |
@@ -491,20 +470,14 @@ and exits 0.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
   UTF-8 bytes, and never truncate it. An oversized `remember` splits
   into several `remember` calls, one thought each. An oversized
-  `replace` keeps the corrected claim in the replace and stores the
-  other claims with `remember`, as the correction rule above says: a
-  `remember` retires nothing, and a second `replace` of a target is
-  refused while the first is queued, so a split replace leaves the
-  outdated row current or meets that refusal. A long literal goes in
+  `replace` keeps the corrected claim and stores the other claims
+  with `remember` (Corrections): a `remember` retires nothing, and a
+  second `replace` of a target is refused while the first is queued.
+  A long literal goes in
   a repo file, and the memory names the path. They also refuse text
   whose first word is the author's name (`author` carries that) or
   that names a line number (`auth.py:88`, `line 88`), which the next
   edit makes wrong: name the file and symbol instead. They refuse
-  text spanning several lines: write one thought as one paragraph,
-  and give each further thought its own call. They refuse text
-  opening with a label of at most three words before a colon and a
-  space (`Fix:`, `AWS gotcha:`): open on the subject and write the
-  thought as a sentence.
-- One thought per `remember` call. The worker stores each call as
-  one memory, so a second unrelated subject is stored with the first
-  and becomes outdated with it; give it its own call.
+  text spanning several lines, and text opening with a label of at
+  most three words before a colon and a space (`Fix:`, `AWS
+  gotcha:`).

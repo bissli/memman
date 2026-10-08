@@ -31,16 +31,11 @@ memman remember "<thought>"
 
 ### Timing
 
-Store a user directive - a stated preference, a decision, a
-correction, or "remember this" - at once, even mid-conversation.
-Defer deliberation that has reached no conclusion: an intermediate
-conclusion that will shift with further discussion wastes a write.
-The stability test for everything else: would this be worth storing
-as-is if the exchange stopped here? If yes, store it. If the next
-exchange might change it, defer.
-
-After each response, the agent runs this check, biased toward
-capturing: when in doubt, store.
+Store a user directive at once, even mid-conversation. The test for
+everything else: would this be worth storing as-is if the exchange
+stopped here? If yes, store it. If the next exchange might change
+it, defer. After each response, the agent runs this check, biased
+toward capturing: when in doubt, store.
 
 Always store:
 
@@ -61,9 +56,8 @@ Store unless trivial:
 
 None of the above: stop.
 
-Never stored, at any tier. The recoverability test: can this fact be
-recovered from the project's code, config, IaC state, or cloud
-account? If yes, do not store it.
+Never stored, at any tier, nor any fact the project's code, config,
+IaC state, or cloud account can recover:
 
 - a bug or issue discovery (its resolution is stored)
 - a state snapshot: line numbers, line counts, file sizes, resource
@@ -96,9 +90,8 @@ With neither in hand, recall the corrected topic first. When no row
 holds the outdated claim, store the correction with `remember`.
 
 The replacement restates every claim of the old row that is still
-true, because the old row leaves recall whole. A stored memory is one
-claim, which keeps this cheap. When an outdated row holds more
-still-true claims than fit one 1,000-byte replacement, the
+true, because the old row leaves recall whole. When an outdated row
+holds more still-true claims than fit one 1,000-byte replacement, the
 replacement carries the corrected claim and the other claims go in as
 their own `remember` writes in the same turn.
 
@@ -111,7 +104,7 @@ Each of these is a correction:
   a `replace` of that write; one that only adds a claim carries that
   claim alone
 
-`forget` removes a row that should never have existed, or an outdated
+`forget` removes a row that never belonged in the store, or an outdated
 row whose every still-true claim a queued write already holds. Every
 other correction goes through `replace`. `forget` refuses a queued
 id, so a write still queued is forgotten after the drain.
@@ -133,19 +126,17 @@ paths:
 - `replace` with only the related row's still-true claims otherwise
 
 Either way the new claim lives in one row. A related row that
-replaced a row not yet forgotten refuses `forget` (see Forgetting),
-and the refusal names `replace`. Following the refusal leaves the new
-claim in two current rows, which duplicates it and loses nothing.
-When every related row is outdated, the agent recalls the topic for
-the rest.
+replaced a row not yet forgotten refuses `forget` (see Forgetting).
+Following its `replace` leaves the new claim in two current rows,
+which loses nothing. When every related row is outdated, the agent
+recalls the topic for the rest.
 
 ### The text
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: the agent replaces every "that", "this", and "it"
-with its subject before the call. It never opens with a label such
-as `Fix:` or `Decision:`, nor with who wrote it or when: `author`
-and `created_at` carry those.
+with its subject before the call. It never opens with a label, nor
+with who wrote it or when: `author` and `created_at` carry those.
 
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
@@ -179,8 +170,7 @@ enrichment.
 
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write is stored as its own row:
-a second write of the same text is a second row. A `remember` retires
-nothing. Only `replace` does.
+a second write of the same text is a second row.
 
 To correct a stored memory by id:
 
@@ -189,18 +179,17 @@ memman replace <id> "<new content>"
 ```
 
 `<id>` is a current stored row's id or an unambiguous prefix of one,
-or the `id` of a write still queued for the same store, so the agent
-can replace its own write before the drain runs. `replace` refuses a
-forgotten target. It refuses a target already replaced, and the
-message names the current row at the end of its chain, which is the
-row to replace instead, or says the chain ends in a forgotten row. It
-refuses a target, stored or queued, that a queued `replace` in the
-same store already names, and the message quotes that replace's id
-and full text, so an agent in another session or past a compaction
-sees the first correction. The fix is to `replace` the queued
-replace's id with text that keeps its correction and adds the second:
-on the drain, a second replace of the same target retires the first,
-and any claim only the first text held is lost.
+or the `id` of a write still queued for the same store. `replace`
+refuses a forgotten target. It refuses a target already replaced, and
+the message names the current row at the end of its chain, which is
+the row to replace instead, or says the chain ends in a forgotten
+row. It refuses a target, stored or queued, that a queued `replace`
+in the same store already names, and the message quotes that
+replace's id and full text, so an agent in another session or past a
+compaction sees the first correction. The fix is to `replace` the
+queued replace's id with text that keeps its correction and adds the
+second: on the drain, a second replace of the same target retires the
+first, and any claim only the first text held is lost.
 
 On the drain the worker stores the replacement under the `id` that
 `replace` printed and retires the old row, which keeps its content behind
@@ -213,14 +202,12 @@ itself an outdated row: replace it with the right text.
 
 ## Recall
 
-Recall runs on every new user message and before each new task or
-phase, unless all three hold: the message is a direct follow-up within
-a topic already in context, it refers to no past session, decision, or
-preference, and it depends on nothing outside the current
-conversation. Recall always runs before:
+Recall runs on every new user message, unless all three hold: the
+message is a direct follow-up within a topic already in context, it
+refers to no past session, decision, or preference, and it depends on
+nothing outside the current conversation. Recall always runs before:
 
-- launching an explore, plan, or code agent - recall precedes
-  delegation
+- launching an explore, plan, or code agent
 - starting a new task or switching topics
 - a web search, since stored context sharpens the query
 - an architectural or design decision
@@ -228,10 +215,9 @@ conversation. Recall always runs before:
 
 The query is focused and keyword-rich, never the raw user prompt.
 
-Recall fuses keyword, vector, and recency anchors, blends keyword,
-similarity, and the fused-anchor score, and reranks with a
-cross-encoder. Every query ranks the same way. The reranker runs by
-default on queries of three or more words, stopwords counted.
+Recall fuses keyword, vector, and recency anchors and reranks with a
+cross-encoder, which runs by default on queries of three or more
+words, stopwords counted.
 
 ```bash
 memman recall "<query>"
@@ -252,10 +238,10 @@ else:
   pages: the scale belongs to whichever reranker is configured.
 - `created_at`: the UTC date, `YYYY-MM-DD`, with no time of day. A
   timeline question sorts on this field, since row order is relevance
-  order. Rows from one day tie. `memman insights
-  show <id8>` carries the full timestamp when same-day order matters.
-- `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
-  `.envrc`, else the OS username - or `-` when unset.
+  order. Rows from one day tie; `memman insights show <id8>` carries
+  the full timestamp.
+- `author`: who wrote the row - `MEMMAN_AUTHOR` from the shell
+  environment at write time, else the OS username - or `-` when unset.
 - `text`: the stored summary, else the content. Either folds every
   whitespace run to one space, then keeps its first 200 characters
   with `...` when longer. A summary that fits carries no marker
@@ -264,21 +250,18 @@ else:
 The page is for choosing which row to open: `memman insights show
 <id8>` reads the rest of any row worth more than a scan. `--limit`
 defaults to `MEMMAN_RECALL_LIMIT`, or 20 when unset. A wide page costs
-little and carries more relevant material than a narrow one, so scan
-the wide page and open the rows worth reading. Rows come back in
-relevance order at every `--limit`, so the first `n` of a page of `m`
-are exactly a page of `n`.
+little and carries more relevant material than a narrow one. Rows
+come back in relevance order at every `--limit`, so the first `n` of
+a page of `m` are exactly a page of `n`.
 
 Recall prints rows even when nothing matches: a recency channel adds
 the newest rows as anchors whatever the query. A scored page with no
 line therefore means the store holds no memory, not that the query
 failed. A full page is not evidence that anything on it is relevant.
 Read a thin-looking page in full: rows from the same work often bear
-on the query. Judge each row on its merits against the
-query and against its siblings on the page. Report that nothing
-relevant is stored only when no row bears on the query. If a
-paraphrase returns nothing that bears on the query, re-ask in the
-store's own words before concluding it is empty.
+on the query. Report that nothing relevant is stored only when no row
+bears on the query. If a paraphrase returns nothing that bears on the
+query, re-ask in the store's own words before concluding it is empty.
 
 Rows assert, and CLAUDE.md directs. A row recording a decision is history
 with its rationale, and a rule to follow goes in CLAUDE.md. A row that
@@ -290,16 +273,15 @@ the path is not in this repo, since a store can hold rows from
 several repos. `git log -1 -- <path>` confirms the path exists here
 before an empty result is taken to mean the row is current.
 
-For a fast token-only lookup that skips vector search and reranking
-(cheap: no query embed and no rerank; rows come back newest first):
+For a cheap `LIKE` lookup on every query word, with no query embed and
+no rerank, rows newest first:
 
 ```bash
 memman recall "<keyword>" --basic
 ```
 
-`--basic` computes no score, so it prints the same line without the
-score field. It has no recency channel: an empty `--basic` page means
-no row matched the keyword.
+`--basic` prints the line without the score field. It has no recency
+channel: an empty `--basic` page means no row matched the keyword.
 
 Read a single insight by ID:
 
@@ -309,19 +291,17 @@ memman insights show <id>
 
 `remember` and `replace` print the `id` the drain stores the row
 under, and a `queue_id` that addresses the queue row only. `memman
-insights show <id>` answers where a write is stored once the
-scheduler has drained. For a write still queued it answers that the
-write is still queued and is stored on the next drain. A write that
-fails every drain attempt moves to queue status `failed`. For a
-failed write, `insights show <id>` and `replace <id>` answer `insight
-<id> not found`. A `replace` queued behind a target that then fails
-is stored as a plain add with no link, and its result names the
-target under `target_gone`. `memman doctor` warns on failed rows.
-`memman scheduler queue retry <queue_id>` requeues one, where
-`<queue_id>` is the `queue_id` that `remember` or `replace` printed.
-Once the retry is stored, the row sits under the printed `id`. When
-the retried target of an unlinked `replace` is stored, the topic has
-two current rows, so replace one of them.
+insights show <id>` reads the row once a drain stores it, and until
+then answers that the write is still queued. A write that fails every
+drain attempt moves to queue status `failed`. For a failed write,
+`insights show <id>` and `replace <id>` answer `insight <id> not
+found`. A `replace` queued behind a target that then fails is stored
+as a plain add with no link, and its result names the target under
+`target_gone`. `memman doctor` warns on failed rows. `memman
+scheduler queue retry <queue_id>` requeues one. Once the retry is
+stored, the row sits under the printed `id`. When the retried target
+of an unlinked `replace` is stored, the topic has two current rows,
+so replace one of them.
 
 ## Forgetting
 
@@ -330,12 +310,9 @@ memman forget <id>                    # soft-delete
 memman insights review                # scan for content quality issues
 ```
 
-`insights review` only lists rows. It deletes nothing. Use
-`forget <id>` to remove. Nothing else deletes: the store is
-uncapped and a stored insight persists until someone forgets it.
-`replace` retires without deleting: the old row keeps its content
-behind `replaced_by`, and `memman insights show <id> --history`
-reads it back. `forget` refuses a current row that replaced a row not
+`insights review` lists rows and deletes nothing. Only `forget <id>`
+deletes: the store is uncapped, and a row persists until someone
+forgets it. `forget` refuses a current row that replaced a row not
 yet forgotten, because that row stays retired either way. Once every
 row it replaced is forgotten, `forget` takes it.
 
@@ -343,7 +320,7 @@ row it replaced is forgotten, `forget` takes it.
 
 ```bash
 memman status                         # store, backend, insight counts, oplog size
-memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
+memman doctor                         # health checks; exit 1 on a failure
 ```
 
 Every memory verb refuses a store that does not exist and writes
@@ -367,13 +344,13 @@ memman store drop <branch>
 The name is `<parent>__<label>_<4 hex>`, and the label takes no `__`.
 `store branch` prints an `instruction` line. Paste it into the notes
 the thread's next session reads, and remove it after the merge or
-drop. With no such notes, instruction or framework, ask the user how
-to carry it to future sessions, or whether future sessions should know
-of the branch at all. Every memory verb takes `--store <branch>` while
-the line applies, and every subagent brief carries the line. A call
-without `--store <branch>` reads and writes the parent. `store use`
-refuses a branch, since the active file routes every session on the
-host. A branch of a branch is refused.
+drop. With no such notes, ask the user how to carry it to future
+sessions, or whether they need to know of the branch at all. Every
+memory verb takes `--store <branch>` while the line applies, and
+every subagent brief carries the line. A call without `--store
+<branch>` reads and writes the parent. `store use` refuses a branch,
+since the active file routes every session on the host. A branch of a
+branch is refused.
 
 Recall on the branch ranks its rows with the parent's current rows,
 later parent rows included, so the thread needs no parent recall and
@@ -413,28 +390,21 @@ the line.
 
 ## Scheduler controls
 
-memman has a single write path: every `remember` / `replace` enqueues,
-and a worker drains the queue. The trigger varies by environment: a
-systemd timer on Linux, a launchd agent on macOS, and a long-running
-`memman scheduler serve` process inside containers.
-
 When the scheduler is stopped, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
 scheduler start' to enable.` The serve loop polls the state file every
 iteration and mid-drain, so a pause takes effect even during a long
 drain.
 
-Drains never overlap: a lock on `<data dir>/drain.lock` gates entry to
-the drain. A manual `scheduler trigger` run while a timer-driven
-drain is running logs `drain: another drain is in progress, skipping`
-and exits 0.
+Drains never overlap: `<data dir>/drain.lock` gates the drain, and a
+run that finds it held logs `drain: another drain is in progress,
+skipping` and exits 0.
 
 - `memman scheduler serve [--interval N] [--once]` - long-running
-  drain loop. `--interval 0` means continuous:
-  drains run back-to-back, with a 100 ms idle backoff when the queue
-  is empty.
+  drain loop. `--interval 0` means continuous: drains run
+  back-to-back.
 - `memman scheduler status` - platform, interval, next run, state,
-  last heartbeat, and the three worker-log paths.
+  last worker run, and the three worker-log paths.
 - `memman scheduler start` - set state to STARTED (resume drains and
   writes).
 - `memman scheduler stop` - set state to STOPPED (pause drains and
@@ -444,25 +414,21 @@ and exits 0.
   serve loop reads `--interval`, then `MEMMAN_INTERVAL`, then 60 when
   it starts.
 - `memman scheduler trigger` - dispatch a drain on systemd/launchd and
-  return at once. It does not wait, so `dispatched` means the run is
-  queued. `memman log worker` reports whether it ran and its outcome.
-  Not applicable in serve mode.
+  return at once: `dispatched` means the run is queued, and `memman
+  log worker` reports its outcome. Not applicable in serve mode.
 - `memman log worker [--errors|--stack]` - tail one worker log target;
   the two flags are mutually exclusive. `--errors` reads `enrich.err`,
   the worker's own ERROR-level tracebacks. `--stack` reads the rotated
   `memman.log` and its backups, the only place that holds a traceback
   when the CLI error that reports it is one line. The `enrich` files
   always sit under `~/.memman/logs`; `memman.log` follows `--data-dir`,
-  so under a non-default data dir they are in different directories
-  and the error message names the exact command to run. `memman
-  scheduler status` prints all three paths.
+  so a CLI error pointing at a stack names the exact command to run.
 
 ## Operator commands
 
 | Command                                              | Purpose                            |
 | ---------------------------------------------------- | ---------------------------------- |
 | `memman log list [--since 7d --stats --text]`        | Operation audit log                |
-| `memman scheduler status`                            | Worker state, next run, log paths  |
 | `memman scheduler queue list`                        | Inspect deferred-write queue       |
 | `memman store list` / `use <name>` / `create <name>` | Multi-store management             |
 | `memman config show`                                 | Effective settings (env + on-disk) |
@@ -474,19 +440,15 @@ and exits 0.
   UTF-8 bytes, and never truncate it. An oversized `remember` splits
   into several `remember` calls, one thought each. An oversized
   `replace` keeps the corrected claim in the replace and stores the
-  other claims with `remember`, as the correction rule above says: a
-  `remember` retires nothing, and a second `replace` of a target is
-  refused while the first is queued, so a split replace leaves the
-  outdated row current or meets that refusal. A long literal goes in
-  a repo file, and the memory names the path. They also refuse text
-  whose first word is the author's name (`author` carries that) or
-  that names a line number (`auth.py:88`, `line 88`), which the next
-  edit makes wrong: name the file and symbol instead. They refuse
-  text spanning several lines: write one thought as one paragraph,
-  and give each further thought its own call. They refuse text
-  opening with a label of at most three words before a colon and a
-  space (`Fix:`, `AWS gotcha:`): open on the subject and write the
-  thought as a sentence.
-- One thought per `remember` call. The worker stores each call as
-  one memory, so a second unrelated subject is stored with the first
-  and becomes outdated with it; give it its own call.
+  other claims with `remember`: a `remember` retires nothing, and a
+  second `replace` of a target is refused while the first is queued,
+  so a split replace leaves the outdated row current or meets that
+  refusal. A long literal goes in a repo file, and the memory names
+  the path. They also refuse text whose first word is the
+  `MEMMAN_AUTHOR` name (`author` carries that) or that names a line
+  number (`auth.py:88`, `line 88`), which the next edit makes wrong:
+  name the file and symbol instead. They refuse text spanning several
+  lines: write one thought as one paragraph, and give each further
+  thought its own call. They refuse text opening with a label of at
+  most three words before a colon and a space (`Fix:`, `AWS
+  gotcha:`): open on the subject and write the thought as a sentence.
