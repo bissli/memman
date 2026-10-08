@@ -18,11 +18,23 @@ logger = logging.getLogger('memman')
 MAX_ENRICH_BATCH = 20
 
 ENRICHMENT_SYSTEM_PROMPT = (
-    'You summarize a memory insight in one sentence.\n\n'
-    'Return JSON with this field:\n'
-    '{\n'
-    '  "summary": "one-sentence summary of the core fact or decision"\n'
-    '}')
+    'You write the summary a list of search hits shows for a stored'
+    ' memory. An agent reads it to decide whether to open the full'
+    ' memory.\n\n'
+    '- One sentence, at most 200 characters (about 25 words).\n'
+    '- State the fact itself. Never describe the memory.\n'
+    '- Open with the thing it is about: the tool, symbol, file or'
+    ' rule.\n'
+    '- Copy names, symbols, versions, numbers, units, flags and quoted'
+    ' strings as the memory spells them.\n'
+    '- Keep each claim as strong as the memory makes it: "prefers"'
+    ' stays "prefers".\n'
+    '- Say only what the memory says. Keep a cause it states; add'
+    ' none, and no blame or judging word such as "incorrectly".\n'
+    '- When there is a fix, rule or decision, state it. Drop steps,'
+    ' lists and setup. Keep a path only when the memory is about it.\n'
+    '- Never fuse two claims into one.\n\n'
+    'Return JSON: {"summary": "<sentence>"}')
 
 
 def enrich_with_llm(
@@ -32,7 +44,7 @@ def enrich_with_llm(
     Parameters
     ----------
     insight : Insight
-        The row to enrich; its id and content form the prompt.
+        The row to enrich; its content alone is the user message.
     llm_client : MemmanLLMClient
         Client whose `complete` runs the call.
 
@@ -45,7 +57,7 @@ def enrich_with_llm(
         on neither draw returns `{'summary': ''}`, which on a
         re-enrichment replaces the summary the row held.
     """
-    prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
+    prompt = insight.content
     trace.event(
         'enrich_start',
         insight_id=insight.id,

@@ -64,6 +64,22 @@ class TestEnrichWithLLM:
 
         assert result == {'summary': 'Comparing Python web frameworks'}
 
+    def test_prompt_sends_the_content_alone(self):
+        """Verify the user message is the content, with no id header.
+
+        Mutation: prefixing the content with an `INSIGHT (id=...)`
+            header, which a model copies into the summary.
+        Oracle: the content string, compared whole.
+        """
+        insight = make_insight(id='hdr-1', content='The retry cap is three.')
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            summary='')
+
+        enrich_with_llm(insight, mock_client)
+
+        assert mock_client.complete.call_args.args[1] == insight.content
+
     def test_enrichment_returns_only_the_summary(self):
         """Verify the result carries no key beside `summary`.
 
