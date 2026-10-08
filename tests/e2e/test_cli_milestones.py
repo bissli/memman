@@ -316,17 +316,18 @@ class TestM3Search:
 
         Mutation: the basic path skipping the token match, or
             returning a different row.
-        Oracle: the `Chose Qdrant` content written with the token.
+        Oracle: the id `remember` printed for the row written with the
+            token, which a recall line leads with whatever its summary.
         """
         unique = uuid.uuid4().hex[:8]
-        run_cli(
+        written = run_cli(
             ['remember',
              f'Chose Qdrant because of Rust performance basic-{unique}'],
             home_dir, m3_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m3_dir)
         out = run_cli(['recall', '--basic', f'basic-{unique}'],
                       home_dir, m3_dir)
-        assert_contains(out.stdout, 'Chose Qdrant',
+        assert_contains(out.stdout, json_out(written)['id'][:8],
                         'finds decision insight')
 
     @pytest.mark.requires_live_keys
