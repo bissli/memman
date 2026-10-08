@@ -6,8 +6,9 @@ appropriate user-scope unit / plist that runs `memman scheduler drain
 sleep/power-off catch-up natively.
 
 Every `INSTALLABLE_KEYS` value present in `os.environ` at install time
-is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
-EnvironmentFile (systemd) or a wrapper script (launchd).
+is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600. memman reads that
+file itself; no shell ever sources it, so a value such as
+`~anthropic/claude-haiku-latest` reaches memman unexpanded.
 """
 
 import fcntl
@@ -768,7 +769,6 @@ def _install_launchd(binary: str, data_dir: str,
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
     exec_timeout = max(60, interval_seconds - 20)
 
-    env_file_q = shlex.quote(str(config.env_file_path(data_dir)))
     data_dir_q = shlex.quote(data_dir)
     binary_q = shlex.quote(binary)
     logs_dir = Path.home() / '.memman' / 'logs'
@@ -776,7 +776,6 @@ def _install_launchd(binary: str, data_dir: str,
     wrapper_contents = (
         '#!/bin/sh\n'
         f'mkdir -p {logs_dir_q}\n'
-        f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
         'export MEMMAN_WORKER=1\n'
         f'exec {binary_q} scheduler drain --timeout {exec_timeout}\n')
@@ -1048,7 +1047,6 @@ def _install_launchd_backup(
     wrapper_path = (
         Path.home() / '.memman' / 'bin' / 'memman-backup-wrapper.sh')
 
-    env_file_q = shlex.quote(str(config.env_file_path(data_dir)))
     data_dir_q = shlex.quote(data_dir)
     binary_q = shlex.quote(binary)
     # pg_dump may sit in a user directory that launchd's PATH lacks.
@@ -1058,7 +1056,6 @@ def _install_launchd_backup(
     wrapper_contents = (
         '#!/bin/sh\n'
         f'mkdir -p {logs_dir_q}\n'
-        f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
         f'export PATH={path_q}\n'
         'export MEMMAN_WORKER=1\n'

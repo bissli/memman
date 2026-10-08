@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 import stat
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -150,6 +151,31 @@ class TestInstall:
         assert '/fake/bin/memman' in wrapper
         assert 'scheduler drain' in wrapper
         assert os.access(result['wrapper_path'], os.X_OK)
+
+    @pytest.mark.parametrize('job', ['drain', 'backup'])
+    def test_launchd_wrapper_never_evaluates_env_values(
+            self, job, fake_home, fake_binary, monkeypatch):
+        """Verify a launchd wrapper leaves env-file values to memman.
+
+        Mutation: the wrapper sources the env file, so the shell expands
+            a stored value, a leading `~name` or a `$(...)` alike.
+        Oracle: a marker file that a `$(touch ...)` value would create.
+        """
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+        _record_subprocess(monkeypatch)
+        data_dir = fake_home / '.memman'
+        if job == 'drain':
+            result = sch.install(
+                data_dir=str(data_dir),
+                knobs=_knobs(api_key='sk-or-x'),
+                interval_seconds=1800)
+        else:
+            result = sch.install_backup(str(data_dir), '0 3 * * *')
+        marker = fake_home / 'evaluated'
+        with config.env_file_path(str(data_dir)).open('a') as env_file:
+            env_file.write(f'MEMMAN_LOG_LEVEL=$(touch {marker})\n')
+        subprocess.run(['sh', result['wrapper_path']], check=False)
+        assert not marker.exists()
 
     def test_install_writes_both_keys_to_env_file(
             self, fake_home, fake_binary, monkeypatch):
