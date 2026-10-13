@@ -11,11 +11,13 @@ No live LLM. No container. No Anthropic API key. Runs on every PR.
 """
 
 import json
-import shutil
+import shlex
 import subprocess
+import sys
 from importlib.resources import files
 from pathlib import Path
 
+import memman
 import pytest
 from memman.store.sqlite import open_sqlite_backend
 
@@ -30,13 +32,32 @@ def _hook(name: str) -> str:
     return str(files('memman.setup.assets').joinpath(f'claude/{name}'))
 
 
+def _hook_env(home: Path) -> dict[str, str]:
+    """Hook env whose `memman` runs this interpreter on the package under test.
+
+    An installed `memman` may run other source, such as the main checkout
+    while the tests run in a worktree, so its prime payload would not
+    match the guide.md these tests read.
+    """
+    bin_dir = home / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    shim = bin_dir / 'memman'
+    source_root = Path(memman.__file__).parents[1]
+    shim.write_text(
+        '#!/bin/sh\n'
+        f'PYTHONPATH={shlex.quote(str(source_root))}'
+        f' exec {shlex.quote(sys.executable)}'
+        ' -c "from memman.cli import cli; cli()" "$@"\n')
+    shim.chmod(0o755)
+    return {'HOME': str(home), 'PATH': f'{bin_dir}:/usr/bin:/bin'}
+
+
 def _run_hook(script: str, input_json: dict, home: Path
               ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ['bash', script],
         input=json.dumps(input_json), capture_output=True, text=True,
-        env={'HOME': str(home), 'PATH': '/usr/bin:/bin:'
-             + str(Path(shutil.which('memman')).parent)})
+        env=_hook_env(home))
 
 
 # --- prime.sh - SessionStart ---
@@ -75,8 +96,7 @@ def test_prime_handles_empty_stdin(memman_home: tuple[Path, Path]):
     out = subprocess.run(
         ['bash', _hook('prime.sh')],
         input='', capture_output=True, text=True,
-        env={'HOME': str(home), 'PATH': '/usr/bin:/bin:'
-             + str(Path(shutil.which('memman')).parent)})
+        env=_hook_env(home))
     assert out.returncode == 0, out.stderr
     assert '[memman] Memory active' in out.stdout, out.stdout
 
