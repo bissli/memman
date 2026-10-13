@@ -43,7 +43,7 @@ from memman.store.db import DB
 from memman.store.errors import StoreMissingError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import format_timestamp, meta_to_json, parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -51,7 +51,7 @@ _RAW_COLUMNS = (
     'id, content, summary, embedding,'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
     ' deleted_at, embedding_model,'
-    ' queue_uuid, replaced_by, author, summary_model')
+    ' queue_uuid, replaced_by, author, summary_model, meta')
 
 
 def _raw_values(row: MigrateInsight) -> tuple:
@@ -68,7 +68,8 @@ def _raw_values(row: MigrateInsight) -> tuple:
         format_timestamp(row.updated_at),
         format_timestamp(row.deleted_at) if row.deleted_at else None,
         row.embedding_model, row.queue_uuid,
-        row.replaced_by, row.author, row.summary_model)
+        row.replaced_by, row.author, row.summary_model,
+        meta_to_json(row.meta))
 
 
 def _raw_row(r: tuple) -> MigrateInsight:
@@ -84,7 +85,7 @@ def _raw_row(r: tuple) -> MigrateInsight:
         deleted_at=parse_timestamp(r[8]) if r[8] else None,
         embedding_model=r[9],
         queue_uuid=r[10], replaced_by=r[11], author=r[12],
-        summary_model=r[13])
+        summary_model=r[13], meta=json.loads(r[14]) if r[14] else None)
 
 
 class SqliteNodeStore(NodeStore):
@@ -100,7 +101,7 @@ class SqliteNodeStore(NodeStore):
     def insert_raw(self, row: MigrateInsight) -> bool:
         cur = self._db._exec(
             f'insert or ignore into insights ({_RAW_COLUMNS})'
-            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             _raw_values(row))
         return cur.rowcount == 1
 
@@ -863,7 +864,7 @@ order by id
 
                 conn.executemany(
                     f'insert or ignore into insights ({_RAW_COLUMNS})'
-                    ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [_raw_values(ins) for ins in payload.insights])
 
                 max_oplog_id = 0

@@ -1,11 +1,13 @@
 """Insight CRUD, lifecycle, statistics, and embedding operations.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, format_timestamp, parse_timestamp
+from memman.store.model import Insight, format_timestamp, meta_to_json
+from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -29,14 +31,15 @@ def insert_insight(db: 'DB', i: Insight) -> None:
 insert into insights
     (id, content, created_at, updated_at,
      embedding_model,
-     queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?)
+     queue_uuid, author, meta)
+values (?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content,
         now, now,
         i.embedding_model,
-        i.queue_uuid, i.author))
+        i.queue_uuid, i.author,
+        meta_to_json(i.meta)))
 
 
 # Must stay byte-identical to postgres.py's _INSIGHT_COLS.
@@ -44,7 +47,7 @@ _INSIGHT_COLUMNS = (
     'id, content, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, replaced_by,'
-    ' author')
+    ' author, meta')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -86,8 +89,9 @@ def query_insights(
         for word in keyword.split():
             escaped = word.replace(
                 '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-            conditions.append("content like ? escape '\\'")
-            args.append(f'%{escaped}%')
+            conditions.append(
+                "(content like ? escape '\\' or meta like ? escape '\\')")
+            args += [f'%{escaped}%'] * 2
 
     args.append(limit)
 
@@ -581,4 +585,6 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.replaced_by = row[9]
     if row[10]:
         i.author = row[10]
+    if row[11]:
+        i.meta = json.loads(row[11])
     return i

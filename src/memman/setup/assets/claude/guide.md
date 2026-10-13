@@ -31,6 +31,9 @@ wrote it or when: `author` and `created_at` carry those.
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
 
+A work folder or ticket the text must keep goes in `--meta key=value`
+and prints whole on its recall line.
+
 A correction, stored at once, replaces the row it corrects. A write
 saying something changed (a migration ran, a value moved, a step
 finished) corrects the row that stated the old state. The new text

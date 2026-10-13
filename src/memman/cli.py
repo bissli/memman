@@ -23,6 +23,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack, nullcontext
@@ -62,7 +63,7 @@ from memman.store.errors import ConfigError as StoreConfigError
 from memman.store.errors import StoreMissingError
 from memman.store.factory import known_backends, list_stores
 from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
-from memman.store.model import Insight, format_timestamp
+from memman.store.model import Insight, format_meta, format_timestamp
 from memman.store.model import insight_to_delta_dict, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.node import count_active_insights, get_stats
@@ -87,6 +88,9 @@ _LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 _WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
 _WORKER_LOG_BACKUPS = 3
 _MAX_CONTENT_BYTES = 1000
+_MAX_META_BYTES = 200
+_META_KEY_RE = re.compile(r'[a-z_]+')
+_META_REFUSED_CATEGORIES = frozenset({'Cc', 'Cf', 'Cs', 'Zl', 'Zp'})
 _LINE_WORD_RE = re.compile(r'\blines? \d+\b', re.IGNORECASE)
 _LINE_BREAK_RE = re.compile(r'[\r\n\v\f\x85\u2028\u2029]')
 # Notes:
@@ -229,6 +233,57 @@ def _content_refusal_message(
             f'content opens with a label ({label.group(0)!r});'
             ' open on the subject and write the thought as a sentence')
     return None
+
+
+def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str] | None:
+    """Return the `--meta` pairs of a write as a dict.
+
+    Parameters
+    ----------
+    pairs : tuple[str, ...]
+        `key=value` strings as given. The key is lower-case letters and
+        `_`. An empty value sets no pair, so on `replace` `--meta ref=`
+        clears the target's pairs.
+
+    Returns
+    -------
+    dict[str, str] or None
+        None when no `--meta` was given; `{}` when every value was
+        empty.
+
+    Raises
+    ------
+    click.ClickException
+        A pair without `=`, a bad or repeated key, a control character
+        or format character in a value, or `format_meta` of the result over
+        `_MAX_META_BYTES` UTF-8 bytes.
+    """
+    if not pairs:
+        return None
+    meta: dict[str, str] = {}
+    seen: set[str] = set()
+    for pair in pairs:
+        key, sep, value = pair.partition('=')
+        if not sep or not _META_KEY_RE.fullmatch(key):
+            raise click.ClickException(
+                f'--meta {pair!r} is not key=value with a key of'
+                ' lower-case letters and _')
+        if key in seen:
+            raise click.ClickException(f'--meta key {key!r} given twice')
+        seen.add(key)
+        if any(unicodedata.category(c) in _META_REFUSED_CATEGORIES
+               for c in value):
+            raise click.ClickException(
+                f'--meta {key!r} holds a line break, control or format'
+                ' character')
+        if value:
+            meta[key] = value
+    meta_bytes = len(format_meta(meta).encode('utf-8'))
+    if meta_bytes > _MAX_META_BYTES:
+        raise click.ClickException(
+            f'--meta too long ({meta_bytes} bytes, max {_MAX_META_BYTES});'
+            ' keep each value a short pointer such as a path or ticket')
+    return meta
 
 
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
@@ -379,7 +434,8 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
 def _enqueue_into_existing_store(
         conn: sqlite3.Connection, data_dir: str, name: str, content: str,
         *, replaced_id: str | None = None,
-        author: str | None = None) -> tuple[int, str]:
+        author: str | None = None,
+        meta: dict[str, str] | None = None) -> tuple[int, str]:
     """Queue a write for `name` after checking the store exists.
 
     Parameters
@@ -396,6 +452,8 @@ def _enqueue_into_existing_store(
         Id the write replaces, as `memman.queue.enqueue` takes it.
     author : str or None, default None
         Resolved author.
+    meta : dict[str, str] or None, default None
+        `_parse_meta`'s pairs, as `memman.queue.enqueue` takes them.
 
     Returns
     -------
@@ -431,7 +489,7 @@ def _enqueue_into_existing_store(
                     f' memman store merge {name} to finish it')
             queued = enqueue(
                 conn, store=name, content=content,
-                replaced_id=replaced_id, author=author)
+                replaced_id=replaced_id, author=author, meta=meta)
         except BaseException:
             conn.execute('rollback')
             raise
@@ -452,7 +510,7 @@ def _enqueue_into_existing_store(
         raise click.ClickException(str(StoreMissingError(name)))
     return enqueue(
         conn, store=name, content=content,
-        replaced_id=replaced_id, author=author)
+        replaced_id=replaced_id, author=author, meta=meta)
 
 
 def _get_llm_client_or_fail() -> 'MemmanLLMClient':
@@ -989,8 +1047,13 @@ def config_show(ctx: click.Context) -> None:
 @claude_callable
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
+@click.option('--meta', 'meta_pairs', multiple=True, metavar='KEY=VALUE',
+              help='A pointer kept with the row, such as ref=<path>.'
+              ' Repeatable.')
 @click.pass_context
-def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
+def remember(
+        ctx: click.Context, content: tuple[str, ...],
+        meta_pairs: tuple[str, ...]) -> None:
     """Queue a new memory and list the current rows it may correct.
 
     \b
@@ -998,6 +1061,11 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     ----------
     content : str
         The memory text, stored as one row exactly as typed.
+    meta : str
+        `key=value`, repeatable. Every pair prints on the row's recall
+        line and in `insights show`, and the keyword index covers it.
+        The key is lower-case letters and `_`; the pairs as recall prints
+        them are at most 200 bytes.
 
     \b
     Notes
@@ -1017,6 +1085,7 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     Examples
     --------
     memman remember "the retry cap is five"
+    memman remember --meta ref=.handoff/auth/ "token refresh waits on review"
     """  # noqa: D301, D410, D411
     _require_started('write')
     content_str = ' '.join(content)
@@ -1024,6 +1093,7 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
     refusal = _content_refusal_message(content_str)
     if refusal:
         raise click.ClickException(refusal)
+    meta = _parse_meta(meta_pairs)
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -1033,7 +1103,7 @@ def remember(ctx: click.Context, content: tuple[str, ...]) -> None:
 
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = _enqueue_into_existing_store(
-            conn, data_dir_val, name, content_str, author=author)
+            conn, data_dir_val, name, content_str, author=author, meta=meta)
     reply = {
         'action': 'queued',
         'id': queue_uuid,
@@ -1705,7 +1775,7 @@ def _process_queue_row(
     insight = Insight(
         id=row.queue_uuid, content=row.content,
         created_at=now, updated_at=now,
-        queue_uuid=row.queue_uuid, author=row.author)
+        queue_uuid=row.queue_uuid, author=row.author, meta=row.meta)
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
@@ -1728,9 +1798,10 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int | None,
            basic: bool) -> None:
     """Print the insights matching a query, one line each, best first.
 
-    Each line is `<id8> <score> <created_at> <author> | <text>`: the
-    first 8 characters of the id, the score to two decimals, the UTC
-    date, the author or `-`, then the summary or a content prefix.
+    Each line is `<id8> <score> <created_at> <author> | <text> [<meta>]`:
+    the first 8 characters of the id, the score to two decimals, the UTC
+    date, the author or `-`, the summary or a content prefix, then any
+    `--meta` pairs.
     `--basic` prints the same line without a score. An empty page
     prints nothing.
 
@@ -1743,8 +1814,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int | None,
         Maximum lines printed. None reads `MEMMAN_RECALL_LIMIT` from
         the env file, then falls back to 20.
     basic : bool
-        SQL LIKE matching over content, newest first; computes no
-        score.
+        SQL LIKE matching over content and the stored meta text,
+        newest first; computes no score.
 
     \b
     Raises
@@ -1964,8 +2035,13 @@ def forget(ctx: click.Context, id: str) -> None:
 @cli.command()
 @click.argument('id')
 @click.argument('content', nargs=-1, required=True)
+@click.option('--meta', 'meta_pairs', multiple=True, metavar='KEY=VALUE',
+              help="The successor's pairs, replacing the target's."
+              " Repeatable; omit to keep the target's.")
 @click.pass_context
-def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
+def replace(
+        ctx: click.Context, id: str, content: tuple[str, ...],
+        meta_pairs: tuple[str, ...]) -> None:
     """Correct a stale insight: store new text in its place via the queue.
 
     \b
@@ -1976,6 +2052,10 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
         still queued, such as the `id` an earlier `remember` printed.
     content : str
         The corrected text, stored as one row exactly as typed.
+    meta : str
+        `key=value`, repeatable, as `remember` takes it. With no
+        `--meta` the successor keeps the target's pairs. With any, it
+        holds exactly the pairs given, so `--meta ref=` clears them.
 
     \b
     Notes
@@ -2003,6 +2083,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
     refusal = _content_refusal_message(content_str, verb='replace')
     if refusal:
         raise click.ClickException(refusal)
+    meta = _parse_meta(meta_pairs)
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -2046,7 +2127,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...]) -> None:
                 ' with text that keeps it and adds yours')
         row_id, queue_uuid = _enqueue_into_existing_store(
             conn, data_dir_val, name, content_str,
-            replaced_id=id, author=author)
+            replaced_id=id, author=author, meta=meta)
     _json_out({
         'action': 'queued',
         'id': queue_uuid,

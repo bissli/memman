@@ -74,7 +74,7 @@ def _row(row_id, content, embedding, **kwargs):
         'enriched_at': None, 'created_at': CREATED, 'updated_at': CREATED,
         'deleted_at': None, 'embedding_model': None,
         'queue_uuid': None, 'replaced_by': None, 'author': 'alice',
-        'summary_model': None,
+        'summary_model': None, 'meta': None,
         }
     fields.update(kwargs)
     return MigrateInsight(**fields)

@@ -315,7 +315,8 @@ create table if not exists insights (
     queue_uuid  text,
     replaced_by text,
     author      text,
-    summary_model text
+    summary_model text,
+    meta        text
 );
 
 create index if not exists idx_insights_created on insights(created_at);
@@ -371,6 +372,7 @@ _FTS_STATEMENTS = (
     """
 create virtual table insights_fts using fts5(
     content,
+    meta,
     content='insights',
     content_rowid='rowid',
     tokenize="unicode61 remove_diacritics 0"
@@ -380,20 +382,23 @@ create virtual table insights_fts using fts5(
     # `update_enrichment` and every stamp update write to the index.
     """
 create trigger insights_fts_insert after insert on insights begin
-    insert into insights_fts(rowid, content) values (new.rowid, new.content);
+    insert into insights_fts(rowid, content, meta)
+    values (new.rowid, new.content, new.meta);
 end
 """,
     """
 create trigger insights_fts_delete after delete on insights begin
-    insert into insights_fts(insights_fts, rowid, content)
-    values ('delete', old.rowid, old.content);
+    insert into insights_fts(insights_fts, rowid, content, meta)
+    values ('delete', old.rowid, old.content, old.meta);
 end
 """,
     """
-create trigger insights_fts_update after update of content on insights begin
-    insert into insights_fts(insights_fts, rowid, content)
-    values ('delete', old.rowid, old.content);
-    insert into insights_fts(rowid, content) values (new.rowid, new.content);
+create trigger insights_fts_update after update of content, meta on insights
+begin
+    insert into insights_fts(insights_fts, rowid, content, meta)
+    values ('delete', old.rowid, old.content, old.meta);
+    insert into insights_fts(rowid, content, meta)
+    values (new.rowid, new.content, new.meta);
 end
 """,
     "insert into insights_fts(insights_fts) values('rebuild')",

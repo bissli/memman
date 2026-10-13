@@ -47,7 +47,7 @@ from memman.store.errors import BackendError, ConfigError, StoreMissingError
 from memman.store.errors import SwapCutoverRefused
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import format_timestamp, meta_to_json, parse_timestamp
 from memman.store.node import unterminated_chains
 from memman.store.oplog import MAX_OPLOG_ENTRIES, OPLOG_RETENTION_DAYS
 from memman.trace import redact_dsn
@@ -127,7 +127,8 @@ create table if not exists {schema}.insights (
     kw_tokens   text[] not null,
     replaced_by text,
     author      text,
-    summary_model text
+    summary_model text,
+    meta        jsonb
 );
 
 create table if not exists {schema}.oplog (
@@ -296,6 +297,8 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.replaced_by = row[9]
     if row[10]:
         i.author = row[10]
+    if row[11]:
+        i.meta = row[11]
     return i
 
 
@@ -304,20 +307,20 @@ _INSIGHT_COLS = (
     'id, content, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, replaced_by,'
-    ' author')
+    ' author, meta')
 
 
 _RAW_SELECT = (
     'id, content, summary, embedding::real[],'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
     ' deleted_at, embedding_model,'
-    ' queue_uuid, replaced_by, author, summary_model')
+    ' queue_uuid, replaced_by, author, summary_model, meta')
 
 _RAW_INSERT = (
     'id, content, summary, embedding,'
     ' enrich_attempted_at, enriched_at, created_at, updated_at,'
     ' deleted_at, embedding_model,'
-    ' queue_uuid, kw_tokens, replaced_by, author, summary_model')
+    ' queue_uuid, kw_tokens, replaced_by, author, summary_model, meta')
 
 
 def _raw_values(row: MigrateInsight) -> tuple:
@@ -341,8 +344,9 @@ def _raw_values(row: MigrateInsight) -> tuple:
         row.created_at, row.updated_at, row.deleted_at,
         row.embedding_model, row.queue_uuid,
         [] if row.deleted_at else sorted(
-            insight_tokens(Insight(content=row.content))),
-        row.replaced_by, row.author, row.summary_model)
+            insight_tokens(Insight(content=row.content, meta=row.meta))),
+        row.replaced_by, row.author, row.summary_model,
+        meta_to_json(row.meta))
 
 
 class PostgresNodeStore(NodeStore):
@@ -379,8 +383,8 @@ class PostgresNodeStore(NodeStore):
 insert into {s}.insights
     (id, content, created_at, updated_at,
      embedding_model,
-     queue_uuid, kw_tokens, author)
-values (%s, %s, %s, %s, %s, %s, %s, %s)
+     queue_uuid, kw_tokens, author, meta)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
@@ -389,13 +393,14 @@ values (%s, %s, %s, %s, %s, %s, %s, %s)
                 ins.embedding_model,
                 ins.queue_uuid,
                 sorted(insight_tokens(ins)),
-                ins.author))
+                ins.author,
+                meta_to_json(ins.meta)))
 
     def insert_raw(self, row: MigrateInsight) -> bool:
         sql = self._q(
             f'insert into {{s}}.insights ({_RAW_INSERT})'
             ' values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
-            ' %s, %s, %s, %s)'
+            ' %s, %s, %s, %s, %s)'
             ' on conflict (id) do nothing')
         with self._conn.cursor() as cur:
             cur.execute(sql, _raw_values(row))
@@ -460,8 +465,9 @@ where id = %s
             for word in keyword.split():
                 escaped = word.replace(
                     '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-                conditions.append('content ilike %s')
-                args.append(f'%{escaped}%')
+                conditions.append(
+                    '(content ilike %s or meta::text ilike %s)')
+                args += [f'%{escaped}%'] * 2
         args.append(limit)
         where_clause = ' and '.join(conditions)
         sql = self._q(f"""
@@ -1925,7 +1931,7 @@ order by sqlite_id
                         cur.executemany(
                             f'insert into {schema}.insights ({_RAW_INSERT})'
                             ' values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             [_raw_values(ins) for ins in payload.insights])
 

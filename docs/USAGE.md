@@ -243,6 +243,20 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 Replacements are processed in queue order within a store. A correction of a previous correction replaces its successor. `insights show <id> --history` displays the chain.
 
+### Meta pairs
+
+`remember` and `replace` take `--meta key=value`, repeatable, for a pointer kept beside the text:
+
+```bash
+memman remember --meta ref=.handoff/auth/ --meta ticket=ABC-12 "Token refresh waits on the security review."
+```
+
+A key is lower-case letters and `_`. A value holds no line break, control character, or format character, and an empty value sets nothing. The pairs as recall prints them are at most 200 bytes. A refused pair stops the write before it queues.
+
+Every pair prints at the end of the memory's recall line and under `meta` in `insights show`. Enrichment, the embedding, and the reranker read the content alone, so a summary never drops or rewrites a pair. The keyword channel counts a word found in a key or a value, and `--basic` matches the stored meta text as well as the content.
+
+`replace` without `--meta` keeps the target's pairs. With any `--meta`, the successor holds exactly the pairs given, so `--meta ref=` clears them. A replacement whose target is gone at commit is stored as a plain add and keeps no pairs.
+
 ### Rejected input
 
 Both commands check the text in this order and report the first problem:
@@ -268,10 +282,10 @@ Both commands check the text in this order and report the first problem:
 Recall prints one line per memory, best first, and prints nothing for an empty result:
 
 ```text
-<id8> <score> <created_at> <author> | <text>
+<id8> <score> <created_at> <author> | <text> [<meta>]
 ```
 
-`id8` is the first 8 characters of the id, `score` has two decimals, and `created_at` is the UTC date `YYYY-MM-DD`. `author` is `-` when unset. `text` is the summary when the memory has one, and the start of the content otherwise. `memman insights show <id>` prints the whole memory.
+`id8` is the first 8 characters of the id, `score` has two decimals, and `created_at` is the UTC date `YYYY-MM-DD`. `author` is `-` when unset. `text` is the summary when the memory has one, and the start of the content otherwise. `[<meta>]` lists the [meta pairs](#meta-pairs) as `key=value`, sorted by key. A value holding whitespace, `"`, or `]` prints as a quoted JSON string. The pairs follow the shortened text, so the cut never takes one. A memory with no pairs ends at `text`. `memman insights show <id>` prints the whole memory.
 
 A score ranks a row against its siblings in one response and means nothing across queries. Recency can return a memory with no keyword or semantic match, so each returned text needs its own relevance check. [Chapter 3](design/03-pipelines.md#34-read-pipeline-recall) explains the ranking.
 
@@ -283,7 +297,7 @@ Without `--limit`, recall prints up to `MEMMAN_RECALL_LIMIT` lines, or 20 when t
 memman config set MEMMAN_RECALL_LIMIT 8
 ```
 
-`--basic` requires every query word to appear as a substring of the content and returns newest memories first. It skips query embedding and reranking. Store-opening checks still run, so it can require credentials or an embedding probe; see [credential requirements](#credential-requirements).
+`--basic` requires every query word to appear as a substring of the content or the stored meta text, and returns newest memories first. It skips query embedding and reranking. Store-opening checks still run, so it can require credentials or an embedding probe; see [credential requirements](#credential-requirements).
 
 **Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker uses `MEMMAN_RERANK_MODEL` (default `voyageai/rerank-3-lite`) on the shared endpoint with `MEMMAN_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
 

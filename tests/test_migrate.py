@@ -367,7 +367,7 @@ def _row(row_id, content, created_at):
         enrich_attempted_at=None, enriched_at=None, created_at=created_at,
         updated_at=created_at, deleted_at=None,
         embedding_model=None, queue_uuid=None, replaced_by=None,
-        author=None, summary_model=None)
+        author=None, summary_model=None, meta=None)
 
 
 def _apply_payload(existing_id):

@@ -184,6 +184,38 @@ guaranteed recall, which AGENTS.md gets by loading at session start
 and a ranked recall page does not. The user prunes AGENTS.md
 periodically, so no confirmation is needed.
 
+### Meta pairs
+
+`remember` and `replace` take `--meta key=value`, repeatable, for a
+short pointer kept beside the text: the work folder a fact belongs to
+(a handoff folder, a todo file, a scratch dir) or a ticket. A key is
+lower-case letters and `_`. A value holds no line break, control
+character, or format character, and an empty value sets nothing. The
+pairs as recall prints them are at most 200 bytes. Over that, or
+malformed, the CLI refuses and nothing queues.
+
+```bash
+memman remember --meta ref=.handoff/auth-refresh/ --meta ticket=ABC-12 "<thought>"
+```
+
+A project may fix the key it uses, and its CLAUDE.md or AGENTS.md
+names it.
+
+The summary can omit a path written into the text, and the recall
+line's cut can remove it. A pair prints whole at the end of the
+recall line, after the cut text, and under `meta` in `memman insights
+show <id>`. Enrichment, the embedding, and the reranker read the
+content alone. The keyword channel of recall matches words in keys
+and values, so a recall naming a handoff slug finds a row whose only
+mention of it is the pair. `recall --basic` matches the stored meta
+text as well as the content, so `memman recall --basic <path>` finds
+a row by its pointer.
+
+`replace` without `--meta` keeps the target's pairs. With any
+`--meta`, the successor holds exactly the pairs given, so
+`--meta ref=` clears them. A replacement whose target is gone at
+commit is stored as a plain add and keeps no pairs.
+
 ### The write pipeline
 
 `memman remember` queues the write, then reads the store to list
@@ -251,7 +283,7 @@ The page is one plain-text line per row, best first, and nothing
 else:
 
 ```
-<id8> <score> <created_at> <author> | <text>
+<id8> <score> <created_at> <author> | <text> [<meta>]
 ```
 
 - `id8`: the first eight characters of the id. Every id-taking
@@ -270,6 +302,10 @@ else:
   whitespace run to one space, then keeps its first 200 characters
   with `...` when longer. A summary that fits carries no marker
   however much of the content it left out.
+- `[<meta>]`: the row's meta pairs as `key=value`, sorted by key,
+  after the cut text, so the cut never takes a pair. A value holding
+  whitespace, `"`, or `]` prints as a quoted JSON string. A row with no
+  pairs ends at `text`.
 
 The page is for choosing which row to open: `memman insights show
 <id8>` reads the rest of any row worth more than a scan. `--limit`

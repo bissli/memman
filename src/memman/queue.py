@@ -7,6 +7,7 @@ Single SQLite file at <data_dir>/queue.db with WAL mode. Atomic claim
 via update-returning; stale claims are reclaimable after the timeout.
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -41,6 +42,7 @@ class QueueRow:
     attempts: int
     queue_uuid: str
     author: str | None
+    meta: dict[str, str] | None
 
 
 def queue_db_path(base_dir: str) -> str:
@@ -129,7 +131,8 @@ create table if not exists queue (
                   check(status in ('pending','done','failed')),
     last_error    text,
     processed_at  integer,
-    author        text
+    author        text,
+    meta          text
 );
 
 create index if not exists idx_queue_ready
@@ -174,6 +177,7 @@ def enqueue(
         content: str,
         replaced_id: str | None = None,
         author: str | None = None,
+        meta: dict[str, str] | None = None,
         ) -> tuple[int, str]:
     """Append a blob to the queue.
 
@@ -193,6 +197,10 @@ def enqueue(
     author : str or None, default None
         Resolved from the agent's shell at enqueue time and carried to
         the drain; the drain never re-resolves it from the environment.
+    meta : dict[str, str] or None, default None
+        The `--meta` pairs. None, for no `--meta` at all, is kept apart
+        from `{}`, since a replace queued with None takes its target's
+        pairs.
 
     Returns
     -------
@@ -215,13 +223,14 @@ def enqueue(
     sql = """
 insert into queue (
     store, content, replaced_id,
-    queue_uuid, queued_at, author
+    queue_uuid, queued_at, author, meta
 )
-values (?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
         store, content, replaced_id,
-        queue_uuid, now, author))
+        queue_uuid, now, author,
+        None if meta is None else json.dumps(meta, ensure_ascii=False)))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id, queue_uuid
@@ -367,7 +376,7 @@ where id = (
     limit 1
 )
 returning id, store, content, replaced_id,
-          attempts, queue_uuid, author
+          attempts, queue_uuid, author, meta
 """
     params = [now, worker_pid, now, STALE_CLAIM_SECONDS, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -376,7 +385,8 @@ returning id, store, content, replaced_id,
     return QueueRow(
         id=row[0], store=row[1], content=row[2],
         replaced_id=row[3],
-        attempts=row[4], queue_uuid=row[5], author=row[6])
+        attempts=row[4], queue_uuid=row[5], author=row[6],
+        meta=None if row[7] is None else json.loads(row[7]))
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:

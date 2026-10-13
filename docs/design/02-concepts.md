@@ -13,6 +13,7 @@ A memory is one saved claim. The CLI and database call it an **insight**. The ca
 | `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.    |
 | `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.     |
 | `summary`    | Optional display text from enrichment. Search uses the original content.      |
+| `meta`       | The `--meta` pairs, one JSON object. Recall and `insights show` print it.     |
 | `created_at` | Time the worker stored the memory.                                            |
 
 Every command that takes an id accepts an unambiguous prefix, such as the eight-character prefix that recall prints. The numeric `queue_id` identifies the queue entry, which maintenance deletes shortly after the drain stores the memory. The `id` remains valid after the queue entry is gone.
@@ -50,10 +51,11 @@ insights (
   queue_uuid        text,                 -- the queued write this came from
   replaced_by       text,                 -- successor id, no foreign key
   author            text,
-  summary_model     text                  -- LLM model that wrote the summary
+  summary_model     text,                 -- LLM model that wrote the summary
+  meta              text                  -- JSON object of --meta pairs
 )
 
-insights_fts (content)                    -- SQLite only, FTS5
+insights_fts (content, meta)              -- SQLite only, FTS5
 
 oplog (
   id                integer primary key autoincrement,
@@ -75,12 +77,13 @@ The [memory data-model diagram](../diagrams/03-insight-datamodel.drawio.png) sho
 
 ### Indexes and backend differences
 
-SQLite's FTS5 index covers all memory content and is maintained by triggers. Searches join back to `insights` to exclude retired memories. Opening a store without the index creates and populates it in a transaction. Postgres stores distinct content tokens in `kw_tokens`, with a GIN index for keyword lookup.
+SQLite's FTS5 index covers all memory content and meta pairs. Triggers maintain it. Searches join back to `insights` to exclude retired memories. Opening a store without the index creates and populates it in a transaction. Postgres stores distinct content and meta tokens in `kw_tokens`, with a GIN index for keyword lookup. Both index meta keys and values.
 
 | Detail               | SQLite                              | Postgres                                       |
 | -------------------- | ----------------------------------- | ---------------------------------------------- |
 | Timestamps           | ISO 8601 text                       | `timestamptz`                                  |
 | Operation snapshots  | JSON text                           | `jsonb`                                        |
+| Meta pairs           | JSON text                           | `jsonb`                                        |
 | Embeddings           | Little-endian float64 BLOB          | pgvector `vector(N)`, float32                  |
 | Vector lookup        | Matrix product                      | HNSW index on current memories                 |
 | Pending swap vectors | Baseline `embedding_pending` column | Column added during a swap                     |
@@ -103,7 +106,7 @@ There are no automatic in-place schema migrations. Maintainers apply schema chan
 
 ### Queue and generated-field markers
 
-`<data dir>/queue.db` is always SQLite and serves all stores in that directory. Each entry records the store, content, author, replacement target, UUID, attempt count, status, and timestamps. Its `worker_runs` table records drain outcomes. [Queue states](../USAGE.md#queue) and [write processing](03-pipelines.md#32-write-pipeline-remember) describe its use.
+`<data dir>/queue.db` is always SQLite and serves all stores in that directory. Each entry records the store, content, author, meta pairs, replacement target, UUID, attempt count, status, and timestamps. Its `worker_runs` table records drain outcomes. [Queue states](../USAGE.md#queue) and [write processing](03-pipelines.md#32-write-pipeline-remember) describe its use.
 
 The worker checks `queue_uuid` against all stored memories, including forgotten and replaced ones, before inserting a retried write.
 

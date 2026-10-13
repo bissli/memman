@@ -10,7 +10,9 @@ boundary. In-memory construction without a value yields `None`;
 backends fill them in on insert and reads return them populated.
 """
 
+import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +25,13 @@ Id = str
 @dataclass
 class Insight:
     """One stored memory.
+
+    Attributes
+    ----------
+    meta : dict[str, str] or None
+        The `--meta` pairs. None and `{}` both store as no meta. On an
+        Insight a `replace` queues, None means no `--meta` was given,
+        so the drain copies the target's pairs.
     """
 
     id: str = ''
@@ -37,6 +46,7 @@ class Insight:
     queue_uuid: str | None = None
     replaced_by: str | None = None
     author: str | None = None
+    meta: dict[str, str] | None = None
 
 
 @dataclass
@@ -80,6 +90,36 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
 
 BRIEF_CONTENT_CHARS = 200
 
+_META_QUOTED_RE = re.compile(r'[\s"\]]')
+
+
+def format_meta(meta: dict[str, str]) -> str:
+    """Return the `[key=value ...]` form of an insight's meta pairs.
+
+    Parameters
+    ----------
+    meta : dict[str, str]
+        Non-empty pairs.
+
+    Returns
+    -------
+    str
+        Pairs sorted by key, space-separated, inside brackets. A value
+        holding whitespace, `"` or `]` prints as a JSON string.
+    """
+    pairs = []
+    for key, value in sorted(meta.items()):
+        if _META_QUOTED_RE.search(value):
+            value = json.dumps(value, ensure_ascii=False)
+        pairs.append(f'{key}={value}')
+    return f"[{' '.join(pairs)}]"
+
+
+def meta_to_json(meta: dict[str, str] | None) -> str | None:
+    """JSON text of meta pairs for a stored row; None for no pairs.
+    """
+    return json.dumps(meta, ensure_ascii=False) if meta else None
+
 
 def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     """Return the one recall page line that shows an insight.
@@ -95,7 +135,7 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     Returns
     -------
     str
-        `<id8> <score> <created_at> <author> | <text>`.
+        `<id8> <score> <created_at> <author> | <text> [<meta>]`.
         `id8` is the first 8 characters of the id. `created_at` is the
         UTC date, `YYYY-MM-DD`, with no time of day. `-` stands for an
         unset author, and `_` joins any whitespace inside one, so
@@ -103,6 +143,8 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
         summary, else `content`. Either folds whitespace runs to one
         space, so a row never spans two lines, then keeps its first
         `BRIEF_CONTENT_CHARS` characters with `...` when longer.
+        `[<meta>]` is `format_meta` of the row's pairs, after the cut,
+        so it always prints whole; a row with no pairs ends at `text`.
     """
     if ins.summary.strip():
         text = ' '.join(ins.summary.split())
@@ -116,7 +158,10 @@ def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
     fields += [
         ins.created_at.astimezone(timezone.utc).strftime('%Y-%m-%d'),
         '_'.join((ins.author or '').split()) or '-']
-    return f"{' '.join(fields)} | {text}"
+    line = f"{' '.join(fields)} | {text}"
+    if ins.meta:
+        line += f' {format_meta(ins.meta)}'
+    return line
 
 
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
@@ -124,8 +169,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
 
     Timestamps use `format_timestamp`; `updated_at` falls back to
     `created_at`. Optional fields (`deleted_at`, `replaced_by`,
-    `summary`, `enrich_attempted_at`, `enriched_at`) appear only when
-    populated. `queue_uuid` is omitted.
+    `summary`, `enrich_attempted_at`, `enriched_at`, `author`, `meta`)
+    appear only when populated. `queue_uuid` is omitted.
     """
     out: dict[str, Any] = {
         'id': ins.id,
@@ -146,6 +191,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         out['enriched_at'] = format_timestamp(ins.enriched_at)
     if ins.author:
         out['author'] = ins.author
+    if ins.meta:
+        out['meta'] = ins.meta
     return out
 
 

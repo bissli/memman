@@ -93,8 +93,8 @@ def test_no_index_names_a_group3_column(backend):
                    for column in ('category', 'importance', 'source'))
 
 
-def test_the_sqlite_keyword_index_holds_content_alone(tmp_path):
-    """Verify `insights_fts` indexes content and no trigger names entities.
+def test_the_sqlite_keyword_index_holds_content_and_meta(tmp_path):
+    """Verify `insights_fts` indexes content and meta, and names no entities.
 
     Mutation: keeping the `entities` column in `_FTS_STATEMENTS`, so
         the keyword channel still matches a name that only the caller
@@ -112,7 +112,7 @@ def test_the_sqlite_keyword_index_holds_content_alone(tmp_path):
     finally:
         db.close()
 
-    assert columns == ['content']
+    assert columns == ['content', 'meta']
     assert len(triggers) == 3
     assert not any('entities' in t for t in triggers)
 

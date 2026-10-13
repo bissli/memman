@@ -55,6 +55,7 @@ class MigrateInsight:
     replaced_by: str | None
     author: str | None
     summary_model: str | None
+    meta: dict[str, str] | None
 
 
 @dataclass

@@ -109,7 +109,8 @@ def _apply_plan(
         The target store.
     insight : Insight
         The row to store; its timestamps are refreshed from the stored
-        row.
+        row. A None `meta` takes the target's pairs when the replace
+        links.
     replaced_id : str
         The row a `replace` retires; '' for a plain add.
     embed_vec : list[float] or None
@@ -134,8 +135,8 @@ def _apply_plan(
         linked = backend.nodes.mark_replaced(replaced_id, insight.id)
         if linked and before_target is not None:
             replaced = True
-            # The predecessor keeps its content behind `replaced_by`,
-            # and the successor copies nothing from it.
+            if insight.meta is None:
+                insight.meta = before_target.meta
             backend.oplog.log(
                 operation='replace', insight_id=replaced_id,
                 detail=f'replaced by {insight.id}',

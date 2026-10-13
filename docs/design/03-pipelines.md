@@ -28,9 +28,9 @@ Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drai
 
 `remember` performs these steps before returning:
 
-1. Check that writes are enabled, then validate the text against the [input rules](../USAGE.md#rejected-input).
+1. Check that writes are enabled, then validate the text against the [input rules](../USAGE.md#rejected-input) and each `--meta` pair against the [meta rules](../USAGE.md#meta-pairs).
 2. Identify potentially temporary information and report it as advisory `quality_warnings`.
-3. Check that the selected store exists, then append a pending entry to `queue.db`, including a new UUID, the selected store, and the caller's author identity. The check also refuses a branch whose merge started. On SQLite the check and the append share one `begin immediate` transaction. `store merge` and `store drop` remove a branch in the same kind of transaction. So a write either reaches the queue before the removal, and the removal then sees it and refuses, or the write meets the missing-store refusal. On Postgres the check is one schema query with `PGCONNECT_TIMEOUT` defaulting to three seconds. A connection error lets the write queue.
+3. Check that the selected store exists, then append a pending entry to `queue.db`, including a new UUID, the selected store, the caller's author identity, and any meta pairs. The check also refuses a branch whose merge started. On SQLite the check and the append share one `begin immediate` transaction. `store merge` and `store drop` remove a branch in the same kind of transaction. So a write either reaches the queue before the removal, and the removal then sees it and refuses, or the write meets the missing-store refusal. On Postgres the check is one schema query with `PGCONNECT_TIMEOUT` defaulting to three seconds. A connection error lets the write queue.
 4. Look for up to three related current memories. This uses word overlap and calls no model.
 5. Return JSON with `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related`.
 
@@ -54,7 +54,7 @@ Each drain processes up to 100 entries by default, stopping when it reaches its 
 6. **Commit one transaction.** Retire the replacement target by linking it to the new ID when it is still current, then insert the new memory, save generated fields and markers, and record operations.
 7. **Finish the queue entry.** Mark it done, or record an error for retry.
 
-A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
+A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. It takes the target's meta pairs when the `replace` gave no `--meta` and the target is still current at commit. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
 
 ### Failure and retry
 
@@ -127,7 +127,7 @@ Recall considers current memories only. The [command reference](../USAGE.md#reca
 
 ### Basic matching
 
-`--basic` bypasses scoring. Every whitespace-separated query word must appear as a substring of the content. Matching is case-insensitive, limited to ASCII case folding on SQLite. Results are newest first.
+`--basic` bypasses scoring. Every whitespace-separated query word must appear as a substring of the content or the stored meta text. Matching is case-insensitive, limited to ASCII case folding on SQLite. Results are newest first.
 
 This path skips query embedding and reranking, but normal store-opening checks still run, so the command can still require an API key and a network call.
 
@@ -137,7 +137,7 @@ Scored recall embeds the query with the store's bound model. If embedding fails,
 
 | Channel | Ranking                                       | Candidate count          |
 | ------- | --------------------------------------------- | ------------------------ |
-| Keyword | Number of distinct query terms in the content | `ANCHOR_TOP_K` = 30      |
+| Keyword | Distinct query terms in content and meta      | `ANCHOR_TOP_K` = 30      |
 | Vector  | Positive cosine similarity                    | `RERANK_SHORTLIST` = 100 |
 | Recency | Creation time, newest first                   | `ANCHOR_TOP_K` = 30      |
 

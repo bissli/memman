@@ -14,7 +14,7 @@
         <mxCell id="s_basic_q" value="--basic?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="380" y="140" width="140" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="s_basic" value="&lt;b&gt;Basic match&lt;/b&gt;&lt;br&gt;Every query word must appear in content (SQL LIKE). Newest first, up to --limit rows (--limit 0 returns none). No embedding and no score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_basic" value="&lt;b&gt;Basic match&lt;/b&gt;&lt;br&gt;Every query word must appear in content or meta (SQL LIKE). Newest first, up to --limit rows (--limit 0 returns none). No embedding and no score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="700" y="125" width="300" height="90" as="geometry" />
         </mxCell>
         <mxCell id="s_emb" value="&lt;b&gt;Embed the query&lt;/b&gt;&lt;br&gt;With the store's embedding model. On failure, recall goes on with the keyword and recency channels." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
@@ -27,7 +27,7 @@
         <mxCell id="s_anchor_box" value="&lt;b&gt;Three channels&lt;/b&gt;  each returns a ranked list" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="370" width="940" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="s_sig1" value="&lt;b&gt;Keyword&lt;/b&gt;&lt;br&gt;Query tokens counted per memory: FTS5 on SQLite, kw_tokens on Postgres. Top 30." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_sig1" value="&lt;b&gt;Keyword&lt;/b&gt;&lt;br&gt;Query tokens counted per memory over content and meta pairs: FTS5 on SQLite, kw_tokens on Postgres. Top 30." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="80" y="405" width="290" height="70" as="geometry" />
         </mxCell>
         <mxCell id="s_sig2" value="&lt;b&gt;Vector&lt;/b&gt;&lt;br&gt;Positive cosine similarity only: a matrix product on SQLite, the HNSW index on Postgres. Top 100." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
@@ -61,8 +61,8 @@
         <mxCell id="s_calllog_note" value="Every recall also appends one line to the call log that memman log calls reads. With tracing on, it writes trace events too." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;align=left;spacingLeft=6;" vertex="1" parent="1">
           <mxGeometry x="20" y="850" width="190" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="s_out" value="&lt;b&gt;Plain-text output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;&amp;lt;id8&amp;gt; &amp;lt;score&amp;gt; &amp;lt;created_at&amp;gt; &amp;lt;author&amp;gt; | &amp;lt;text&amp;gt;&lt;/font&gt;&lt;br&gt;&amp;lt;text&amp;gt; is the summary, or a content prefix. --basic omits &amp;lt;score&amp;gt;. --basic: no match prints nothing. Scored: recency rows always appear." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="200" y="935" width="500" height="75" as="geometry" />
+        <mxCell id="s_out" value="&lt;b&gt;Plain-text output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;&amp;lt;id8&amp;gt; &amp;lt;score&amp;gt; &amp;lt;created_at&amp;gt; &amp;lt;author&amp;gt; | &amp;lt;text&amp;gt; [&amp;lt;meta&amp;gt;]&lt;/font&gt;&lt;br&gt;&amp;lt;text&amp;gt; is the summary, or a content prefix. [&amp;lt;meta&amp;gt;] is the row's meta pairs, sorted by key, after the cut; absent when none. --basic omits &amp;lt;score&amp;gt;. --basic: no match prints nothing. Scored: recency rows always appear." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="935" width="500" height="90" as="geometry" />
         </mxCell>
 
         <mxCell id="s_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_start" target="s_basic_q">

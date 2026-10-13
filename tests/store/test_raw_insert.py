@@ -22,7 +22,7 @@ def _row(row_id='row-a', content='grackle migrates north', **kwargs):
         'created_at': CREATED, 'updated_at': UPDATED, 'deleted_at': None,
         'embedding_model': 'model-x',
         'queue_uuid': 'qu-a', 'replaced_by': None, 'author': 'alice',
-        'summary_model': 'summary-model-y',
+        'summary_model': 'summary-model-y', 'meta': None,
         }
     fields.update(kwargs)
     return MigrateInsight(**fields)

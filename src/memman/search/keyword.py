@@ -37,9 +37,10 @@ def tokenize(text: str) -> set[str]:
 
 
 def insight_tokens(ins: Insight) -> set[str]:
-    """Return the token set of an insight's content.
+    """Return the token set of an insight's content and meta pairs.
     """
-    return tokenize(ins.content)
+    meta_text = ' '.join(f'{k} {v}' for k, v in (ins.meta or {}).items())
+    return tokenize(f'{ins.content} {meta_text}')
 
 
 def keyword_search(
