@@ -1,51 +1,138 @@
-r"""Hard-delete or rewrite rows of one memman store, keeping every chain whole.
+r"""Hard-delete, rewrite or re-tag memman rows, keeping every chain whole.
 
 Usage
 -----
-    python scripts/repair_rows.py audit STORE
-    python scripts/repair_rows.py delete STORE ID [ID ...] [OPTIONS]
-    python scripts/repair_rows.py rewrite STORE ID TEXT [TEXT ...] [OPTIONS]
-    python scripts/repair_rows.py apply STORE PLAN [OPTIONS]
+Run from the memman repo, so the dev install of memman loads:
 
-OPTIONS are `--dry-run` and `--backup-dir DIR`. PLAN is a JSON-lines
-file, or `-` for stdin, of the ops `delete` and `rewrite` take:
+    cd <memman repo> && poetry run python scripts/repair_rows.py COMMAND ...
+
+    audit STORE
+    delete STORE ID [ID ...] [OPTIONS]
+    rewrite STORE ID TEXT [TEXT ...] [OPTIONS]
+    meta STORE ID KEY=VALUE [KEY=VALUE ...] [OPTIONS]
+    apply STORE PLAN [OPTIONS]
+
+OPTIONS:
+
+    --dry-run           run every op, report, and roll back
+    --backup-dir DIR    bundle directory, else MEMMAN_BACKUP_TARGET from
+                        the data dir's `env` file, never the shell
+
+PLAN is a JSON-lines file, or `-` for stdin, of the ops the other
+commands take:
 
     {"action": "delete", "id": "<id>"}
     {"action": "rewrite", "id": "<id>", "content": ["<text>", ...]}
+    {"action": "meta", "id": "<id>", "meta": {"<key>": "<value>", ...}}
 
-`audit` prints one JSON line per stored row, any state. Every other
-command prints one JSON report. A refusal exits 2 with `{"refused": ...}`
-on stderr and leaves the store unchanged. Any other failure exits 1
-with `{"error": ...}` on stderr.
+The data dir is `MEMMAN_DATA_DIR`, else `~/.memman`. The endpoint, key
+and model come from its `env` file, as for every memman command, so a
+caller exports nothing.
 
-Notes
------
-- `delete` of a row with a successor splices it out of the chain: its
-  predecessors then point at that successor. A row with none (current,
-  forgotten, or pointing at a missing row) goes with every row it
-  replaced. The oplog loses every entry holding any text a deleted row
-  held that no surviving row holds. A delete of a row the same run
-  already deleted does nothing.
-- `rewrite` leaves the row current with the first text. It keeps the
-  id, created_at, author, meta and the rows it replaced, and clears the
-  summary, vector and enrich stamps. A replaced row leaves its
-  successor's history. Each further text becomes a new current row
-  with the same created_at, author and meta.
-- A rewritten or new row has no vector, so vector recall misses it
-  until enriched. The scheduler's drain enriches pending rows only in a
-  store it wrote a queued row to, a few per drain.
-- Ops run in order in one transaction, each seeing what the ones
-  before it left. A refused op, a queued `replace` of a deleted or
-  rewritten row, or a run that would leave a new broken chain rolls
-  back the whole batch.
+Output
+------
+`audit` prints one JSON line per stored row, in any state, oldest first:
+
+    id, state, replaced_by, integrity, refusal, created_at, author, meta,
+    content
+
+- `state`: current, replaced or forgotten. A forgotten replaced row is
+  forgotten.
+- `integrity`: the replacement integrity populations holding the row,
+  from dangling, self_pointer and unterminated.
+- `refusal`: the `memman remember` refusal of the text, or null.
+
+Every other command prints one JSON report on stdout. It holds `store`,
+`dry_run`, `backup` (the bundle path, or null on a dry run) and these
+id lists:
+
+- `deleted`: every row a delete removed, history rows included.
+- `spliced`: the named rows cut out of a chain, a subset of `deleted`.
+- `repointed`: rows now pointing past a spliced row.
+- `rewritten`: rows a `rewrite` set to its first text.
+- `detached`: rewritten rows that were replaced.
+- `revived`: rewritten rows that were forgotten.
+- `inserted`: new rows holding a `rewrite`'s further texts.
+- `meta_set`: rows a `meta` op changed.
+- `enriched`: rewritten and new rows stamped enriched. Empty on a dry
+  run.
+- `enrich_error`: present only when enrichment raised after the commit.
+
+Exit Status
+-----------
+- 0: the run finished.
+- 1: `enrich_error` is set, with the report still on stdout, or any
+  other failure, with `{"error": ...}` on stderr.
+- 2: a refusal, with `{"refused": ...}` on stderr. The store is
+  unchanged.
+
+Delete
+------
+- A row with a successor is spliced out. Its predecessors then point at
+  that successor.
+- A row with none (current, forgotten, or pointing at a missing row)
+  goes with every row it replaced.
+- A delete of a row the same run already deleted does nothing.
+- To collapse a chain to its head and its first version, delete each
+  row between them.
+- Every oplog entry holding a text that a deleted row held and no
+  surviving row holds goes too, so the oplog keeps no copy of it.
+  `memman insights show --history` follows `replaced_by` alone, so the
+  surviving chain still reads whole.
+- In the dry-run report, `deleted` beyond the named ids is history a
+  head delete took, and `spliced` names the deletes that kept their
+  chain. Read it before the real run.
+
+Rewrite
+-------
+- The row becomes current with the first text. It keeps its id,
+  created_at, author, meta and the rows it replaced.
+- The row loses its summary, vector and enrich stamps.
+- A forgotten row is revived.
+- A replaced row leaves its successor's history, which then starts at
+  that successor.
+- Each further text becomes a new current row with the same created_at,
+  author and meta.
+- Every text must pass the `memman remember` refusals.
+- A real run enriches every rewritten and new row before it exits,
+  through the drain's own `enrich_pending`. That takes the store's
+  pending rows oldest first, so older pending rows are enriched with
+  them.
+- A row missing from `enriched` is stranded, or still pending when
+  `enrich_error` is set. `memman enrich --stranded-only` retries a
+  stranded row, and the drain takes a pending one.
+- A real rewrite run refuses first when the store's embedder is
+  unavailable. A dry run skips this check.
+
+Meta
+----
+- The row's pairs become exactly those given, as `--meta` on `replace`
+  does. An empty value drops its key, and all-empty values clear the
+  meta.
+- Keys and values face the `--meta` checks.
+- The text, chain and enrichment stay as they are, since the summary
+  and vector read the text alone. A `meta` op costs no LLM call.
+
+Safety
+------
+- Ops run in order in one transaction, each seeing what the ones before
+  it left.
+- The whole batch rolls back on a refused op, on a pending or failed
+  queued `replace` naming a deleted or rewritten row, or on a run that
+  would leave a new broken chain. Let the drain finish the queued writes
+  before such a run.
 - The run holds the drain lock and, on Postgres, the store's enrich
-  lock, and refuses during an embedding swap. On SQLite nothing locks
-  out a manual `memman enrich`, which can stamp a rewritten row with
-  the old text's summary and vector. Never run the two at once.
-- A run that writes first builds a `memman backup` bundle in a new
-  directory under `--backup-dir`, else `MEMMAN_BACKUP_TARGET`. The
-  bundle holds every store as it stood before the run. `memman backup
-  restore` of it rewinds the whole data dir, not this store alone.
+  lock.
+- The run refuses during an embedding swap, and on a branch store or a
+  branch parent.
+- On SQLite nothing locks out a manual `memman enrich`, which can stamp
+  a rewritten row with the old text's summary and vector. Never run the
+  two at once.
+- Each real run first builds a `memman backup` bundle of every store, in
+  a new directory under `--backup-dir`, and reports its path.
+- `memman backup restore` of that bundle rewinds the whole data dir:
+  every store, the queue and the non-secret config.
+- A batch in one call costs one bundle, so send batches.
 """
 
 import argparse
@@ -57,21 +144,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import click
 from memman import config, drain_lock
 from memman.backup import build_bundle
-from memman.cli import _content_refusal_message
+from memman.cli import _META_KEY_RE, _content_refusal_message, _parse_meta
+from memman.embed import fingerprint
 from memman.embed.swap import META_STATE as EMBED_SWAP_STATE
+from memman.exceptions import ConfigError, EmbedFingerprintError
+from memman.llm.client import get_llm_client
 from memman.migrate import MigrateInsight
+from memman.pipeline.enrich import enrich_pending
 from memman.queue import queue_db
 from memman.search.keyword import insight_tokens
 from memman.store import factory
 from memman.store.backend import Backend
 from memman.store.db import default_data_dir
-from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
+from memman.store.model import Insight, format_timestamp
+from memman.store.model import insight_to_delta_dict, meta_to_json
 from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN
 from memman.store.sqlite import SqliteBackend
 
-_OP_KEYS = {'delete': {'action', 'id'}, 'rewrite': {'action', 'id', 'content'}}
+_OP_KEYS = {
+    'delete': {'action', 'id'},
+    'rewrite': {'action', 'id', 'content'},
+    'meta': {'action', 'id', 'meta'},
+    }
 
 
 class Refused(Exception):
@@ -93,9 +190,17 @@ def _connection(backend: Backend, sql: str) -> tuple[Any, str]:
 
     Parameters
     ----------
+    backend : Backend
+        A SQLite or Postgres store.
     sql : str
         SQLite-dialect SQL with `?` placeholders. `{t}` stands before
         each table name, for the Postgres store schema.
+
+    Returns
+    -------
+    tuple[Any, str]
+        The connection, and `sql` with `{t}` filled. On Postgres every
+        `?` becomes `%s`, one inside a string literal included.
     """
     if isinstance(backend, SqliteBackend):
         return backend._db._conn, sql.format(t='')
@@ -108,8 +213,17 @@ def fetch(backend: Backend, sql: str, params: tuple = ()) -> list[tuple]:
 
     Parameters
     ----------
+    backend : Backend
+        Store whose connection, and so whose open transaction, runs `sql`.
     sql : str
         SQLite dialect, `{t}` before each table name (see `_connection`).
+    params : tuple, default ()
+        Values for the `?` placeholders.
+
+    Returns
+    -------
+    list[tuple]
+        One tuple per selected row.
     """
     conn, text = _connection(backend, sql)
     if isinstance(backend, SqliteBackend):
@@ -120,12 +234,21 @@ def fetch(backend: Backend, sql: str, params: tuple = ()) -> list[tuple]:
 
 
 def execute(backend: Backend, sql: str, params: tuple = ()) -> int:
-    """Rows `sql` changed, on the backend's own connection.
+    """Run `sql` on the backend's own connection.
 
     Parameters
     ----------
+    backend : Backend
+        Store whose connection, and so whose open transaction, runs `sql`.
     sql : str
         SQLite dialect, `{t}` before each table name (see `_connection`).
+    params : tuple, default ()
+        Values for the `?` placeholders.
+
+    Returns
+    -------
+    int
+        Rows `sql` changed.
     """
     conn, text = _connection(backend, sql)
     if isinstance(backend, SqliteBackend):
@@ -137,6 +260,13 @@ def execute(backend: Backend, sql: str, params: tuple = ()) -> int:
 
 def _refuse_branch(backend: Backend, store: str) -> None:
     """Refuse a branch store, or a store that has branches.
+
+    Parameters
+    ----------
+    backend : Backend
+        The open store.
+    store : str
+        Store name, for the message.
 
     Raises
     ------
@@ -152,16 +282,22 @@ def _refuse_branch(backend: Backend, store: str) -> None:
 def check_ops(op_list: list[dict[str, Any]]) -> None:
     """Refuse a malformed op, or rewrite text `memman remember` refuses.
 
+    Parameters
+    ----------
+    op_list : list[dict[str, Any]]
+        Ops in the PLAN shape.
+
     Raises
     ------
     Refused
-        The first bad op, by its position in `op_list`.
+        `op_list` is empty, or holds a bad op. The message names the
+        first bad op by its position in `op_list`.
     """
     if not op_list:
         raise Refused('no ops')
     for idx, op in enumerate(op_list):
         if not isinstance(op, dict) or op.get('action') not in _OP_KEYS:
-            raise Refused(f'op {idx}: action must be delete or rewrite')
+            raise Refused(f'op {idx}: action must be delete, rewrite or meta')
         if set(op) != _OP_KEYS[op['action']]:
             raise Refused(
                 f'op {idx}: {op["action"]} takes exactly the keys'
@@ -169,6 +305,21 @@ def check_ops(op_list: list[dict[str, Any]]) -> None:
         if not isinstance(op['id'], str) or not op['id']:
             raise Refused(f'op {idx}: id must be a non-empty string')
         if op['action'] == 'delete':
+            continue
+        if op['action'] == 'meta':
+            meta = op['meta']
+            if (not isinstance(meta, dict)
+                or not all(isinstance(value, str) for value in meta.values())):
+                raise Refused(f'op {idx}: meta must map keys to text')
+            bad_keys = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
+            if bad_keys:
+                raise Refused(
+                    f'op {idx} ({op["id"]}): meta key {bad_keys[0]!r} is not'
+                    ' lower-case letters and _')
+            try:
+                _parse_meta(tuple(f'{key}={value}' for key, value in meta.items()))
+            except click.ClickException as exc:
+                raise Refused(f'op {idx} ({op["id"]}): {exc.message}') from exc
             continue
         content_list = op['content']
         if (not isinstance(content_list, list) or not content_list
@@ -182,6 +333,17 @@ def check_ops(op_list: list[dict[str, Any]]) -> None:
 
 def _delete(backend: Backend, row_id: str, report: dict[str, Any]) -> None:
     """Delete one row, splicing it out or taking its history along.
+
+    Parameters
+    ----------
+    backend : Backend
+        Store inside the caller's open transaction.
+    row_id : str
+        A stored row whose chain ends. `run_ops` checks both, and a
+        cycle would loop the history walk forever.
+    report : dict[str, Any]
+        The `run_ops` report, extended in place: `deleted`, and on a
+        splice `spliced` and `repointed`.
     """
     ((replaced_by,),) = fetch(
         backend, 'select replaced_by from {t}insights where id = ?', (row_id,))
@@ -199,6 +361,7 @@ def _delete(backend: Backend, row_id: str, report: dict[str, Any]) -> None:
                 backend, 'update {t}insights set replaced_by = ? where id = ?',
                 (replaced_by, pred_id))
         report['repointed'].extend(predecessor_ids)
+        report['spliced'].append(row_id)
     else:
         deleted_ids = [row_id]
         pending_ids = list(predecessor_ids)
@@ -257,6 +420,24 @@ def _rewrite(
         backend: Backend, row_id: str, content_list: list[str],
         report: dict[str, Any]) -> None:
     """Make one row current with the first text, inserting the rest.
+
+    Parameters
+    ----------
+    backend : Backend
+        Store inside the caller's open transaction.
+    row_id : str
+        A stored row in any state.
+    content_list : list[str]
+        Texts `check_ops` passed. The first replaces the row's text, and
+        each further one becomes a new row.
+    report : dict[str, Any]
+        The `run_ops` report, extended in place: `rewritten`, `inserted`,
+        and `detached` or `revived` for a replaced or forgotten row.
+
+    Raises
+    ------
+    Refused
+        A new row's id is already stored.
     """
     row = backend.nodes.get_include_deleted(row_id)
     now = format_timestamp(datetime.now(timezone.utc))
@@ -324,6 +505,46 @@ set content = ?, summary = null, summary_model = null,
         report['revived'].append(row_id)
 
 
+def _set_meta(
+        backend: Backend, row_id: str, meta: dict[str, str],
+        report: dict[str, Any]) -> None:
+    """Set one row's meta pairs, keeping its text, chain and enrichment.
+
+    Parameters
+    ----------
+    backend : Backend
+        Store inside the caller's open transaction.
+    row_id : str
+        A stored row in any state.
+    meta : dict[str, str]
+        Pairs `check_ops` passed, the row's whole new meta. A key left
+        out or given an empty value is dropped.
+    report : dict[str, Any]
+        The `run_ops` report, extended in place: `meta_set`.
+    """
+    row = backend.nodes.get_include_deleted(row_id)
+    new_meta = {key: value for key, value in meta.items() if value} or None
+    now = format_timestamp(datetime.now(timezone.utc))
+    if isinstance(backend, SqliteBackend):
+        execute(
+            backend, 'update {t}insights set meta = ?, updated_at = ? where id = ?',
+            (meta_to_json(new_meta), now, row_id))
+    else:
+        execute(
+            backend,
+            'update {t}insights set meta = ?, kw_tokens = ?, updated_at = ?'
+            ' where id = ?',
+            (meta_to_json(new_meta),
+             [] if row.deleted_at is not None
+             else sorted(insight_tokens(Insight(content=row.content, meta=new_meta))),
+             now, row_id))
+    backend.oplog.log(
+        operation='meta',
+        insight_id=row_id,
+        detail=json.dumps({'before': row.meta, 'after': new_meta}))
+    report['meta_set'].append(row_id)
+
+
 def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
     """Run checked ops in order. The caller holds the transaction.
 
@@ -337,14 +558,15 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        Ids by outcome: `deleted`, `repointed` (now pointing past a
-        deleted row), `rewritten`, `detached`, `revived` and
-        `inserted`.
+        Id lists by outcome, as the module docstring's Output section
+        names them: `deleted`, `spliced`, `repointed`, `rewritten`,
+        `detached`, `revived`, `inserted` and `meta_set`.
 
     Raises
     ------
     Refused
-        An id no row holds when its op runs, an id on a cycle, or a
+        An id no row holds when its op runs, an id whose chain never
+        ends (a self-pointer, or on or leading into a cycle), or a
         run that leaves a row in a replacement integrity population
         that did not hold it before. The caller rolls back.
     """
@@ -352,8 +574,8 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
     on_cycle_ids = set(integrity_before['self_pointer']) | set(
         integrity_before['unterminated'])
     report: dict[str, Any] = {
-        'deleted': [], 'repointed': [], 'rewritten': [],
-        'detached': [], 'revived': [], 'inserted': [],
+        'deleted': [], 'spliced': [], 'repointed': [], 'rewritten': [],
+        'detached': [], 'revived': [], 'inserted': [], 'meta_set': [],
         }
     for op in op_list:
         row_id = op['id']
@@ -365,8 +587,10 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
             raise Refused(f'no row {row_id}')
         if op['action'] == 'delete':
             _delete(backend, row_id, report)
-        else:
+        elif op['action'] == 'rewrite':
             _rewrite(backend, row_id, op['content'], report)
+        else:
+            _set_meta(backend, row_id, op['meta'], report)
 
     integrity_after = backend.nodes.replacement_integrity()
     for population, ids in integrity_after.items():
@@ -397,17 +621,21 @@ def apply(
     Returns
     -------
     dict[str, Any]
-        `run_ops`' report, plus `store`, `dry_run` and `backup`, the
-        bundle path or None.
+        The `run_ops` report, plus `store`, `dry_run`, `backup` (the
+        bundle path, or None on a dry run) and `enriched` (the rewritten
+        and new rows stamped enriched, empty on a dry run).
+        `enrich_error` is present only when enrichment raised after the
+        commit.
 
     Raises
     ------
     Refused
-        Before any write: a bad op, no backup directory, a running
-        drain, a branch store, an embedding swap, a bundle missing the
-        store, or an enrich run holding the store. Inside
-        the rolled-back transaction: any `run_ops` refusal, or a queued
-        `replace` naming a deleted or rewritten row.
+        Before any store write: a bad op, no backup directory, a running
+        drain, a branch store, an embedding swap, no LLM client or no
+        available embedder for a real run that rewrites, a bundle missing
+        the store, or an enrich run holding the store.
+        Inside the rolled-back transaction: any `run_ops` refusal, or a
+        queued `replace` naming a deleted or rewritten row.
     """
     check_ops(op_list)
     if not dry_run and not backup_dir:
@@ -423,6 +651,17 @@ def apply(
             _refuse_branch(backend, store)
             if backend.meta.get(EMBED_SWAP_STATE):
                 raise Refused(f'{store} has an embedding swap in progress')
+            enrich_clients = None
+            if not dry_run and any(op['action'] == 'rewrite' for op in op_list):
+                try:
+                    enrich_clients = (
+                        get_llm_client(), fingerprint.bound_embedder(backend))
+                except (ConfigError, EmbedFingerprintError) as exc:
+                    raise Refused(f'cannot enrich rewritten rows: {exc}') from exc
+                if not enrich_clients[1].available():
+                    raise Refused(
+                        f'the embedder of {store} is unavailable;'
+                        ' run memman doctor')
             backup_path = None
             if not dry_run:
                 run_dir = Path(backup_dir).expanduser() / (
@@ -461,6 +700,35 @@ where store = ? and status in ('pending', 'failed')
                             raise _DryRun(report)
                 except _DryRun as exc:
                     report = exc.report
+                enriched_ids = []
+                if enrich_clients is not None:
+                    llm_client, embed_client = enrich_clients
+                    target_ids = list(dict.fromkeys(
+                        report['rewritten'] + report['inserted']))
+                    pending_sql = """
+select 1
+from {t}insights
+where id = ? and enrich_attempted_at is null
+"""
+                    try:
+                        while any(
+                                fetch(backend, pending_sql, (row_id,))
+                                for row_id in target_ids):
+                            if not enrich_pending(
+                                    backend, llm_client=llm_client,
+                                    embed_client=embed_client):
+                                break
+                    except Exception as exc:
+                        report['enrich_error'] = f'{type(exc).__name__}: {exc}'
+                    enriched_ids = [
+                        row_id for row_id in target_ids
+                        if fetch(
+                            backend,
+                            'select 1 from {t}insights'
+                            ' where id = ? and enriched_at is not null',
+                            (row_id,))
+                        ]
+                report['enriched'] = enriched_ids
     finally:
         drain_lock.release(lock_fd)
     return {**report, 'store': store, 'dry_run': dry_run, 'backup': backup_path}
@@ -469,11 +737,14 @@ where store = ? and status in ('pending', 'failed')
 def audit(store: str, data_dir: str) -> None:
     """Print every stored row of `store` as one JSON line, oldest first.
 
-    Each line holds `id`, `state` (current, replaced or forgotten; a
-    forgotten replaced row is forgotten), `replaced_by`, `integrity`
-    (the replacement integrity populations holding the row), `refusal`
-    (the `memman remember` refusal of its text, or None), `created_at`,
-    `author`, `meta` and `content`.
+    Each line takes the keys the module docstring's Output section lists.
+
+    Parameters
+    ----------
+    store : str
+        Store name, neither a branch nor a branch parent.
+    data_dir : str
+        Base memman data directory.
 
     Raises
     ------
@@ -513,6 +784,11 @@ order by created_at, id
 
 def main() -> int:
     """Run one command against MEMMAN_DATA_DIR, else ~/.memman.
+
+    Returns
+    -------
+    int
+        Exit status: 0 done, 1 an error or `enrich_error`, 2 a refusal.
     """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -525,10 +801,14 @@ def main() -> int:
     rewrite_parser.add_argument('store')
     rewrite_parser.add_argument('id')
     rewrite_parser.add_argument('content', nargs='+')
+    meta_parser = sub.add_parser('meta')
+    meta_parser.add_argument('store')
+    meta_parser.add_argument('id')
+    meta_parser.add_argument('pairs', nargs='+')
     apply_parser = sub.add_parser('apply')
     apply_parser.add_argument('store')
     apply_parser.add_argument('plan')
-    for write_parser in (delete_parser, rewrite_parser, apply_parser):
+    for write_parser in (delete_parser, rewrite_parser, meta_parser, apply_parser):
         write_parser.add_argument('--dry-run', action='store_true')
         write_parser.add_argument(
             '--backup-dir', default=config.get(config.BACKUP_TARGET))
@@ -541,6 +821,14 @@ def main() -> int:
             return 0
         if args.command == 'delete':
             op_list = [{'action': 'delete', 'id': row_id} for row_id in args.ids]
+        elif args.command == 'meta':
+            meta = {}
+            for pair in args.pairs:
+                key, sep, value = pair.partition('=')
+                if not sep or key in meta:
+                    raise Refused(f'{pair!r} is not one key=value pair')
+                meta[key] = value
+            op_list = [{'action': 'meta', 'id': args.id, 'meta': meta}]
         elif args.command == 'rewrite':
             op_list = [
                 {'action': 'rewrite', 'id': args.id, 'content': args.content}]
@@ -565,7 +853,7 @@ def main() -> int:
             json.dumps({'error': f'{type(exc).__name__}: {exc}'}) + '\n')
         return 1
     print(json.dumps(report))
-    return 0
+    return 1 if 'enrich_error' in report else 0
 
 
 if __name__ == '__main__':

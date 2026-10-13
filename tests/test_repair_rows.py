@@ -94,6 +94,7 @@ def test_delete_head_removes_whole_chain_and_its_oplog(backend):
     assert _rows(backend) == {'x': (None, False)}
     assert _oplog_ids(backend) == ['c', 'x']
     assert sorted(report['deleted']) == ['a', 'b', 'c']
+    assert report['spliced'] == []
     assert _integrity_clean(backend)
 
 
@@ -106,9 +107,10 @@ def test_delete_middle_row_splices_chain(backend):
     """
     _chain(backend, 'a', 'b', 'c')
 
-    _run(backend, [{'action': 'delete', 'id': 'b'}])
+    report = _run(backend, [{'action': 'delete', 'id': 'b'}])
 
     assert _rows(backend) == {'a': ('c', False), 'c': (None, False)}
+    assert report['spliced'] == ['b']
     assert _integrity_clean(backend)
 
 
@@ -669,3 +671,162 @@ def test_main_reports_failures_as_json(
 
     assert repair_rows.main() == code
     assert key in json.loads(capsys.readouterr().err)
+
+
+def test_apply_enriches_every_rewritten_and_split_row(sqlite_store, tmp_path):
+    """Verify a real run leaves its rewritten and new rows enriched.
+
+    Mutation: leaving the rows pending for the drain, which enriches a
+    store only after a queued write to it, or enriching only the row
+    rewritten in place.
+    Oracle: the mocked LLM and embedder, and the rows' own stamps.
+    """
+    report = repair_rows.apply(
+        'default',
+        [{'action': 'rewrite', 'id': 'a',
+          'content': ['The cap is three.', 'The queue drains hourly.']}],
+        sqlite_store, dry_run=False, backup_dir=str(tmp_path / 'bk'))
+
+    row_ids = ['a', *report['inserted']]
+    assert sorted(report['enriched']) == sorted(row_ids)
+    with factory.open_backend('default', sqlite_store, read_only=True) as backend:
+        for row_id in row_ids:
+            raw = backend.nodes.get_raw(row_id)
+            assert raw.enriched_at is not None
+            assert raw.summary_model
+            assert raw.embedding is not None
+
+
+def test_apply_refuses_a_rewrite_with_no_embedder(
+        sqlite_store, tmp_path, monkeypatch):
+    """Verify a rewrite that cannot be enriched refuses before writing.
+
+    Mutation: checking only that the clients build, so a blank API key
+    commits the rewrite and strands every row it touched.
+    Oracle: an embedder whose `available()` is False, as the registry
+    returns for a client with no key.
+    """
+    class Unavailable:
+        def available(self):
+            return False
+
+    monkeypatch.setattr(
+        repair_rows.fingerprint, 'bound_embedder', lambda backend: Unavailable())
+
+    with pytest.raises(repair_rows.Refused, match='embedder'):
+        repair_rows.apply(
+            'default',
+            [{'action': 'rewrite', 'id': 'a', 'content': ['The cap is three.']}],
+            sqlite_store, dry_run=False, backup_dir=str(tmp_path / 'bk'))
+
+    with factory.open_backend('default', sqlite_store, read_only=True) as backend:
+        assert backend.nodes.get('a').content == 'claim a holds'
+
+
+def test_apply_reports_an_enrich_failure_after_the_commit(
+        sqlite_store, tmp_path, monkeypatch):
+    """Verify a failed enrichment keeps the committed run's report.
+
+    Mutation: letting the error escape, which drops the report and the
+    backup path of a repair that did apply.
+    Oracle: an enrich step that raises after the rewrite committed.
+    """
+    def broken_enrich(backend, **kwargs):
+        raise RuntimeError('database is locked')
+
+    monkeypatch.setattr(repair_rows, 'enrich_pending', broken_enrich)
+
+    report = repair_rows.apply(
+        'default',
+        [{'action': 'rewrite', 'id': 'a', 'content': ['The cap is three.']}],
+        sqlite_store, dry_run=False, backup_dir=str(tmp_path / 'bk'))
+
+    assert 'database is locked' in report['enrich_error']
+    assert Path(report['backup']).is_file()
+    with factory.open_backend('default', sqlite_store, read_only=True) as backend:
+        assert backend.nodes.get('a').content == 'The cap is three.'
+
+
+def test_meta_sets_pairs_in_place_without_reenriching(backend):
+    """Verify a meta op swaps the pairs and leaves text and enrichment alone.
+
+    Mutation: merging into the old pairs instead of setting them, as
+    `--meta` on replace sets them; clearing the enrich stamps; or
+    skipping the keyword index, which still finds the old value.
+    Oracle: an enriched row whose meta holds a word its text lacks.
+    """
+    _chain(backend, 'p', 'a')
+    repair_rows.execute(
+        backend, "update {t}insights set meta = ? where id = 'a'",
+        ('{"ticket": "quokka", "ref": "x"}',))
+    backend.nodes.update_embedding('a', [0.1] * EMBEDDING_DIM, 'e')
+    backend.nodes.stamp_enrich_attempted('a')
+    backend.nodes.stamp_enriched('a')
+    if not isinstance(backend, SqliteBackend):
+        repair_rows.execute(
+            backend,
+            "update {t}insights set kw_tokens = ? where id = 'a'",
+            (['claim', 'a', 'holds', 'ticket', 'quokka', 'ref', 'x'],))
+    before = backend.nodes.get_raw('a')
+
+    report = _run(backend, [{
+        'action': 'meta', 'id': 'a', 'meta': {'hq': 'wombat', 'ref': ''}}])
+
+    raw = backend.nodes.get_raw('a')
+    assert raw.meta == {'hq': 'wombat'}
+    assert (raw.content, raw.created_at, raw.enriched_at, raw.embedding_model) == (
+        before.content, before.created_at, before.enriched_at, 'e')
+    assert _rows(backend) == {'p': ('a', False), 'a': (None, False)}
+    assert _keyword_hits(backend, 'wombat') == ['a']
+    assert _keyword_hits(backend, 'quokka') == []
+    assert report['meta_set'] == ['a']
+
+
+def test_meta_with_only_empty_values_clears_the_pairs(backend):
+    """Verify an all-empty meta op leaves the row with no meta.
+
+    Mutation: storing `{}` as a JSON object where memman stores no meta.
+    Oracle: the Insight contract, which stores None and {} as no meta.
+    """
+    _insert(backend, 'a', meta={'ticket': 'T1'})
+
+    _run(backend, [{'action': 'meta', 'id': 'a', 'meta': {'ticket': ''}}])
+
+    assert repair_rows.fetch(
+        backend, "select meta from {t}insights where id = 'a'") == [(None,)]
+
+
+@pytest.mark.parametrize(('meta', 'message'), [
+    ({'Bad-Key': 'x'}, 'key'),
+    ({'a=b': 'c'}, 'key'),
+    ({'hq': 3}, 'text'),
+    ('hq=x', 'meta'),
+    ({'hq': 'a\nb'}, 'line break'),
+    ])
+def test_check_ops_refuses_bad_meta(meta, message):
+    """Verify meta pairs face the same checks as `--meta`.
+
+    Mutation: skipping the `--meta` checks, so a key memman's CLI
+    refuses lands in the store.
+    Oracle: one bad pair per case, against the `--meta` refusals.
+    """
+    with pytest.raises(repair_rows.Refused, match=message):
+        repair_rows.check_ops([{'action': 'meta', 'id': 'a', 'meta': meta}])
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize('backend_kind', ['postgres'])
+def test_meta_on_a_forgotten_row_keeps_its_token_set_empty(backend):
+    """Verify a meta op leaves a forgotten Postgres row out of the index.
+
+    Mutation: recomputing `kw_tokens` for every row, which puts a
+    forgotten row's tokens back in the keyword index.
+    Oracle: `soft_delete`, which empties the token set.
+    """
+    _insert(backend, 'a')
+    backend.nodes.soft_delete('a')
+
+    _run(backend, [{'action': 'meta', 'id': 'a', 'meta': {'hq': 'wombat'}}])
+
+    assert repair_rows.fetch(
+        backend, "select kw_tokens from {t}insights where id = 'a'") == [([],)]
