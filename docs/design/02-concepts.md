@@ -4,7 +4,7 @@
 
 ## 2.1 The memory record
 
-A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content; the worker adds a summary and embedding.
+A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content. The worker adds a summary and embedding.
 
 | Field        | Meaning                                                                       |
 | ------------ | ----------------------------------------------------------------------------- |
@@ -24,7 +24,7 @@ Every command that takes an id accepts an unambiguous prefix, such as the eight-
 
 Each store has a separate SQLite database or Postgres schema named `store_<name>`. Both backends expose the same logical model.
 
-A **current memory** has both `deleted_at` and `replaced_by` unset. Recall and quality review consider only current memories. Replacement preserves the old row and points it to its successor; forgetting sets `deleted_at`. [Chapter 4](04-lifecycle.md#41-retention) explains these transitions.
+A **current memory** has both `deleted_at` and `replaced_by` unset. Recall and quality review consider only current memories. Replacement preserves the old row and points it to its successor. Forgetting sets `deleted_at`. [Chapter 4](04-lifecycle.md#41-retention) explains these transitions.
 
 The main tables are:
 
@@ -112,30 +112,30 @@ The worker checks `queue_uuid` against all stored memories, including forgotten 
 
 Generated fields carry markers for later maintenance:
 
-| Marker                                       | Purpose                                                                           |
-| -------------------------------------------- | --------------------------------------------------------------------------------- |
-| `summary_model`                              | LLM model that wrote the memory's summary. Null when the enrichment call failed.  |
-| `embedding_model`                            | Model that produced the memory's vector.                                          |
-| `enrich_attempted_at`                        | Records an enrichment attempt.                                                    |
-| `enriched_at`                                | Records that enrichment and a vector were both saved.                             |
-| `meta.embed_fingerprint`                     | Store's embedding provider, model, and dimension.                                 |
-| `meta.embed_swap_*` / `meta.embed_reembed_*` | Progress of an embedding model change.                                            |
+| Marker                                       | Purpose                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------- |
+| `summary_model`                              | LLM model that wrote the memory's summary. Null when the enrichment call failed. |
+| `embedding_model`                            | Model that produced the memory's vector.                                         |
+| `enrich_attempted_at`                        | Records an enrichment attempt.                                                   |
+| `enriched_at`                                | Records that enrichment and a vector were both saved.                            |
+| `meta.embed_fingerprint`                     | Store's embedding provider, model, and dimension.                                |
+| `meta.embed_swap_*` / `meta.embed_reembed_*` | Progress of an embedding model change.                                           |
 
-[Chapter 3](03-pipelines.md#35-handling-model-changes) explains how these markers identify work to repeat.
+[Chapter 3](03-pipelines.md#35-model-changes) explains how these markers identify work to repeat.
 
 ## 2.3 System architecture
 
 ![CLI, worker, search, providers, and storage](../diagrams/02-system-architecture.drawio.png)
 
-| Area        | Main modules                                                                                                                        | Responsibility                                                                                      |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Integration | `setup/`, `setup/assets/claude/`                                                                                                    | Installation, hooks, guide, and skill.                                                              |
-| Commands    | `cli.py`, `session.py`, `config.py`                                                                                                 | CLI entry points, store sessions, and settings.                                                     |
-| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py`   | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
-| Search      | `search/`                                                                                                                           | Keyword matching, rank fusion, and quality checks.                                                  |
-| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                         | Model clients, usage accounting, embedding bindings, and model swaps.                               |
-| Storage     | `store/`, `migrate/`, `backup/`, `branch.py`                                                                                        | Backend interface, SQLite and Postgres, migration, snapshots, and store branches.                   |
-| Diagnostics | `doctor.py`, `trace.py`                                                                                                             | Health checks and debug events.                                                                     |
+| Area        | Main modules                                                                                                                      | Responsibility                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Integration | `setup/`, `setup/assets/claude/`                                                                                                  | Installation, hooks, guide, and skill.                                                              |
+| Commands    | `cli.py`, `session.py`, `config.py`                                                                                               | CLI entry points, store sessions, and settings.                                                     |
+| Worker      | `cli.py` (`_drain_queue`, `_process_queue_row`), `queue.py`, `drain_lock.py`, `pipeline/`, `maintenance.py`, `setup/scheduler.py` | Claim queued writes, enrich and embed them, commit changes, maintain stores, and install the timer. |
+| Search      | `search/`                                                                                                                         | Keyword matching, rank fusion, and quality checks.                                                  |
+| Providers   | `llm/`, `embed/`, `rerank/`                                                                                                       | Model clients, usage accounting, embedding bindings, and model swaps.                               |
+| Storage     | `store/`, `migrate/`, `backup/`, `branch.py`                                                                                      | Backend interface, SQLite and Postgres, migration, snapshots, and store branches.                   |
+| Diagnostics | `doctor.py`, `trace.py`                                                                                                           | Health checks and debug events.                                                                     |
 
 The `Backend` protocol in [store/backend.py](../../src/memman/store/backend.py) separates pipelines from database details. The shared queue and scheduler coordinate writes across stores.
 
@@ -148,6 +148,7 @@ The default data directory is `~/.memman`:
 +-- env                         # installed settings and API keys, mode 0600
 +-- env.lock                    # serializes writes to env
 +-- active                      # name of the active store
++-- instance_id                 # random id of this data dir, written by the first store branch
 +-- queue.db                    # the write queue and drain records
 +-- drain.lock                  # held by drains, migrate, backup restore
 +-- model.state                 # result of the daily model check
@@ -155,7 +156,6 @@ The default data directory is `~/.memman`:
 +-- scheduler.serve_interval    # interval of a running serve loop
 +-- debug.state                 # debug trace on or off
 +-- backup.state                # last minute a serve-loop backup ran
-+-- compact/                    # flag files from the PreCompact hook
 +-- bin/                        # launchd wrapper scripts (macOS)
 +-- archive/                    # store sources memman migrate set aside
 +-- logs/
@@ -173,12 +173,12 @@ The default data directory is `~/.memman`:
         +-- memman.db
 ```
 
-`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. The following paths follow the data directory: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, `logs/memman.log`, and `logs/calls.log`.
+`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. The following paths follow the data directory: `env`, `env.lock`, `active`, `instance_id`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, `logs/memman.log`, and `logs/calls.log`.
 
 These paths stay under `~/.memman` regardless of the data directory:
 
 - The four state files: `scheduler.state`, `scheduler.serve_interval`, `debug.state`, and `backup.state`.
-- `compact/`, `bin/`, and `logs/debug.log`.
+- `bin/` and `logs/debug.log`.
 - The four files that receive scheduler output, `logs/enrich.{log,err}` and `logs/backup.{log,err}`. The systemd units write to `%h/.memman/logs`, and the launchd wrappers record the absolute home path at install time, so neither reads the data directory setting.
 
 `memman scheduler status` prints the log paths. `memman log worker --stack` reads the rotated worker log together with its backups.
@@ -203,7 +203,7 @@ Changing the data directory also changes the settings file and queue. A schedule
 
 ### Store branches
 
-A branch is an empty SQLite store layered over its live parent store. One research thread writes into it. A pasted instruction line adds `--store <branch>` to every memory verb of that thread. Other sessions keep writing to the parent. Recall on the branch ranks the branch's rows and the parent's current rows in one pass. The thread ends with `store merge`, which replays the branch into the parent, or `store drop`, which lists the branch's current rows and deletes it. [Chapter 3](03-pipelines.md#36-store-branches) describes the three flows.
+A branch is an empty SQLite store layered over its live parent store. It holds the same kind of memory as the parent, under the same content rules. A session that reads the branch's instruction line passes `--store <branch>` to every memory verb. Other sessions keep writing to the parent. Recall on the branch ranks the branch's rows and the parent's current rows in one pass. The branch ends when the user says so: `store merge` replays it into the parent, and `store drop` lists its current rows and deletes it. [Chapter 3](03-pipelines.md#36-store-branches) describes the three flows.
 
 A store is a branch exactly when its `meta` table holds `branch_parent`, whose value names the parent. `store branch` also writes `branch_created_at`, the UTC creation time, and `branch_token`, `<instance id>:<random hex>`, where the instance id names the data dir that made the branch. The parent's meta holds the same token under `branch_token:<branch>`. `store branch` also copies the parent's `embed_fingerprint`. Only a drop of a branch whose directory is gone reads the parent from the store name, as the part before the first `__`. `merge` and `drop` act only on a store with `branch_parent`, so no agent-callable verb can delete an ordinary store.
 

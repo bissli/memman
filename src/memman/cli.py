@@ -152,8 +152,8 @@ def _line_locator_refusal_message(content: str) -> str | None:
     if match is None:
         return None
     return (
-        f'content names a line number ({match.group(0)!r}), which goes'
-        ' stale on the next edit; name the file and the function or'
+        f'content names a line number ({match.group(0)!r}), which the'
+        ' next edit makes wrong. Name the file and the function or'
         ' symbol instead')
 
 
@@ -182,9 +182,9 @@ def _author_refusal_message(content: str) -> str | None:
     if not pattern.match(content):
         return None
     return (
-        f'content starts with the author name {author!r};'
-        ' the author field already records who wrote this --'
-        ' start with the subject instead')
+        f'content starts with the author name {author!r}. The author'
+        ' field already records who wrote it, so start with the subject'
+        ' instead')
 
 
 def _content_refusal_message(
@@ -204,9 +204,9 @@ def _content_refusal_message(
     -------
     str or None
         The refusal of the first check `content` fails, in the order
-        size, line number, author, line break, leading label; None
-        when it passes all five. The size cap counts UTF-8 bytes. No
-        check rewrites, so the stored row is the agent's own words.
+        size, line number, author, line break, leading label. None when
+        it passes all five. The size cap counts UTF-8 bytes. No check
+        rewrites, so the stored row is the agent's own words.
     """
     content_bytes = len(content.encode('utf-8'))
     if content_bytes > _MAX_CONTENT_BYTES:
@@ -215,7 +215,9 @@ def _content_refusal_message(
                 'keep the corrected claim in the replace, and store'
                 ' the other claims with remember, one thought each')
         else:
-            advice = 'split it into several remember calls, one thought each'
+            advice = (
+                'split it into several remember calls, one thought each,'
+                ' and keep only what is worth storing')
         return (
             f'content too long ({content_bytes} bytes, max'
             f' {_MAX_CONTENT_BYTES}); {advice}')
@@ -225,13 +227,14 @@ def _content_refusal_message(
         return refusal
     if _LINE_BREAK_RE.search(content):
         return (
-            'content spans several lines; write one thought as one'
+            'content spans several lines. Write one thought as one'
             ' paragraph, and give each further thought its own call')
     label = _LEADING_LABEL_RE.match(content)
     if label:
         return (
-            f'content opens with a label ({label.group(0)!r});'
-            ' open on the subject and write the thought as a sentence')
+            f'content opens with a label ({label.group(0)!r}). Open on'
+            ' the subject and state the lasting finding as a sentence,'
+            ' or store nothing when the text is session state')
     return None
 
 
@@ -242,7 +245,7 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str] | None:
     ----------
     pairs : tuple[str, ...]
         `key=value` strings as given. The key is lower-case letters and
-        `_`. An empty value sets no pair, so on `replace` `--meta ref=`
+        `_`. An empty value sets no pair, so on `replace` `--meta doc=`
         clears the target's pairs.
 
     Returns
@@ -255,8 +258,8 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str] | None:
     ------
     click.ClickException
         A pair without `=`, a bad or repeated key, a control character
-        or format character in a value, or `format_meta` of the result over
-        `_MAX_META_BYTES` UTF-8 bytes.
+        or format character in a value, or `format_meta` of the result
+        over `_MAX_META_BYTES` UTF-8 bytes.
     """
     if not pairs:
         return None
@@ -281,8 +284,8 @@ def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str] | None:
     meta_bytes = len(format_meta(meta).encode('utf-8'))
     if meta_bytes > _MAX_META_BYTES:
         raise click.ClickException(
-            f'--meta too long ({meta_bytes} bytes, max {_MAX_META_BYTES});'
-            ' keep each value a short pointer such as a path or ticket')
+            f'--meta too long ({meta_bytes} bytes, max {_MAX_META_BYTES}).'
+            ' Keep each value a short pointer such as a path or ticket')
     return meta
 
 
@@ -1051,7 +1054,7 @@ def config_show(ctx: click.Context) -> None:
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
 @click.option('--meta', 'meta_pairs', multiple=True, metavar='KEY=VALUE',
-              help='A pointer kept with the row, such as ref=<path>.'
+              help='A pointer kept with the row, such as doc=<path>.'
               ' Repeatable.')
 @click.pass_context
 def remember(
@@ -1073,8 +1076,8 @@ def remember(
     \b
     Notes
     -----
-    - The JSON reply carries `id`, the id the row takes once the drain
-      lands it, and `related`: up to three current rows of at most
+    - The JSON reply carries `id`, the id the row takes when the drain
+      stores it, and `related`: up to three current rows of at most
       1,000 bytes, as `<id8> <content>`, ranked by shared words
       divided by the square root of the row's distinct words.
     - A store that does not exist is refused before anything queues.
@@ -1088,7 +1091,8 @@ def remember(
     Examples
     --------
     memman remember "the retry cap is five"
-    memman remember --meta ref=.handoff/auth/ "token refresh waits on review"
+    memman remember "The gateway refreshes the auth token itself."
+    memman remember --meta doc=docs/auth.md --meta ticket=ABC-12 "<thought>"
     """  # noqa: D301, D410, D411
     _require_started('write')
     content_str = ' '.join(content)
@@ -1795,7 +1799,8 @@ def _process_queue_row(
 @click.argument('keyword', nargs=-1, required=True)
 @click.option('--limit', default=None, type=int,
               help='Max results (default MEMMAN_RECALL_LIMIT, then 20)')
-@click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
+@click.option('--basic', is_flag=True, default=False,
+              help='Plain keyword match, newest first, no score')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int | None,
            basic: bool) -> None:
@@ -1938,9 +1943,9 @@ def _resolve_queued_or_stored(
         When the prefix matches two queued writes, two stored rows, or
         a queued write and a different stored row.
     """
-    # A write leaves the queue only after it lands, so reading the
-    # queue first finds a write that lands mid-command in one place or
-    # the other.
+    # A write leaves the queue only after the drain stores it, so
+    # reading the queue first finds a write stored mid-command in one
+    # place or the other.
     with queue_db(data_dir) as conn:
         try:
             queued = find_pending(conn, store, id)
@@ -1998,15 +2003,15 @@ def forget(ctx: click.Context, id: str) -> None:
     Parameters
     ----------
     id : str
-        A full insight id or any unambiguous prefix of one. The id of
-        a write still queued is refused as still queued.
+        A full insight id or any unambiguous prefix of one. A write
+        still queued is refused: forget it after the next drain.
 
     \b
     Notes
     -----
     - A current row that replaced another is refused: the row it
       replaced stays retired, so forgetting it drops the topic from
-      recall. `replace` on its id corrects it instead.
+      recall. `replace` on its id corrects it.
     - A replaced row may be forgotten, except on a branch, which
       refuses a row its parent already replaced. A missing or
       already forgotten row is refused.
@@ -2024,7 +2029,7 @@ def forget(ctx: click.Context, id: str) -> None:
             backend, ctx.obj['data_dir'], name, id)
         if ins is None and queued is not None:
             raise click.ClickException(
-                f'insight {queued} is still queued; it lands on'
+                f'insight {queued} is still queued. Forget it after'
                 ' the next drain')
         if ins is not None:
             id = ins.id
@@ -2047,7 +2052,7 @@ def forget(ctx: click.Context, id: str) -> None:
 def replace(
         ctx: click.Context, id: str, content: tuple[str, ...],
         meta_pairs: tuple[str, ...]) -> None:
-    """Correct a stale insight: store new text in its place via the queue.
+    """Correct an outdated insight: queue new text to take its place.
 
     \b
     Parameters
@@ -2060,7 +2065,7 @@ def replace(
     meta : str
         `key=value`, repeatable, as `remember` takes it. With no
         `--meta` the successor keeps the target's pairs. With any, it
-        holds exactly the pairs given, so `--meta ref=` clears them.
+        holds exactly the pairs given, so `--meta doc=` clears them.
 
     \b
     Notes
@@ -2073,7 +2078,7 @@ def replace(
       the refusal quotes that replace, the one to replace instead.
     - The drain holds a replace while its queued target, or an
       earlier replace in the same store, is pending. A target that
-      fails releases it, and it lands as a plain add.
+      fails releases it, and the drain stores it as a plain add.
     - Enrichment still runs and rebuilds the summary.
 
     \b
@@ -2692,8 +2697,9 @@ def store_branch(ctx: click.Context, parent: str, label: str) -> None:
     Notes
     -----
     - Only on the user's request. The JSON reply carries
-      `instruction`, the line to paste into the notes the thread's next
-      session reads. With no such notes, ask the user where it goes.
+      `instruction`, the line to paste into the notes later sessions
+      read, never into memman. With no such notes, ask the user where
+      it goes.
     - Recall on the branch ranks its own rows with PARENT's live rows.
       A replace or forget of a PARENT row acts on a copy in the branch.
     - Ends with `memman store merge` or `memman store drop`.
@@ -2733,9 +2739,9 @@ def store_merge(ctx: click.Context, branch: str) -> None:
       `parent_head` names the parent's current row for it. Settle each
       with replace or forget in the parent.
     - Refused while the branch has queued writes, while either store is
-      mid embed swap or re-embed, and when the parent does not hold the
-      branch's token. A run that stops part way says to re-run, which
-      finishes it.
+      in an embed swap or re-embed, and when the parent does not hold
+      the branch's token. A run that stops part way says to re-run,
+      which finishes it.
 
     \b
     Examples
@@ -2750,7 +2756,7 @@ def store_merge(ctx: click.Context, branch: str) -> None:
 @click.argument('branch')
 @click.pass_context
 def store_drop(ctx: click.Context, branch: str) -> None:
-    """Throw a branch away, listing the rows written in it.
+    """Discard a branch and list the rows written in it.
 
     \b
     Parameters
@@ -2766,12 +2772,14 @@ def store_drop(ctx: click.Context, branch: str) -> None:
     Notes
     -----
     - Only on the user's request. Nothing reaches the parent.
-    - `dropped` holds `{id, content, replaces}` for each current branch
-      row. `replaces` names the parent row the claim corrects. Re-save
-      each claim unrelated to the thread with `memman remember --store
-      <parent>`, or `memman replace --store <parent> <replaces>` where
-      `replaces` is set, then a closing row saying why the thread was
-      dropped.
+    - Drop discards the branch's rows. `dropped` holds `{id, content,
+      replaces}` for each current branch row, and `replaces` names the
+      parent row the claim corrects. After a token refusal, merge
+      cannot run, so re-save every listed claim worth storing with
+      `memman remember --store <parent>`, or `memman replace --store
+      <parent> <replaces>` where `replaces` is set. Otherwise the user
+      names the claims to keep, and the agent offers each experiment
+      result or ruled-out approach the branch reached.
     - Refused while the branch has queued writes, and after a merge that
       stopped part way, which only a re-run of merge ends.
 
@@ -2844,7 +2852,7 @@ def backup_schedule(ctx: click.Context, cron: str, target: str,
             click.echo(
                 'Warning: cron restricts BOTH day-of-month and day-of-week.'
                 ' systemd OnCalendar evaluates these as AND (cron uses OR),'
-                ' so the backup fires only when both match.', err=True)
+                ' so the backup runs only when both match.', err=True)
     target_path = os.path.expanduser(target)
     os.makedirs(target_path, exist_ok=True)
     from memman.setup.scheduler import _write_env_keys, install_backup
@@ -3330,8 +3338,10 @@ def log_worker(ctx: click.Context, errors: bool, stack: bool,
 def insights_review(ctx: click.Context, limit: int) -> None:
     """Scan stored insights for content quality issues.
 
-    Flags transient phrasing and low-signal content, so an
-    operator can decide whether to `memman forget` a row.
+    Flags transient phrasing and low-signal content. The payload
+    offers `forget` for a row to drop and `replace` for a row of
+    session state, to store the finding it reached. A lasting fact
+    stays as written.
     """
     from memman.search.quality import check_content_quality
 
@@ -3351,7 +3361,10 @@ def insights_review(ctx: click.Context, limit: int) -> None:
                 'quality_warnings': f['quality_warnings'],
                 } for f in flagged],
             'total_flagged': len(flagged),
-            'actions': {'forget': 'memman forget <id>'},
+            'actions': {
+                'forget': 'memman forget <id>',
+                'replace': 'memman replace <id> "<the finding it reached>"',
+                },
             })
 
 
@@ -3376,8 +3389,8 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     ----------
     id : str
         Any stored id. With `--history` a forgotten id is accepted so
-        a chain whose oldest row was forgotten stays walkable. The id
-        of a write still queued is refused as still queued.
+        a chain whose oldest row was forgotten stays walkable. A write
+        still queued is refused: read it after the next drain.
 
     \b
     Returns
@@ -3395,8 +3408,8 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     - The walk follows `replaced_by` forward and every row pointing
       at a chain member backward, so a successor with two predecessors,
       which stored rows may hold, lists both.
-    - Order is chain order, not timestamp order: rows written within
-      one second still list predecessor first.
+    - Rows list in chain order, so a row written within one second of
+      its predecessor still lists after it.
 
     \b
     Examples
@@ -3410,7 +3423,7 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
             backend, ctx.obj['data_dir'], name, id)
         if ins is None and queued is not None:
             raise click.ClickException(
-                f'insight {queued} is still queued; it lands on'
+                f'insight {queued} is still queued. Read it after'
                 ' the next drain')
         if ins is None:
             raise click.ClickException(f'insight {id} not found')
@@ -4019,23 +4032,8 @@ def migrate(
 
 @cli.command(hidden=True)
 def prime() -> None:
-    """Hook shim: emit status + optional compact hint + guide. Invoked by
-    the SessionStart hook (claude/prime.sh). Not meant for direct use.
+    """Print the SessionStart status line, any model notice, and the guide.
     """
-    input_raw = '{}'
-    if not sys.stdin.isatty():
-        try:
-            input_raw = sys.stdin.read()
-        except OSError:
-            input_raw = '{}'
-    try:
-        session = json.loads(input_raw) if input_raw.strip() else {}
-    except json.JSONDecodeError:
-        session = {}
-
-    source = session.get('source', '')
-    session_id = session.get('session_id', '')
-
     status_line = '[memman] Memory active.'
     try:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
@@ -4066,20 +4064,6 @@ def prime() -> None:
         os.environ.get(config.DATA_DIR, default_data_dir()))
     if notice:
         click.echo(f'[memman] {notice}')
-
-    if source == 'compact':
-        flag = (pathlib.Path.home() / '.memman' / 'compact'
-                / f'{session_id}.json')
-        trigger = 'auto'
-        if flag.is_file():
-            try:
-                flag_data = json.loads(flag.read_text())
-                trigger = flag_data.get('trigger', 'auto') or 'auto'
-            except (json.JSONDecodeError, OSError):
-                pass
-        click.echo(f'[memman] Context was just compacted ({trigger}). '
-                   f'Recall critical context now: '
-                   f'memman recall "<topic>"')
 
     shipped = (pkg_files('memman.setup.assets')
                .joinpath('claude/guide.md').read_text())

@@ -953,14 +953,14 @@ class TestClaudeHooksCheck:
         drop : str or None
             Event to remove from settings.
         extra_stop : bool
-            Add a Stop registration that memman no longer writes.
+            Add a Stop registration, an event the installer does not
+            write.
         dangle : bool
             Leave out the task_recall.sh script file.
         """
         hooks_dir = home / '.claude' / 'hooks' / 'memman'
         hooks_dir.mkdir(parents=True)
-        scripts = ['prime.sh', 'user_prompt.sh', 'compact.sh',
-                   'task_recall.sh', 'exit_plan.sh']
+        scripts = ['prime.sh', 'user_prompt.sh', 'task_recall.sh']
         for name in scripts:
             if dangle and name == 'task_recall.sh':
                 continue
@@ -974,15 +974,10 @@ class TestClaudeHooksCheck:
                 {'type': 'command', 'command': cmd('prime.sh')}]}],
             'UserPromptSubmit': [{'hooks': [
                 {'type': 'command', 'command': cmd('user_prompt.sh')}]}],
-            'PreCompact': [{'hooks': [
-                {'type': 'command', 'command': cmd('compact.sh')}]}],
             'PreToolUse': [
                 {'hooks': [{'type': 'command',
                             'command': cmd('task_recall.sh')}],
                  'matcher': matcher},
-                {'hooks': [{'type': 'command',
-                            'command': cmd('exit_plan.sh')}],
-                 'matcher': 'ExitPlanMode'},
                 ],
             }
         if extra_stop:
@@ -1066,13 +1061,13 @@ class TestClaudeHooksCheck:
 
         Mutation: comparing live against expected in one direction, so
             a registration dropped by hand is never noticed.
-        Oracle: a settings.json with the PreCompact entry removed.
+        Oracle: a settings.json with the UserPromptSubmit entry removed.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-        self._install(tmp_path, drop='PreCompact')
+        self._install(tmp_path, drop='UserPromptSubmit')
         result = check_claude_hooks()
         assert result['status'] == 'warn'
-        assert any('compact.sh' in m for m in result['detail']['missing'])
+        assert any('user_prompt.sh' in m for m in result['detail']['missing'])
 
     def test_foreign_hook_under_memman_checkout_passes(
             self, tmp_path, monkeypatch):

@@ -24,7 +24,7 @@ For Codex, installation adds a memory skill at `~/.agents/skills/memman` and a r
 
 The worker runs as a systemd timer on Linux or a launchd agent on macOS. On a host with neither, the operator sets `MEMMAN_SCHEDULER_KIND=serve` and runs `memman scheduler serve`. [Installation](docs/USAGE.md#install-and-uninstall) covers headless installs and the optional Postgres backend, and [Provider setup](docs/USAGE.md#provider-setup) covers other providers.
 
-On Windows, pipx installs memman inside a WSL2 distribution, and Claude Code or Codex runs in that same distribution. The worker needs systemd, which the distribution turns on with `systemd=true` under `[boot]` in `/etc/wsl.conf`. The data directory stays on the Linux filesystem, because SQLite file locking is unreliable on a `/mnt/c` path. WSL shuts an idle distribution down after the `instanceIdleTimeout` in `%UserProfile%\.wslconfig`, which stops the worker. Queued writes then wait until the next session starts it, and `instanceIdleTimeout=-1` under `[general]` keeps the distribution running.
+On Windows, pipx installs memman inside a WSL2 distribution, and Claude Code or Codex runs in that same distribution. The worker needs systemd, and `systemd=true` under `[boot]` in `/etc/wsl.conf` turns it on. The data directory stays on the Linux filesystem, because SQLite file locking is unreliable on a `/mnt/c` path. WSL shuts an idle distribution down after the `instanceIdleTimeout` in `%UserProfile%\.wslconfig`, which stops the worker. Queued writes then wait until the next session starts the distribution again. `instanceIdleTimeout=-1` under `[general]` keeps the distribution running.
 
 ## Usage
 
@@ -46,15 +46,28 @@ memman insights show <id> --history
 
 Each memory holds one self-contained claim, on one line, within 1,000 UTF-8 bytes.
 
+A memory holds a lasting finding. A finding is worth storing when a later session without it would redo work, repeat a mistake, or ask the user again.
+
+Use cases of memories worth storing:
+
+- a user preference, only when it changes future work and no file that loads every session already holds it
+- a decision about the work, with its reason
+- a lasting fact about a system, project, or tool
+- a root cause and its fix, stated as the resulting fact
+- an experiment's result and what it means
+- an approach ruled out, with the reason
+
+The agent never stores session state: where a session left off, the next step, a plan and its steps, a commit or release receipt, an open question, the working tree's state, or a pointer to resume. It stores the decision, fact, or result the work reached. A finding may carry a `--meta` pointer to its work folder. Every memory states the claim that holds, never the event that changed it.
+
 [Memory commands](docs/USAGE.md#memory-commands) lists the input rules and output formats.
 
-## How it works
+## Design
 
-1. **The agent decides.** Claude Code's five lifecycle hooks remind the agent to recall context and save its conclusions. Codex uses the memory skill's guidance. The agent runs every memory command itself. No hook writes a memory.
-2. **Writes enter a queue.** `remember` and `replace` queue the text and return without waiting for a model response. A background worker adds a short summary, creates an embedding, and stores the memory. The text is stored as written.
+1. **The agent decides.** Claude Code's three lifecycle hooks deliver the session guide and remind the agent to recall. Codex uses the memory skill's guidance. The agent runs every memory command itself. No hook writes a memory.
+2. **memman queues each write.** `remember` and `replace` queue the text and return without waiting for a model response. A background worker adds a short summary, creates an embedding, and stores the memory. memman stores the text as written.
 3. **Recall searches stored memories.** It combines keyword matches, vector similarity, and recency, then reranks the best candidates. `recall --basic` matches words in the text instead.
 
-A memory stays until the agent replaces or forgets it, and nothing expires on its own. A replaced memory leaves recall, and `insights show --history` still lists it. A forgotten memory leaves recall too.
+A memory stays until the agent replaces or forgets it, and nothing expires on its own. `recall` omits a replaced memory, and `insights show --history` still lists it. `recall` omits a forgotten memory too.
 
 The [design guide](docs/DESIGN.md) explains the architecture and the reasons behind it.
 

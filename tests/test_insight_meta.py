@@ -30,9 +30,9 @@ def test_recall_line_keeps_meta_past_the_cut():
     """
     ins = make_insight(
         id='meta-line-1', content='x' * (BRIEF_CONTENT_CHARS + 50),
-        meta={'ref': '.handoff/auth-refresh/'})
+        meta={'ref': 'docs/auth-refresh/'})
     line = insight_to_recall_line(ins, 0.5)
-    assert line.endswith('... [ref=.handoff/auth-refresh/]'), line
+    assert line.endswith('... [ref=docs/auth-refresh/]'), line
 
 
 def test_recall_line_quotes_a_value_holding_a_space():
@@ -72,15 +72,15 @@ def test_remember_meta_reaches_show_and_recall(mm_runner):
     Oracle: the pairs passed on the command line.
     """
     result = invoke(mm_runner, [
-        'remember', '--meta', 'ref=.handoff/zebra-slug/',
-        '--meta', 'ticket=ABC-12', 'the zebra rollout waits on review'])
+        'remember', '--meta', 'ref=docs/zebra-slug/',
+        '--meta', 'ticket=ABC-12', 'the zebra cache evicts entries after an hour'])
     fact = parse_remember(result, mm_runner)
     shown = _show(mm_runner, fact['id'])
     assert shown['meta'] == {
-        'ref': '.handoff/zebra-slug/', 'ticket': 'ABC-12'}
+        'ref': 'docs/zebra-slug/', 'ticket': 'ABC-12'}
     page = invoke(mm_runner, ['recall', '--basic', 'zebra'])
     assert page.output.strip().endswith(
-        '[ref=.handoff/zebra-slug/ ticket=ABC-12]'), page.output
+        '[ref=docs/zebra-slug/ ticket=ABC-12]'), page.output
 
 
 @pytest.mark.parametrize('pairs', [
@@ -126,10 +126,10 @@ def test_remember_accepts_meta_at_the_byte_cap(mm_runner):
 # --- Replace ---
 
 def _remember_with_ref(mm_runner: tuple) -> str:
-    """Store one row carrying `ref=.handoff/a/` and return its id.
+    """Store one row carrying `ref=docs/a/` and return its id.
     """
     result = invoke(mm_runner, [
-        'remember', '--meta', 'ref=.handoff/a/', 'the first claim'])
+        'remember', '--meta', 'ref=docs/a/', 'the first claim'])
     return parse_remember(result, mm_runner)['id']
 
 
@@ -143,7 +143,7 @@ def test_replace_without_meta_keeps_the_target_pairs(mm_runner):
     old_id = _remember_with_ref(mm_runner)
     result = invoke(mm_runner, ['replace', old_id, 'the corrected claim'])
     fact = parse_remember(result, mm_runner)
-    assert _show(mm_runner, fact['id'])['meta'] == {'ref': '.handoff/a/'}
+    assert _show(mm_runner, fact['id'])['meta'] == {'ref': 'docs/a/'}
 
 
 def test_replace_with_meta_stores_exactly_the_pairs_given(mm_runner):
@@ -183,8 +183,8 @@ def test_meta_round_trips_through_the_store(backend):
     Oracle: the dict passed to insert.
     """
     backend.nodes.insert(make_insight(
-        id='meta-rt-1', meta={'ref': '.handoff/x/'}))
-    assert backend.nodes.get('meta-rt-1').meta == {'ref': '.handoff/x/'}
+        id='meta-rt-1', meta={'ref': 'docs/x/'}))
+    assert backend.nodes.get('meta-rt-1').meta == {'ref': 'docs/x/'}
 
 
 def test_meta_round_trips_through_the_raw_path(backend):
@@ -199,12 +199,12 @@ def test_meta_round_trips_through_the_raw_path(backend):
         enrich_attempted_at=None, enriched_at=None,
         created_at=now, updated_at=now, deleted_at=None,
         embedding_model=None, queue_uuid=None, replaced_by=None,
-        author=None, summary_model=None, meta={'ref': '.handoff/y/'}))
-    assert backend.nodes.get_raw('meta-raw-1').meta == {'ref': '.handoff/y/'}
+        author=None, summary_model=None, meta={'ref': 'docs/y/'}))
+    assert backend.nodes.get_raw('meta-raw-1').meta == {'ref': 'docs/y/'}
 
 
 @pytest.mark.parametrize(('meta', 'word'), [
-    pytest.param({'ref': '.handoff/quokka-plan/'}, 'quokka', id='value'),
+    pytest.param({'ref': 'docs/quokka-plan/'}, 'quokka', id='value'),
     pytest.param({'quokka_ref': 'x'}, 'quokka', id='key'),
     pytest.param({'ref': 'r\u00e9sum\u00e9-plan'}, 'r\u00e9sum\u00e9', id='non-ascii'),
     ])
@@ -222,7 +222,7 @@ def test_keyword_index_matches_a_meta_word(backend, meta, word):
 
 
 @pytest.mark.parametrize('word', [
-    pytest.param('.handoff/quokka-plan/', id='path'),
+    pytest.param('docs/quokka-plan/', id='path'),
     pytest.param('QUOKKA', id='case-folded'),
     ])
 def test_basic_query_matches_a_meta_value(backend, word):
@@ -233,7 +233,7 @@ def test_basic_query_matches_a_meta_value(backend, word):
     """
     backend.nodes.insert(make_insight(
         id='meta-basic-1', content='a claim with no slug',
-        meta={'ref': '.handoff/quokka-plan/'}))
+        meta={'ref': 'docs/quokka-plan/'}))
     assert [i.id for i in backend.nodes.query(keyword=word)] == [
         'meta-basic-1']
 
@@ -245,6 +245,6 @@ def test_scored_recall_page_prints_meta(mm_runner):
     Oracle: the pair passed to remember.
     """
     invoke(mm_runner, [
-        'remember', '--meta', 'ref=.handoff/kiwi/', 'the kiwi rollout plan'])
+        'remember', '--meta', 'ref=docs/kiwi/', 'the kiwi rollout plan'])
     page = invoke(mm_runner, ['recall', 'kiwi rollout plan'])
-    assert '| the kiwi rollout plan [ref=.handoff/kiwi/]' in page.output
+    assert '| the kiwi rollout plan [ref=docs/kiwi/]' in page.output

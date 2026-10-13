@@ -212,9 +212,7 @@ def remove_claude_hooks(
 def add_claude_hooks_selective(
         data: dict, hooks_dir: str,
         remind: bool = False,
-        compact: bool = False,
-        task_recall: bool = False,
-        exit_plan: bool = False) -> None:
+        task_recall: bool = False) -> None:
     """Idempotently set memman hooks in Claude Code settings.
 
     Parameters
@@ -227,17 +225,15 @@ def add_claude_hooks_selective(
         leaves the settings unchanged.
     hooks_dir : str
         Directory holding the hook scripts.
-    remind, compact, task_recall, exit_plan : bool
-        Also register the user-prompt, pre-compact, task-recall, and
-        exit-plan hooks. The session-start prime hook is always set.
+    remind, task_recall : bool
+        Also register the user-prompt and task-recall hooks. The
+        session-start prime hook is always set.
     """
     home = str(Path.home())
     registrations = [
         (True, 'SessionStart', 'prime.sh', None),
         (remind, 'UserPromptSubmit', 'user_prompt.sh', None),
-        (compact, 'PreCompact', 'compact.sh', None),
         (task_recall, 'PreToolUse', 'task_recall.sh', 'Agent|Task'),
-        (exit_plan, 'PreToolUse', 'exit_plan.sh', 'ExitPlanMode'),
         ]
     wanted = []
     for enabled, event, script, matcher in registrations:

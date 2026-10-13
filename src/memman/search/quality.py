@@ -30,6 +30,14 @@ TRANSIENT_PATTERNS: list[tuple[re.Pattern, str]] = [
         'transient time marker'),
     (re.compile(r'\bas of \d{4}-\d{2}-\d{2}\b', re.IGNORECASE),
         'dated observation'),
+    (re.compile(r'\bnext steps?\b', re.IGNORECASE), 'next step'),
+    (re.compile(
+        r'\b(?:step|phase|stage)\s+\d+(?:\W+\w+){0,3}?\W+'
+        r'(?:finished|done|completed?)\b', re.IGNORECASE),
+        'finished step'),
+    (re.compile(r'\bcycle \d+\b', re.IGNORECASE), 'cycle number'),
+    (re.compile(r'\bshould be changed to\b', re.IGNORECASE),
+        'pending change'),
     ]
 
 

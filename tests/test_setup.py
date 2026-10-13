@@ -52,14 +52,6 @@ def _run_hook(script: str, input_json: str,
         env={**os.environ, 'HOME': str(tmp_home)})
 
 
-def _run_asset(name: str, input_json: str,
-               tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
-    """Run a shipped claude hook asset with HOME overridden.
-    """
-    script = str(files('memman.setup.assets').joinpath(f'claude/{name}'))
-    return _run_hook(script, input_json, tmp_home)
-
-
 class TestStripJson5:
     """JSON5 stripping primitive (comments, trailing commas).
     """
@@ -391,20 +383,16 @@ class TestHookManagement:
         Mutation: removing memman entries and appending them again,
             which moves them behind the foreign entries on each run.
         Oracle: a deep copy of the settings a first run produced, with
-            a foreign PreToolUse entry placed between memman entries.
+            a foreign PreToolUse entry placed after the memman entry.
         """
         data = {}
-        add_claude_hooks_selective(
-            data, '/hooks/memman', remind=True, compact=True,
-            task_recall=True, exit_plan=True)
+        add_claude_hooks_selective(data, '/hooks/memman', remind=True, task_recall=True)
         data['hooks']['PreToolUse'].insert(1, {
             'matcher': 'Bash',
             'hooks': [{'type': 'command', 'command': '/other/enforce.py'}],
             })
         before = copy.deepcopy(data)
-        add_claude_hooks_selective(
-            data, '/hooks/memman', remind=True, compact=True,
-            task_recall=True, exit_plan=True)
+        add_claude_hooks_selective(data, '/hooks/memman', remind=True, task_recall=True)
         assert data == before
 
     def test_add_claude_hooks_keeps_foreign_hook_in_shared_entry(self):
@@ -525,66 +513,6 @@ class TestHookManagement:
         assert len(entries) == 2
         matchers = {e['matcher'] for e in entries}
         assert matchers == {'Bash', 'Agent|Task'}
-
-    def test_add_claude_hooks_with_compact(self):
-        """Verify compact=True registers one PreCompact compact.sh hook.
-
-        Mutation: registering the wrong script, or no PreCompact event.
-        Oracle: one entry whose command ends in compact.sh.
-        """
-        data = {}
-        add_claude_hooks_selective(
-            data, '/hooks/dir', compact=True)
-        hooks = data['hooks']
-        assert 'PreCompact' in hooks
-        entries = hooks['PreCompact']
-        assert len(entries) == 1
-        assert entries[0]['hooks'][0]['command'].endswith(
-            'compact.sh')
-
-    def test_add_claude_hooks_compact_default_false(self):
-        """Verify no PreCompact entry appears unless compact is set.
-
-        Mutation: defaulting compact to True.
-        Oracle: 'PreCompact' absent from the hook keys.
-        """
-        data = {}
-        add_claude_hooks_selective(data, '/hooks/dir')
-        hooks = data['hooks']
-        assert 'PreCompact' not in hooks
-
-    def test_add_claude_hooks_with_exit_plan(self):
-        """Verify exit_plan=True registers an ExitPlanMode PreToolUse hook.
-
-        Mutation: a wrong matcher, or the wrong script.
-        Oracle: one entry with matcher 'ExitPlanMode' and command exit_plan.sh.
-        """
-        data = {}
-        add_claude_hooks_selective(
-            data, '/hooks/dir', exit_plan=True)
-        hooks = data['hooks']
-        assert 'PreToolUse' in hooks
-        entries = hooks['PreToolUse']
-        assert len(entries) == 1
-        assert entries[0]['matcher'] == 'ExitPlanMode'
-        assert entries[0]['hooks'][0]['command'].endswith(
-            'exit_plan.sh')
-
-    def test_add_claude_hooks_task_recall_and_exit_plan(self):
-        """Verify task_recall with exit_plan registers two PreToolUse entries.
-
-        Mutation: the second flag overwriting the first entry.
-        Oracle: two entries with the matcher set {'Agent|Task',
-            'ExitPlanMode'}.
-        """
-        data = {}
-        add_claude_hooks_selective(
-            data, '/hooks/dir', task_recall=True, exit_plan=True)
-        hooks = data['hooks']
-        entries = hooks['PreToolUse']
-        assert len(entries) == 2
-        matchers = {e['matcher'] for e in entries}
-        assert matchers == {'Agent|Task', 'ExitPlanMode'}
 
 
 class TestPermissions:
@@ -728,111 +656,16 @@ class TestPermissions:
         """
         data: dict = {}
         add_claude_hooks_selective(
-            data, '/hooks/dir', remind=True, compact=True,
-            task_recall=True, exit_plan=True)
+            data, '/hooks/dir', remind=True,
+            task_recall=True)
         allow = data.get('permissions', {}).get('allow', [])
         for entry in list_claude_permissions():
             assert entry not in allow
 
 
-class TestPrimeAndCompactHooks:
-    """Prime / compact hook script execution.
+class TestPrimeHook:
+    """Prime hook script execution.
     """
-
-    def test_compact_hook_script(self, tmp_path):
-        """Verify compact.sh writes a flag file for the session.
-
-        Mutation: a wrong flag path, or a flag missing the trigger or ts key.
-        Oracle: the flag read back against the payload's trigger.
-        """
-        result = _run_asset(
-            'compact.sh',
-            '{"session_id": "test-abc-123", "trigger": "manual"}', tmp_path)
-        assert result.returncode == 0
-
-        flag = tmp_path / '.memman' / 'compact' / 'test-abc-123.json'
-        assert flag.exists()
-        data = json.loads(flag.read_text())
-        assert data['trigger'] == 'manual'
-        assert 'ts' in data
-
-    def test_compact_hook_script_no_session(self, tmp_path):
-        """Verify compact.sh writes no flag without a session_id.
-
-        Mutation: writing a flag named from an empty id.
-        Oracle: exit status 0 and an absent compact directory.
-        """
-        result = _run_asset(
-            'compact.sh',
-            '{"trigger": "auto"}', tmp_path)
-        assert result.returncode == 0
-
-        compact_dir = tmp_path / '.memman' / 'compact'
-        assert not compact_dir.exists()
-
-    def test_prime_hook_compact_source(self, tmp_path):
-        """Verify prime.sh on a compact source reports the flag's trigger.
-
-        Mutation: ignoring the flag file, or deleting it after reading.
-        Oracle: the flag's trigger 'manual' in the output, and the flag still
-            present.
-        """
-        compact_dir = tmp_path / '.memman' / 'compact'
-        compact_dir.mkdir(parents=True)
-        flag = compact_dir / 'sess-42.json'
-        flag.write_text('{"trigger":"manual","ts":"2026-01-01T00:00:00Z"}')
-
-        result = _run_asset(
-            'prime.sh',
-            '{"source": "compact", "session_id": "sess-42"}', tmp_path)
-        assert result.returncode == 0
-        assert 'compacted' in result.stdout
-        assert 'manual' in result.stdout
-        assert 'recall' in result.stdout.lower()
-        assert flag.exists()
-
-    def test_prime_hook_compact_no_flag(self, tmp_path):
-        """Verify prime.sh on a compact source defaults the trigger to auto.
-
-        Mutation: failing, or printing no compact notice, when the flag file
-            is absent.
-        Oracle: 'compacted' and 'auto' in the output.
-        """
-        result = _run_asset(
-            'prime.sh',
-            '{"source": "compact", "session_id": "no-flag"}', tmp_path)
-        assert result.returncode == 0
-        assert 'compacted' in result.stdout
-        assert 'auto' in result.stdout
-
-    def test_prime_hook_normal_source(self, tmp_path):
-        """Verify prime.sh prints no compact notice on a normal startup.
-
-        Mutation: emitting the compact notice for every source.
-        Oracle: 'compacted' absent from the output.
-        """
-        result = _run_asset(
-            'prime.sh',
-            '{"source": "startup"}', tmp_path)
-        assert result.returncode == 0
-        assert 'compacted' not in result.stdout
-
-    def test_exit_plan_hook_advisory(self, tmp_path):
-        """Verify exit_plan.sh prints an advisory and exits 0.
-
-        Mutation: a blocking exit status, or a flag directory written.
-        Oracle: exit status 0, 'memman' and 'plan' in the output, and an
-            absent exit_plan directory.
-        """
-        result = _run_asset(
-            'exit_plan.sh',
-            '{"session_id": "test-plan-123"}', tmp_path)
-        assert result.returncode == 0
-        assert 'memman' in result.stdout.lower()
-        assert 'plan' in result.stdout.lower()
-
-        flag_dir = tmp_path / '.memman' / 'exit_plan'
-        assert not flag_dir.exists()
 
     def test_prime_hook_emits_guide_content(self, tmp_path):
         """Verify prime.sh relays the output of `memman prime`.
@@ -948,8 +781,7 @@ class TestUserPromptHook:
             remember needed?" clause, which UserPromptSubmit delivers
             before the turn whose end it asks about.
         Oracle: the two phrases that made up the deleted clause, checked
-            against a payload that still carries a session id, so the
-            flag-stamping mention of remember in the hint stays allowed.
+            against a payload that carries a session id.
         """
         out = _run_hook(
             _prompt_script(),
@@ -977,7 +809,6 @@ class TestNoBlockingHook:
         payload = json.dumps({
             'stop_hook_active': False,
             'session_id': 'sess-block-probe',
-            'trigger': 'auto',
             })
         trees = (
             ('claude', assets.joinpath('claude')),
@@ -1026,7 +857,6 @@ class TestNoBlockingHook:
         assert set(data['hooks']) == {
             'SessionStart',
             'UserPromptSubmit',
-            'PreCompact',
             'PreToolUse',
             }
 
@@ -1063,8 +893,8 @@ class TestPreToolUseHooksReachTheModel:
         """
         registered: dict = {}
         add_claude_hooks_selective(
-            registered, '/hooks/dir', remind=True, compact=True,
-            task_recall=True, exit_plan=True)
+            registered, '/hooks/dir', remind=True,
+            task_recall=True)
         scripts = [
             pathlib.Path(hook['command']).name
             for entry in registered['hooks']['PreToolUse']
@@ -1200,36 +1030,6 @@ class TestSetupCli:
         result = CliRunner().invoke(cli, ['prime'], input='{}')
         assert result.exit_code == 0
         assert '[memman] Memory active (2 insights).' in result.output
-
-    def test_prime_command_emits_compact_hint(self, tmp_path, monkeypatch):
-        """Verify `memman prime` prints the compact hint for source=compact.
-
-        Mutation: ignoring the payload's source.
-        Oracle: the hint phrase 'Context was just compacted'.
-        """
-        monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
-        runner = CliRunner()
-        payload = json.dumps({'source': 'compact', 'session_id': 'sess-x'})
-        result = runner.invoke(cli, ['prime'], input=payload)
-        assert result.exit_code == 0
-        assert 'Context was just compacted' in result.output
-
-    def test_prime_command_reads_compact_flag_trigger(self, tmp_path, monkeypatch):
-        """Verify `memman prime` reads the trigger from the flag file.
-
-        Mutation: always printing the default trigger.
-        Oracle: the flag's 'manual' trigger in the output.
-        """
-        monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
-        compact_dir = tmp_path / '.memman' / 'compact'
-        compact_dir.mkdir(parents=True)
-        (compact_dir / 'sess-y.json').write_text(
-            json.dumps({'trigger': 'manual'}))
-        runner = CliRunner()
-        payload = json.dumps({'source': 'compact', 'session_id': 'sess-y'})
-        result = runner.invoke(cli, ['prime'], input=payload)
-        assert result.exit_code == 0
-        assert 'compacted (manual)' in result.output
 
 
 class TestSymlinks:

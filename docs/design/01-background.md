@@ -4,15 +4,30 @@
 
 ## 1.1 The problem
 
-A coding agent cannot rely on its conversation window as a permanent record. New sessions lack the full history, and compaction condenses earlier work. The user may have to explain decisions, preferences, and project details again.
+A coding agent learns things that outlive the task at hand: a decision, a preference, a fact about a project, the result of an experiment. Its conversation window ends with the session, so the user explains them again in the next one.
 
-memman gives the agent a separate store for knowledge worth keeping. It saves individual claims that the agent can search later, rather than archiving entire conversations.
+memman gives the agent a separate store for findings worth keeping. It saves individual claims that the agent can search later. It never archives a conversation.
 
 ## 1.2 Scope
 
-The included integration supports Claude Code. The agent uses memman's CLI through Bash, guided by lifecycle hooks and an installed skill. The same CLI is available for direct use and scripts.
+The included integrations support Claude Code and Codex. The agent uses memman's CLI through Bash. In Claude Code, lifecycle hooks and an installed skill guide it. In Codex, the skill alone does. The same CLI is available for direct use and scripts.
 
 Memories are explicit: the agent chooses their text. memman does not decide which conversation details matter or automatically resolve contradictory claims. The agent uses `replace` to correct a memory and `forget` to remove it from recall.
+
+A memory holds a lasting finding, one that outlives any task or session. A finding is worth storing when a later session without it would redo work, repeat a mistake, or ask the user again.
+
+Use cases of memories worth storing:
+
+- a user preference, only when it changes future work and no file that loads every session already holds it
+- a decision about the work, with its reason
+- a lasting fact about a system, project, or tool
+- a root cause and its fix, stated as the resulting fact
+- an experiment's result and what it means
+- an approach ruled out, with the reason
+
+Session state never belongs in a memory: where a session left off, the next step, a plan and its steps, progress through a plan, a finished step or migration, the working-tree state, a commit or release receipt, an open question, or a pointer to resume. The agent stores the decision, fact, or result the work reached. A finding may carry a `--meta` pointer to its work folder. A store branch takes the same content rules as its parent.
+
+`remember` and `replace` refuse text that opens with a label. The error says to open on the subject and state the lasting finding as a sentence, or store nothing when the text is session state. They warn, without blocking, on wording such as "next step", a numbered step or phase finished, or "cycle N" ([rejected input](../USAGE.md#rejected-input)).
 
 ## 1.3 Responsibilities
 
@@ -29,13 +44,13 @@ This division is what **LLM-supervised memory** means here: the coding agent dir
 
 ## 1.4 Design trade-offs
 
-| Choice                                 | Benefit                                                                                           | Trade-off                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Process writes in the background       | `remember` does not wait for model requests.                                                      | Recall sees it only after the worker stores it.                          |
-| Combine keywords, vectors, and recency | Find exact terms, related wording, and recent context.                                            | Recency may introduce unrelated results; the agent must judge relevance. |
-| Make corrections explicit              | Preserve the original claim and its replacement history.                                          | The agent must identify duplicates and contradictions.                   |
-| Retain memories indefinitely           | A store grows more useful as it accumulates claims, and no cap deletes a true claim to make room. | Outdated claims need review.                                             |
-| Soft delete                            | A forgotten successor keeps its row, so its predecessor's `replaced_by` still resolves.           | Forgotten rows stay on disk.                                             |
+| Choice                                 | Benefit                                                                                           | Trade-off                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Process writes in the background       | `remember` does not wait for model requests.                                                      | Recall sees it only after the worker stores it.                   |
+| Combine keywords, vectors, and recency | Find exact terms, related wording, and recently stored findings.                                  | Recency can return unrelated results. The agent judges relevance. |
+| Make corrections explicit              | Preserve the original claim and its replacement history.                                          | The agent must identify duplicates and contradictions.            |
+| Retain memories indefinitely           | A store grows more useful as it accumulates claims, and no cap deletes a true claim to make room. | Outdated claims need review.                                      |
+| Soft delete                            | A forgotten successor keeps its row, so its predecessor's `replaced_by` still resolves.           | Forgotten rows stay on disk.                                      |
 
 Recall follows these rules:
 
@@ -47,7 +62,7 @@ Recall follows these rules:
 | Recency            | Creation time, without interpreting dates in the query.                                                            | Each recall line prints `created_at`, so the agent reads the dates itself.                                                         |
 | Result order       | Scored recall returns results in relevance order, and no later step re-sorts them. `--basic` returns newest first. | A date sort would make results read as a timeline, and a larger limit keeps earlier rows in place.                                 |
 | Duplicate handling | Explicit replacement for repeated claims. A queue UUID prevents a retried write from inserting twice.              | The agent has the conversation context, so it judges which claim a new one corrects.                                               |
-| Quality review     | Advisory patterns flag potentially temporary information and never block a write.                                  | The agent judges what is durable.                                                                                                  |
+| Quality review     | Advisory patterns flag temporary information and session-state wording, and never block a write.                   | The rule binds the agent: a memory holds a lasting finding. The warning reminds it.                                                |
 
 [Chapter 3](03-pipelines.md#34-read-pipeline-recall) gives the scoring formula and reranking behavior.
 
@@ -64,4 +79,4 @@ A data directory can contain stores using either backend. `memman migrate` moves
 
 The write queue is always a local SQLite database that the stores in one data directory share. SQLite storage does not make memman work offline: the worker and recall still call the configured providers.
 
-[Core concepts](02-concepts.md) describes the data model, and [the migration guide](../USAGE.md#migrating-between-sqlite-and-postgres) covers changing backends.
+[Core concepts](02-concepts.md) describes the data model, and [the migration guide](../USAGE.md#migration-between-sqlite-and-postgres) covers changing backends.

@@ -484,7 +484,7 @@ def check_claude_hooks() -> dict[str, Any]:
     expected_data: dict[str, Any] = {}
     add_claude_hooks_selective(
         expected_data, str(config_dir / 'hooks' / 'memman'),
-        remind=True, compact=True, task_recall=True, exit_plan=True)
+        remind=True, task_recall=True)
     expected = memman_hook_triples(expected_data)
     live = memman_hook_triples(read_json_file(str(settings_path)))
     # An unrelated Claude installation is not missing memman hooks.

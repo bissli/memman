@@ -18,8 +18,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from click.testing import CliRunner
-from memman.cli import cli
 from memman.search.recall import run_recall
 from memman.store.backend import Backend
 from memman.store.db import open_db
@@ -410,22 +408,17 @@ def test_recall_prose_names_the_bare_command(tmp_path):
     """Verify every injected recall line names `memman recall "..."` alone.
 
     Mutation: leaving `--brief`, `--limit` or `--session` on the recall
-        line of guide.md, user_prompt.sh, task_recall.sh or prime's
-        compact hint.
+        line of guide.md, user_prompt.sh or task_recall.sh.
     Oracle: each surface's recall lines, read from the shipped asset or
         the hook's own stdout, searched for the three flags.
     """
     guide = (pkg_files('memman.setup.assets')
              .joinpath('claude/guide.md').read_text())
-    compact = CliRunner().invoke(
-        cli, ['prime'], input='{"source": "compact", "session_id": "s"}',
-        env={'MEMMAN_DATA_DIR': str(tmp_path)}).output
     surfaces = {
         'guide.md': guide,
         'user_prompt.sh': _run_asset(
             'user_prompt.sh', '{"session_id": "sess-6"}', tmp_path),
         'task_recall.sh': _run_asset('task_recall.sh', '{}', tmp_path),
-        'prime compact': compact.split('\n# memman')[0],
         }
 
     for name, text in surfaces.items():

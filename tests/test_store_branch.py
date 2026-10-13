@@ -541,9 +541,8 @@ def test_branch_starts_empty_and_names_its_parent(mm_runner):
     assert meta['branch_token'] == parent_token
     assert re.fullmatch(f'{instance}:[0-9a-f]{{32}}', parent_token)
     assert reply['instruction'] == (
-        f'Use memman store {branch} for this thread: pass --store {branch}'
-        ' to every memman recall, remember, replace, forget and insights'
-        ' show call.')
+        f'Use memman store {branch}: pass --store {branch} to every memman'
+        ' recall, remember, replace, forget and insights show call.')
 
 
 def test_branch_creation_changes_only_the_parent_token(cross_backend_runner):
@@ -845,12 +844,12 @@ def test_merge_refuses_a_parent_whose_token_is_missing_or_differs(
     assert _snapshot(data_dir, branch) == branch_before
 
 
-def test_merge_token_refusal_names_the_drop_that_keeps_the_rows(mm_runner):
+def test_merge_token_refusal_names_the_store_drop_command(mm_runner):
     """Verify the token refusal names a command, as every branch refusal does.
 
     Mutation: the refusal lists only causes, which leaves the agent no
-        move for the branch's rows.
-    Oracle: the drop command for the branch, which lists its rows.
+        command to settle the branch.
+    Oracle: the `store drop` command for the branch.
     """
     _, data_dir = mm_runner
     branch = _branch(data_dir)
@@ -1908,7 +1907,7 @@ def test_store_use_refuses_a_branch(mm_runner):
     """Verify store use leaves the host-wide active file off a branch.
 
     Mutation: a branch written to the active file, which routes every
-        session on the host into the thread.
+        session on the host into the branch.
     Oracle: the active file, read after the call.
     """
     _, data_dir = mm_runner

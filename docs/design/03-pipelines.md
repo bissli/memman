@@ -16,7 +16,7 @@ The agent runs CLI commands during its turn and waits for each to return. A sepa
 
 `replace`, `forget`, and recall open normal store sessions. Their store-opening checks can require embedding credentials or send a probe, separate from the model work listed above. Summary generation and content embedding for a new write always run in the worker.
 
-A queued memory becomes searchable only after the worker stores it. Recall reads the store on each call, so it can see a memory saved earlier in the same session.
+A queued memory becomes searchable only after the worker stores it. Recall reads the store on each call, so it returns every memory the worker has stored by then.
 
 Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drain triggers. Recall remains available. Maintenance commands that rebuild generated fields require this stopped state ([scheduler controls](../USAGE.md#scheduler)).
 
@@ -29,12 +29,12 @@ Stopping the scheduler disables `remember`, `replace`, `forget`, and manual drai
 `remember` performs these steps before returning:
 
 1. Check that writes are enabled, then validate the text against the [input rules](../USAGE.md#rejected-input) and each `--meta` pair against the [meta rules](../USAGE.md#meta-pairs).
-2. Identify potentially temporary information and report it as advisory `quality_warnings`.
+2. Flag temporary information and session-state wording, such as a next step, a numbered step or phase finished, or a cycle number, as advisory `quality_warnings`. The warnings never block the write. The rule that a memory holds a lasting finding binds the agent.
 3. Check that the selected store exists, then append a pending entry to `queue.db`, including a new UUID, the selected store, the caller's author identity, and any meta pairs. The check also refuses a branch whose merge started. On SQLite the check and the append share one `begin immediate` transaction. `store merge` and `store drop` remove a branch in the same kind of transaction. So a write either reaches the queue before the removal, and the removal then sees it and refuses, or the write meets the missing-store refusal. On Postgres the check is one schema query with `PGCONNECT_TIMEOUT` defaulting to three seconds. A connection error lets the write queue.
 4. Look for up to three related current memories. This uses word overlap and calls no model.
 5. Return JSON with `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related`.
 
-Related memories must be at most 1,000 bytes. Their score is shared-word count divided by the square root of the memory's distinct-word count. This favors focused matches. A failed read returns `related_error`; the write remains queued and the command succeeds.
+Related memories must be at most 1,000 bytes. Their score is shared-word count divided by the square root of the memory's distinct-word count. This favors focused matches. A failed read returns `related_error`. The write remains queued and the command succeeds.
 
 The UUID returned as `id` becomes the memory's persistent ID. The numeric `queue_id` identifies the queue entry, which maintenance can delete after processing.
 
@@ -42,11 +42,11 @@ The UUID returned as `id` becomes the memory's persistent ID. The numeric `queue
 
 ### Write processing
 
-A systemd timer or launchd agent runs the hidden `scheduler drain` command, and the serve loop runs the same drain inside its own process. An exclusive file lock on `<data dir>/drain.lock` prevents overlapping drains; the operating system releases it if the process exits. A drain that cannot acquire the lock reports `skipped`.
+A systemd timer or launchd agent runs the hidden `scheduler drain` command, and the serve loop runs the same drain inside its own process. An exclusive file lock on `<data dir>/drain.lock` prevents overlapping drains. The operating system releases it if the process exits. A drain that cannot acquire the lock reports `skipped`.
 
 Each drain processes up to 100 entries by default, stopping when it reaches its limit or timeout, empties the queue, or sees the stopped state. Under `scheduler serve`, SIGTERM or SIGINT also stops it.
 
-1. **Claim an entry.** An atomic update claims the oldest eligible pending write and increments its attempt count. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no entry. A replacement waits for its pending target and for earlier replacements in the same store, so the worker stores replacements in queue order. A write that fails or goes stale no longer blocks the entries behind it.
+1. **Claim an entry.** An atomic update claims the oldest eligible pending write and increments its attempt count. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no entry. A replacement waits for its pending target and for earlier replacements in the same store, so the worker stores replacements in queue order. A write that fails or goes stale does not block the entries behind it.
 2. **Open the store.** Resolve its backend and embedding fingerprint. Before each write, check that the fingerprint still matches the cached client, because a swap that finishes mid-drain would leave that client writing vectors of the wrong size. An error while opening the store, from the fingerprint check, or from planning (a missing LLM setting or embedding credentials) takes the same backoff retry as an apply error.
 3. **Check for a completed attempt.** If any memory already carries the entry's `queue_uuid`, mark the entry done without inserting again. Retired memories count too. The UUID identifies the write across retries, since a backup restore can reset the queue's row id counter.
 4. **Resolve a replacement.** Follow an existing replacement chain to its current successor when necessary, recording `redirected_from`.
@@ -54,7 +54,7 @@ Each drain processes up to 100 entries by default, stopping when it reaches its 
 6. **Commit one transaction.** Retire the replacement target by linking it to the new ID when it is still current, then insert the new memory, save generated fields and markers, and record operations.
 7. **Finish the queue entry.** Mark it done, or record an error for retry.
 
-A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. It takes the target's meta pairs when the `replace` gave no `--meta` and the target is still current at commit. If the target is no longer current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
+A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. It takes the target's meta pairs when the `replace` gave no `--meta` and the target is still current at commit. If the target is not current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
 
 ### Failure and retry
 
@@ -96,7 +96,7 @@ The systemd/launchd interval is written into the installed unit. The serve loop 
 
 `MemmanLLMClient` handles enrichment and the `doctor` connectivity probe. It posts to `<MEMMAN_ENDPOINT>/chat/completions` using `MEMMAN_LLM_MODEL` and `MEMMAN_API_KEY`.
 
-Each request allows up to 4,096 output tokens and has a 60-second timeout. The client makes up to three attempts. Retriable HTTP responses (429, 500, 502, 503, 504, 529) use one- and two-second waits; empty replies use a 0.1-second wait. The enrichment parser's extra request is separate from these transport retries.
+Each request allows up to 4,096 output tokens and has a 60-second timeout. The client makes up to three attempts. Retriable HTTP responses (429, 500, 502, 503, 504, 529) use one- and two-second waits. Empty replies use a 0.1-second wait. The enrichment parser's extra request is separate from these transport retries.
 
 On OpenRouter, the client adds attribution headers. Other endpoints receive none.
 
@@ -109,13 +109,13 @@ For OpenRouter, installation and the worker check public catalogs without an API
 - `/endpoints/zdr` must list a zero-data-retention endpoint for the exact model id, on any vendor. For a `~` alias, the id checked is the alias's `alias_target` in `/models`.
 - `/models` must not list an expiration date for it.
 
-The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). A model change therefore triggers a check on the next drain. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.
+The worker writes `{model, checked_at, notice}` to `<data dir>/model.state` and skips the check while that record names the configured model and is less than 24 hours old (`CHECK_INTERVAL_SECONDS`). The next drain after a model change therefore runs the check. A failed fetch keeps the existing notice and restarts the interval. `memman prime` prints the notice when it concerns the configured model. A catalog outage does not stop installation.
 
 The check never selects a replacement model. If enrichment requests fail, the worker still stores the memories without summaries, and re-enrichment supplies the summaries once a working model is set.
 
 ### Token accounting
 
-LLM calls identify their stage as `enrichment` or `probe`. Usage is counted for each attempt, including an HTTP 200 response that is empty and subsequently retried. Missing usage blocks and HTTP errors have separate counters; tokens reported in an error response still count.
+LLM calls identify their stage as `enrichment` or `probe`. The client counts usage for each attempt, including an empty HTTP 200 response that it then retries. Missing usage blocks and HTTP errors have separate counters. Tokens reported in an error response still count.
 
 The drain reports totals in `llm_usage`. Debug events include per-entry usage in `queue_done` and `queue_failed`, plus a drain-level `llm_usage_summary`.
 
@@ -135,17 +135,17 @@ This path skips query embedding and reranking, but normal store-opening checks s
 
 Scored recall embeds the query with the store's bound model. If embedding fails, it logs a warning and proceeds with keyword and recency retrieval.
 
-| Channel | Ranking                                       | Candidate count          |
-| ------- | --------------------------------------------- | ------------------------ |
-| Keyword | Distinct query terms in content and meta      | `ANCHOR_TOP_K` = 30      |
-| Vector  | Positive cosine similarity                    | `RERANK_SHORTLIST` = 100 |
-| Recency | Creation time, newest first                   | `ANCHOR_TOP_K` = 30      |
+| Channel | Ranking                                  | Candidate count          |
+| ------- | ---------------------------------------- | ------------------------ |
+| Keyword | Distinct query terms in content and meta | `ANCHOR_TOP_K` = 30      |
+| Vector  | Positive cosine similarity               | `RERANK_SHORTLIST` = 100 |
+| Recency | Creation time, newest first              | `ANCHOR_TOP_K` = 30      |
 
 The union of these lists forms the candidate set, with no further cap. The vector channel takes 100 so the reranker sees a full shortlist of the query's nearest memories.
 
-Keyword tokenization lowercases text, splits on any character that is not a Unicode letter or number, and removes stopwords. SQLite uses an FTS5 probe per term; Postgres counts intersections with `kw_tokens`. Both count precomposed text alike. A decomposed accent or a Turkish dotted capital I still splits differently in FTS5, so such a word scores no keyword hit on SQLite.
+Keyword tokenization lowercases text, splits on any character that is not a Unicode letter or number, and removes stopwords. SQLite uses an FTS5 probe per term. Postgres counts intersections with `kw_tokens`. Both count precomposed text alike. A decomposed accent or a Turkish dotted capital I still splits differently in FTS5, so such a word scores no keyword hit on SQLite.
 
-SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine threshold means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails if an absolute floor is reintroduced.
+SQLite computes vector similarities in a matrix product. Postgres uses pgvector, including HNSW for vector candidates. The vector candidate list excludes zero and negative cosines and applies no other floor. A fixed cosine threshold means different things under different embedding models, while the sign boundary means the same under every model. `tests/test_vector_anchor_floor.py` fails on an absolute floor.
 
 ### Combined scoring
 
@@ -181,15 +181,15 @@ Reranking changes what the blend weights decide:
 - With 100 or fewer candidates, the reranker rescores all of them, and the weights have no effect on the final order.
 - When reranking does not run (a query of two or fewer words, reranking disabled for the store, or a failed request), the weights set the final order.
 
-The limit is `--limit`, then `MEMMAN_RECALL_LIMIT`, then 20. A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups; their scores are not comparable. Scores also cannot be compared across queries. On the basic path, `--limit 0` returns no rows; on the scored path it means no limit.
+The limit is `--limit`, then `MEMMAN_RECALL_LIMIT`, then 20. A positive `--limit` applies last, with no further sort. A larger limit keeps the earlier rows in place. Results stay in relevance order, because a date sort would present them as a timeline. Each line includes `created_at`, so dates remain available. Reranked candidates precede any remaining candidates, which keep their combined scores. A limit over 100, or `--limit 0`, can expose both groups, whose scores use different scales. A score also means nothing across queries. On the basic path, `--limit 0` returns no rows. On the scored path it means no limit.
 
 ### Recall trace events
 
-With tracing enabled, `recall_anchors` reports each channel's hits and the candidate union; `recall_rerank` reports shortlist size and changed positions. These events help distinguish poor candidate selection from an ineffective rerank.
+With tracing enabled, `recall_anchors` reports each channel's hits and the candidate union. `recall_rerank` reports shortlist size and changed positions. These events help distinguish poor candidate selection from an ineffective rerank.
 
 Only the drain and serve loop attach the trace file handler. A standalone recall process does not write these events to `~/.memman/logs/debug.log`.
 
-## 3.5 Handling model changes
+## 3.5 Model changes
 
 Prompts, models, and providers change over time. memman does not aim for identical output across versions. It records the models behind each summary and vector, so an operator can compare outcomes by model with SQL. It applies no fixed similarity cutoff, because a cutoff would tie the code to one model's behavior.
 
@@ -215,13 +215,13 @@ Prompts, models, and providers change over time. memman does not aim for identic
 2. Draws a name, drawing again while a store of that name exists or the parent holds its token, and creates the branch directory.
 3. Creates the branch store with no rows and a meta of `embed_fingerprint` (the parent's), `branch_parent`, `branch_created_at`, and `branch_token`. Writes the same token to the parent's meta as `branch_token:<branch>`. The token is `<instance id>:<32 hex digits>`. The instance id is a random value that the first branch writes to `<data dir>/instance_id`, so the token names the data dir that made the branch. A backup bundle leaves the file out.
 
-A branch writes no env keys. Every name holding `__` resolves to SQLite, and recall on a branch follows the parent's `MEMMAN_RERANK_ENABLED_<parent>`. A failure after the directory exists removes the directory before raising. The output carries the instruction line that routes a session to the branch: "Use memman store <branch> for this thread: pass --store <branch> to every memman recall, remember, replace, forget and insights show call."
+A branch writes no env keys. Every name holding `__` resolves to SQLite, and recall on a branch follows the parent's `MEMMAN_RERANK_ENABLED_<parent>`. A failure after the directory exists removes the directory before raising. The output carries the instruction line that routes a session to the branch: "Use memman store <branch>: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A branch takes the same content rules as its parent.
 
 ### Reads and writes
 
 The overlay opens the parent read-only on first use, so a plain `remember` and the drain's enrich work while the parent is unreachable. Every id the branch holds, in any state, hides the parent row with that id.
 
-- Recall ranks the branch's rows and the parent's current rows in one pass. It refuses when the parent's embed fingerprint differs from the branch's, and the message names the branch's embed swap. It also refuses when the parent's `branch_token:<branch>` is missing or differs from the branch's token, as after a parent recreated under the same name, pointed at another database, or restored from a backup older than the branch. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>`, which lists the branch rows to remember again in the parent.
+- Recall ranks the branch's rows and the parent's current rows in one pass. It refuses when the parent's embed fingerprint differs from the branch's, and the message names the branch's embed swap. It also refuses when the parent's `branch_token:<branch>` is missing or differs from the branch's token, as after a parent recreated under the same name, pointed at another database, or restored from a backup older than the branch. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>` and re-save each listed row worth storing in the parent.
 - Opening a branch never compares fingerprints, so the drain, `doctor`, an embed swap, and `drop` work across a parent swap.
 - `count_active` and the `status` total count the rows recall sees.
 - `remember`, `replace`, and `forget` write only the branch. A `replace` or `forget` of a current parent row copies the row raw into the branch and retires the copy there (copy-on-write). A `replace` or `forget` of a parent row the parent already retired fails and names the current head of its chain.
@@ -254,6 +254,6 @@ A failure in the checks before the parent transaction clears the flag, so the br
 
 ### Drop
 
-`store drop <branch>` refuses a store without `branch_parent`, a branch that a re-run of merge would finish (the state above), the active branch, a running drain, and a pending or failed queue row for the branch. It reads the branch's current rows, then asks the parent which rows they correct. `replaces` names the parent row at the root of the row's chain in the branch, and is null for a branch-only chain and for every row when the parent cannot answer. The parent read uses `PGCONNECT_TIMEOUT` defaulting to three seconds. A missing parent does not stop the drop. An unreachable parent stops it only when the flag is set, since drop then cannot tell whether a merge wrote the parent. Drop then removes the branch as merge does. After that it removes the parent's token, when the parent holds it. When the token removal fails, drop logs a warning and still returns the listing. When the queue re-check refuses the drop, the token stays, so a later merge still accepts the branch. The output lists each current row as `{id, content, replaces}`, so the agent can re-save a claim unrelated to the thread with `remember --store <parent>` and then write a closing row.
+`store drop <branch>` refuses a store without `branch_parent`, a branch that a re-run of merge would finish (the state above), the active branch, a running drain, and a pending or failed queue row for the branch. It reads the branch's current rows, then asks the parent which rows they correct. `replaces` names the parent row at the root of the row's chain in the branch, and is null for a branch-only chain and for every row when the parent cannot answer. The parent read uses `PGCONNECT_TIMEOUT` defaulting to three seconds. A missing parent does not stop the drop. An unreachable parent stops it only when the flag is set, since drop then cannot tell whether a merge wrote the parent. Drop then removes the branch as merge does. After that it removes the parent's token, when the parent holds it. When the token removal fails, drop logs a warning and still returns the listing. When the queue re-check refuses the drop, the token stays, so a later merge still accepts the branch. The output lists each current row as `{id, content, replaces}`. After a token refusal, merge cannot run, so the agent re-saves every listed claim worth storing with `remember --store <parent>` or `replace --store <parent> <replaces>`. Otherwise the user names the claims to keep, and the agent offers each experiment result or ruled-out approach the branch reached.
 
-A branch whose directory was removed by hand leaves the parent's token and this host's queued writes for it. `store drop <branch>` on such a name takes the parent from the part before the first `__`, under the drain lock. It refuses when the parent cannot answer, or when the parent's token carries another data dir's instance id, since a branch on another host may still need it. Otherwise it removes the token, then lists the unprocessed queued writes as `{id: null, content, replaces}` and purges every queue row for the name in one `begin immediate` transaction. The output sets `directory_missing`. A name with no token and no queued write gets the missing-store refusal. A token from before instance ids has no owner part and stays until it is deleted by hand.
+A branch whose directory was removed by hand leaves the parent's token and this host's queued writes for it. `store drop <branch>` on such a name takes the parent from the part before the first `__`, under the drain lock. It refuses when the parent cannot answer, or when the parent's token carries another data dir's instance id, since a branch on another host may still need it. Otherwise it removes the token, then lists the unprocessed queued writes as `{id: null, content, replaces}` and purges every queue row for the name in one `begin immediate` transaction. The output sets `directory_missing`. A name with no token and no queued write gets the missing-store refusal. A token with no owner part stays until the operator deletes it by hand.

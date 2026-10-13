@@ -813,6 +813,21 @@ class TestInsightsReview:
         data = json.loads(result.output)
         assert data['total_flagged'] == 0
 
+    def test_review_offers_forget_and_replace_actions(self, runner):
+        """Verify the review payload offers both `forget` and `replace`.
+
+        Mutation: dropping the `replace` action, which leaves a flagged
+            session-state row no move that keeps the finding it reached.
+        Oracle: the two action commands written out by hand.
+        """
+        result = invoke(runner, ['insights', 'review'])
+        assert result.exit_code == 0
+        actions = json.loads(result.output)['actions']
+        assert actions == {
+            'forget': 'memman forget <id>',
+            'replace': 'memman replace <id> "<the finding it reached>"',
+            }
+
 
 class TestReplace:
     """`memman replace` happy paths, metadata, oplog.

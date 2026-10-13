@@ -1,6 +1,6 @@
 # Design and architecture
 
-memman gives Claude Code persistent, searchable memory. The agent decides what to save, recall, replace, or forget. A background worker prepares queued memories for search, and the CLI retrieves them on demand.
+memman gives Claude Code and Codex persistent, searchable memory. The agent decides what to save, recall, replace, or forget. A background worker prepares queued memories for search, and the CLI retrieves them on demand.
 
 This guide explains the implementation and the reasons behind it. The [usage guide](USAGE.md) covers installation and commands.
 

@@ -179,8 +179,7 @@ def _claude_integration_installed(config_dir: str) -> bool:
     assets = [('claude/SKILL.md', base / 'skills/memman/SKILL.md')]
     assets.extend(
         (f'claude/{name}', base / 'hooks/memman' / name)
-        for name in ('prime.sh', 'user_prompt.sh', 'compact.sh',
-                     'task_recall.sh', 'exit_plan.sh'))
+        for name in ('prime.sh', 'user_prompt.sh', 'task_recall.sh'))
     if any(starmap(is_asset_link, assets)):
         return True
     try:
@@ -250,9 +249,7 @@ def _install_claude_code(env: dict, data_dir: str,
     hook_filenames = [
         ('prime.sh', 'prime'),
         ('user_prompt.sh', 'remind'),
-        ('compact.sh', 'compact'),
         ('task_recall.sh', 'recall'),
-        ('exit_plan.sh', 'exit_plan'),
         ]
     for filename, label in hook_filenames:
         path = claude_write_hook(config_dir, filename)
@@ -263,8 +260,7 @@ def _install_claude_code(env: dict, data_dir: str,
     data = read_json_file(settings_path)
     add_claude_hooks_selective(
         data, hooks_dir,
-        remind=True, compact=True,
-        task_recall=True, exit_plan=True)
+        remind=True, task_recall=True)
 
     permissions = list_claude_permissions()
 
@@ -291,7 +287,7 @@ def _install_claude_code(env: dict, data_dir: str,
 
     print()
     print('Setup complete!')
-    print('  Hooks   prime, remind, compact, recall, exit_plan')
+    print('  Hooks   prime, remind, recall')
     print()
     print('Start a new Claude Code session to activate.')
 

@@ -1,7 +1,7 @@
 """Store branches: an empty local SQLite store over a live parent.
 
-A branch takes one thread's writes while a pasted instruction line
-routes them there. `store.overlay.OverlayBackend` reads the parent
+A branch takes the writes of every session whose notes carry its
+instruction line. `store.overlay.OverlayBackend` reads the parent
 through it, so recall on a branch ranks both stores. `merge_branch`
 replays the branch's writes into the parent and `drop_branch` discards
 them.
@@ -51,9 +51,8 @@ from memman.store.sqlite import open_sqlite_backend
 logger = logging.getLogger('memman')
 
 _INSTRUCTION = (
-    'Use memman store {branch} for this thread: pass --store {branch} to'
-    ' every memman recall, remember, replace, forget and insights show'
-    ' call.')
+    'Use memman store {branch}: pass --store {branch} to every memman'
+    ' recall, remember, replace, forget and insights show call.')
 
 
 def read_branch_info(store: str, data_dir: str) -> dict[str, str] | None:

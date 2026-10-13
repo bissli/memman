@@ -13,7 +13,7 @@
         <mxCell id="a_claude" value="&lt;b&gt;Claude Code&lt;/b&gt;&lt;br&gt;The agent. Runs the memory verbs, insights show and review, status, and doctor through Bash." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
           <mxGeometry x="90" y="100" width="228" height="84" as="geometry" />
         </mxCell>
-        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;prime.sh, user_prompt.sh, compact.sh, task_recall.sh, exit_plan.sh" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
+        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;prime.sh, user_prompt.sh, task_recall.sh" style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">
           <mxGeometry x="328" y="100" width="228" height="84" as="geometry" />
         </mxCell>
         <mxCell id="a_guide" value="&lt;b&gt;Guide&lt;/b&gt;&lt;br&gt;guide.md: recall, remember, replace, forget, insights show, and the 1,000-byte limit. memman prime prints it at session start." style="rounded=0;whiteSpace=wrap;html=1;fontSize=11;fillColor=#F3E5F5;strokeColor=#9673a6;" vertex="1" parent="1">

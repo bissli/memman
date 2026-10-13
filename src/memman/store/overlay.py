@@ -48,11 +48,11 @@ def token_refusal(branch: str, parent: str) -> str:
     """
     return (
         f'store {parent!r} does not hold the token of branch {branch!r}:'
-        ' it was removed and recreated, points at another database, or'
-        ' was restored from a backup older than the branch; fix the'
-        ' parent if it points at the wrong database, else run memman'
-        f' store drop {branch}, which lists the branch rows to remember'
-        f' again in {parent!r}')
+        ' the parent was removed and recreated, points at another'
+        ' database, or was restored from a backup older than the branch.'
+        ' Fix the parent if it points at the wrong database. Otherwise'
+        f' run memman store drop {branch} and re-save each listed row'
+        f' worth storing in {parent!r}')
 
 
 class OverlayNodeStore(NodeStore):
