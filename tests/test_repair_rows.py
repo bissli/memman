@@ -640,18 +640,41 @@ def test_audit_reports_state_integrity_and_refusal(sqlite_store, capsys):
     assert 'label' in line_by_id['b']['refusal']
 
 
-def test_audit_refuses_a_branch_parent(sqlite_store):
-    """Verify audit takes the same branch guard as a write.
+def test_apply_refusal_names_each_branch(sqlite_store):
+    """Verify the refusal of a branch parent names each of its branches.
 
-    Mutation: auditing a branch, whose overlay nodes lack the internals
-    the SQL adapter reads.
-    Oracle: the token key `memman store branch` writes into the parent.
+    Mutation: the refusal naming no branch, which leaves the user no
+    `memman store drop <branch>` to run for one removed by hand.
+    Oracle: two token keys set by hand.
+    """
+    with factory.open_backend('default', sqlite_store) as backend:
+        backend.meta.set('branch_token:default__b_0002', 'tok')
+        backend.meta.set('branch_token:default__a_0001', 'tok')
+
+    with pytest.raises(
+            repair_rows.Refused,
+            match='has branches: default__a_0001, default__b_0002;'):
+        repair_rows.apply(
+            'default', [{'action': 'delete', 'id': 'a'}], sqlite_store,
+            dry_run=True, backup_dir=None)
+
+
+def test_audit_reads_a_branch_parent(sqlite_store, capsys):
+    """Verify audit lists the rows of a store that holds a branch token.
+
+    Mutation: audit taking the write guard, which refuses a parent whose
+    rows no audit read can harm, such as one whose branch was removed by
+    hand.
+    Oracle: the token key `memman store branch` writes into the parent,
+    and the one seeded row.
     """
     with factory.open_backend('default', sqlite_store) as backend:
         backend.meta.set('branch_token:feature', 'tok')
 
-    with pytest.raises(repair_rows.Refused, match='branch'):
-        repair_rows.audit('default', sqlite_store)
+    repair_rows.audit('default', sqlite_store)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line)['id'] for line in lines] == ['a']
 
 
 @pytest.mark.parametrize(('argv', 'code', 'key'), [

@@ -411,11 +411,14 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     """Hot-path: write `MEMMAN_BACKEND_<store>` from the default if missing.
 
     Two-process safe via `_write_env_keys_with_flock`. No-op when the
-    per-store key is already present. Single-machine only -- shared
-    filesystems (NFS) are out of scope.
+    per-store key is already present, and for a branch, which takes no
+    env keys. Single-machine only -- shared filesystems (NFS) are out of
+    scope.
     """
     from memman.setup.scheduler import _write_env_keys_with_flock
 
+    if factory.is_branch_name(store_name):
+        return
     file_values = config.parse_env_file(config.env_file_path(data_dir))
     if config.BACKEND_FOR(store_name) in file_values:
         return
@@ -1849,11 +1852,13 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int | None,
                 raise click.ClickException(
                     f'MEMMAN_RECALL_LIMIT must be an integer, got {raw!r}')
     keyword_str = ' '.join(keyword)
-    store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
-    per_store_rerank = config.get_store_rerank_enabled(store_name)
-    rerank = (per_store_rerank if per_store_rerank is not None
-              else config.get_bool(config.RERANK_ENABLED, default=True))
     with _active_backend(ctx) as backend:
+        rerank_store = (
+            backend.parent_name if isinstance(backend, OverlayBackend)
+            else _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store']))
+        per_store_rerank = config.get_store_rerank_enabled(rerank_store)
+        rerank = (per_store_rerank if per_store_rerank is not None
+                  else config.get_bool(config.RERANK_ENABLED, default=True))
         if basic:
             results = backend.nodes.query(keyword=keyword_str, limit=limit)
             try:
@@ -2562,6 +2567,9 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         Store to remove. Refused when active, when a branch (`memman
         store drop` removes one), or while it holds any
         `branch_token:<branch>` key, a branch on another host included.
+        The refusal marks each key whose branch this data dir made and
+        no longer holds, which `memman store drop <branch>` clears, and
+        each key another host or data dir made.
         A SQLite store whose file cannot be read is removed unchecked.
     yes : bool
         Skip the confirmation prompt.
@@ -2569,8 +2577,8 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     \b
     Notes
     -----
-    - A stale key, left by a drop that could not reach the store, is
-      deleted by hand from the store's meta table.
+    - A key another host or data dir made, whose branch no host holds,
+      is deleted by hand from the store's meta table.
 
     \b
     Examples
@@ -2588,13 +2596,15 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     prefix = f'{BRANCH_TOKEN}:'
     try:
         info = branch_mod.read_branch_info(name, data_dir)
-        token_keys = []
+        token_by_key = {}
         if info is None:
             with factory.open_backend(
                     name, data_dir, read_only=True) as backend:
-                token_keys = sorted(
-                    key for key in backend.meta.keys()  # noqa: SIM118
-                    if key.startswith(prefix))
+                token_by_key = {
+                    key: backend.meta.get(key)
+                    for key in sorted(backend.meta.keys())  # noqa: SIM118
+                    if key.startswith(prefix)
+                    }
     except (ConfigError, BackendError, sqlite3.Error) as exc:
         if resolve_store_backend(name, data_dir) != 'sqlite':
             raise click.ClickException(
@@ -2603,24 +2613,32 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         # A local file that cannot be read holds nothing to protect, and
         # no other verb can remove it.
         logger.debug(f'store remove of unreadable {name!r}: {exc}')
-        info, token_keys = None, []
+        info, token_by_key = None, {}
     if info is not None:
         raise click.ClickException(
             f'store {name!r} is a branch of {info["parent"]!r}; run memman'
             f' store merge {name} to keep its rows, or memman store drop'
             f' {name} to throw them away')
-    if token_keys:
+    if token_by_key:
         listing = []
-        for key in token_keys:
-            holder = branch_mod.read_branch_info(
-                key.removeprefix(prefix), data_dir)
-            local = holder is not None and holder['parent'] == name
-            listing.append(key if local else f'{key} (no local branch)')
+        foreign = False
+        for key, token in token_by_key.items():
+            branch = key.removeprefix(prefix)
+            if store_exists(data_dir, branch):
+                listing.append(key)
+            elif branch_mod.made_here(token, data_dir):
+                listing.append(
+                    f'{key} (branch gone; memman store drop {branch} clears'
+                    ' it)')
+            else:
+                foreign = True
+                listing.append(f'{key} (branch on another host or data dir)')
         raise click.ClickException(
             f'store {name!r} holds branch tokens: {", ".join(listing)}.'
-            ' Merge or drop each branch first. A branch on another host may'
-            ' hold a key with no local branch; once no host holds it,'
-            f' delete the key from the meta table of {name!r} by hand')
+            ' Merge or drop each branch first'
+            + ('. A branch on another host or data dir ends with merge or'
+               ' drop there; once none holds it, delete its key from the'
+               f' meta table of {name!r} by hand' if foreign else ''))
     if not yes:
         click.confirm(
             f'Drop store "{name}" (and all of its data)?',
@@ -2739,7 +2757,10 @@ def store_drop(ctx: click.Context, branch: str) -> None:
     ----------
     branch : str
         A store made by `memman store branch`. Any other store is
-        refused.
+        refused. A branch whose directory was removed by hand is
+        accepted unless another host or data dir made it: drop clears
+        its parent token and queued writes, lists those writes in
+        `dropped` with `id` null, and sets `directory_missing`.
 
     \b
     Notes

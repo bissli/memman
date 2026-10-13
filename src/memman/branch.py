@@ -9,10 +9,14 @@ them.
 Notes
 -----
 - A store is a branch exactly when its meta holds `branch_parent`,
-  whose value names the parent. No code reads either fact from the
-  name.
+  whose value names the parent. Two readers take a fact from the
+  `<parent>__<label>_<hex>` name: `factory.is_branch_name` routes every
+  `__` name to SQLite with no env keys, and a drop of a branch whose
+  directory is gone reads the parent from the name before the first
+  `__`.
 - The parent holds `branch_token:<branch>`, and the branch holds the
-  same value under `branch_token`.
+  same value under `branch_token`: `<instance id>:<hex>`, where the
+  instance id is that of the data dir that made the branch.
 - A branch row whose id the parent holds is a copy, made when the
   branch retired that parent row. Every other branch row is
   branch-only.
@@ -29,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import click
-from memman import config, drain_lock
+from memman import drain_lock
 from memman.embed.fingerprint import META_KEY, Fingerprint, swap_command
 from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.migrate import MigrateInsight
@@ -106,16 +110,31 @@ def _acquire_drain_lock(data_dir: str) -> int:
             'a drain is running; re-run in a moment') from exc
 
 
-def _remove_env_keys(store: str, data_dir: str) -> None:
-    """Delete every per-store env key of `store`.
+def instance_id(data_dir: str) -> str:
+    """The random id of `data_dir`, written to its `instance_id` file on
+    first use.
+
+    Two processes racing on first use read the same id.
     """
-    from memman.setup.scheduler import _write_env_keys_with_flock
-    per_store_keys = {
-        f'{prefix}{store}' for prefix, _ in config.PER_STORE_KEY_SPECS}
-    stale = per_store_keys & set(
-        config.parse_env_file(config.env_file_path(data_dir)))
-    if stale:
-        _write_env_keys_with_flock({}, removes=stale, data_dir=data_dir)
+    path = Path(data_dir, 'instance_id')
+    if not path.exists():
+        staged = path.with_name(f'instance_id.{os.getpid()}.tmp')
+        try:
+            staged.write_text(secrets.token_hex(16))
+            os.link(staged, path)
+        except FileExistsError:
+            pass
+        finally:
+            staged.unlink(missing_ok=True)
+    return path.read_text().strip()
+
+
+def made_here(token: str, data_dir: str) -> bool:
+    """True when a branch token carries the instance id of `data_dir`.
+
+    A token with no `<id>:` part is never this data dir's.
+    """
+    return token.rpartition(':')[0] == instance_id(data_dir)
 
 
 def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
@@ -145,8 +164,7 @@ def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
         missing parent, a parent that is a branch, has no fingerprint,
         holds a corrupt one, or has an embed swap or re-embed in
         progress, or a parent that cannot be read. A failed step after
-        the first write removes the branch directory and env keys before
-        raising.
+        the first write removes the branch directory before raising.
     """
     if not _db.valid_store_name(label) or '__' in label:
         raise click.ClickException(
@@ -186,30 +204,16 @@ def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
            or parent_token_key(name) in parent_meta):
         name = f'{parent}__{label}_{secrets.token_hex(2)}'
     created_at = format_timestamp(datetime.now(timezone.utc))
-    token = secrets.token_hex(16)
+    token = f'{instance_id(data_dir)}:{secrets.token_hex(16)}'
 
-    from memman.setup.scheduler import _write_env_keys_with_flock
-
-    # Not `_ensure_store_backend_key`: the default may be postgres.
-    env_updates = {config.BACKEND_FOR(name): 'sqlite'}
-    parent_rerank = config.parse_env_file(
-        config.env_file_path(data_dir)).get(
-            config.RERANK_ENABLED_FOR(parent))
-    if parent_rerank is not None:
-        env_updates[config.RERANK_ENABLED_FOR(name)] = parent_rerank
-    # The key comes first, so a directory never exists that store verbs
-    # resolve to the default backend.
-    _write_env_keys_with_flock(env_updates, data_dir=data_dir)
     branch_dir = Path(_db.store_dir(data_dir, name))
-    # exist_ok=False keeps a concurrent branch's directory safe, and the
-    # keys it shares with this name hold the same values.
+    # exist_ok=False keeps a concurrent branch's directory safe.
     try:
         branch_dir.mkdir(mode=0o755, parents=True, exist_ok=False)
     except FileExistsError as exc:
         raise click.ClickException(
             f'branch name {name!r} was taken meanwhile; re-run') from exc
     except OSError as exc:
-        _remove_env_keys(name, data_dir)
         raise click.ClickException(
             f'cannot create branch directory {str(branch_dir)!r}: {exc}'
             ) from exc
@@ -224,7 +228,6 @@ def create_branch(data_dir: str, parent: str, label: str) -> dict[str, Any]:
             backend.meta.set(parent_token_key(name), token)
     except BaseException as exc:
         shutil.rmtree(branch_dir, ignore_errors=True)
-        _remove_env_keys(name, data_dir)
         if isinstance(exc, (ConfigError, BackendError)):
             raise click.ClickException(f'branch failed: {exc}') from exc
         raise
@@ -344,7 +347,6 @@ def _remove_branch(
         conn.execute('rollback')
         raise
     conn.execute('commit')
-    _remove_env_keys(branch, data_dir)
 
 
 def _parent_state(backend: Backend, row: Insight) -> str:
@@ -649,6 +651,90 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
         }
 
 
+def _drop_missing_branch(data_dir: str, branch: str) -> dict[str, Any]:
+    """Clear what a branch removed by hand left behind.
+
+    Parameters
+    ----------
+    data_dir : str
+        Base memman data directory. The caller holds its drain lock.
+    branch : str
+        A branch name whose directory is gone. The parent is the name
+        before its first `__`.
+
+    Returns
+    -------
+    dict[str, Any]
+        `action: dropped`, `store`, `parent`, `directory_missing: True`
+        and `dropped`, a `{id: None, content, replaces}` entry per write
+        still queued for the branch, which the queue then loses.
+        `replaces` names the parent row a queued replace targets, else
+        None.
+
+    Raises
+    ------
+    click.ClickException
+        Before anything changes: the parent cannot answer, holds a token
+        another host or data dir made, or holds no token while no write
+        is queued for the name.
+    """
+    parent = branch.split('__', 1)[0]
+    key = parent_token_key(branch)
+    os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
+    token = None
+    parent_ids: set[str] = set()
+    try:
+        if factory.store_exists(parent, data_dir):
+            with factory.open_backend(
+                    parent, data_dir, read_only=True) as backend:
+                token = backend.meta.get(key)
+                parent_ids = backend.nodes.get_all_ids()
+        if token is not None:
+            if not made_here(token, data_dir):
+                raise click.ClickException(
+                    f'store {parent!r} holds the token of branch'
+                    f' {branch!r} for another host or data dir; drop it'
+                    ' there')
+            with factory.open_backend(parent, data_dir) as backend:
+                if backend.meta.get(key) == token:
+                    backend.meta.delete(key)
+    except (ConfigError, BackendError, sqlite3.Error) as exc:
+        raise click.ClickException(
+            f'cannot clear the token of branch {branch!r} in {parent!r}:'
+            f' {exc}; re-run when it answers') from exc
+    sql = """
+select content, replaced_id
+from queue
+where store = ? and status != 'done'
+order by id
+"""
+    with queue_db(data_dir) as conn:
+        conn.execute('begin immediate')
+        try:
+            queued = conn.execute(sql, (branch,)).fetchall()
+            if token is None and not queued:
+                raise click.ClickException(str(StoreMissingError(branch)))
+            purge_store(conn, branch)
+        except BaseException:
+            conn.execute('rollback')
+            raise
+        conn.execute('commit')
+    return {
+        'action': 'dropped',
+        'store': branch,
+        'parent': parent,
+        'directory_missing': True,
+        'dropped': [
+            {
+                'id': None,
+                'content': content,
+                'replaces': replaced_id if replaced_id in parent_ids else None,
+                }
+            for content, replaced_id in queued
+            ],
+        }
+
+
 def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
     """Delete a branch and list the rows written in it.
 
@@ -657,14 +743,15 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
     data_dir : str
         Base memman data directory.
     branch : str
-        A store whose meta holds `branch_parent`.
+        A store whose meta holds `branch_parent`, or a branch name whose
+        directory was removed by hand (see `_drop_missing_branch`).
 
     Returns
     -------
     dict[str, Any]
-        `action: dropped`, `store`, `parent` and `dropped`, a list of
-        `{id, content, replaces}` for each current branch row. A copy
-        is always retired, so none is listed.
+        `action: dropped`, `store`, `parent`, `directory_missing: False`
+        and `dropped`, a list of `{id, content, replaces}` for each
+        current branch row. A copy is always retired, so none is listed.
         `replaces` names the parent row at the root of the row's chain
         in the branch, else None. It is None for every row when the
         parent cannot answer.
@@ -681,13 +768,16 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
     Notes
     -----
     - The parent's `branch_token:<branch>` is removed after the branch,
-      when the parent holds this branch's value and answers. A missing parent, or an
-      unreachable one when no merge started, leaves it, and the drop
-      goes ahead. A failed removal leaves it and still returns the
-      listing.
+      when the parent holds this branch's value and answers. A missing
+      parent, or an unreachable one when no merge started, leaves it,
+      and the drop goes ahead. A failed removal leaves it and still
+      returns the listing.
     """
     lock_fd = _acquire_drain_lock(data_dir)
     try:
+        if (factory.is_branch_name(branch)
+                and not _db.store_exists(data_dir, branch)):
+            return _drop_missing_branch(data_dir, branch)
         meta = _read_branch_meta(branch, data_dir)
         parent = meta[BRANCH_PARENT]
         if _db.read_active(data_dir) == branch:
@@ -755,6 +845,7 @@ def drop_branch(data_dir: str, branch: str) -> dict[str, Any]:
         'action': 'dropped',
         'store': branch,
         'parent': parent,
+        'directory_missing': False,
         'dropped': [
             {
                 'id': ins.id,

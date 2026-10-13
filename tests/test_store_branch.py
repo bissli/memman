@@ -507,17 +507,17 @@ def test_branch_starts_empty_and_names_its_parent(mm_runner):
     """Verify a new branch holds no row and carries the branch keys.
 
     Mutation: rows copied at creation, the fingerprint taken from the
-        env model, a token missing on either side, a wrong name shape,
-        or the backend or rerank env key left unwritten.
+        env model, a token missing on either side or lacking this data
+        dir's instance id, a wrong name shape, or an env key written
+        for the branch.
     Oracle: a parent fingerprint whose model differs from the env model,
-        a parent rerank key set by hand, and the name pattern.
+        the instance id file, the env file, and the name pattern.
     """
     _, data_dir = mm_runner
     _remember(mm_runner, 'The backup job runs at midnight.')
     parent_fp = Fingerprint(model='other/model', dim=EMBEDDING_DIM)
     with open_sqlite_backend('default', data_dir) as parent:
         write_fingerprint(parent, parent_fp)
-    _set_env_file_value(config.RERANK_ENABLED_FOR('default'), 'false')
 
     reply = branch_mod.create_branch(data_dir, 'default', 'rearch')
 
@@ -530,9 +530,8 @@ def test_branch_starts_empty_and_names_its_parent(mm_runner):
             }
     with open_sqlite_backend('default', data_dir) as parent:
         parent_token = parent.meta.get(f'branch_token:{branch}')
-    env = config.parse_env_file(config.env_file_path(data_dir))
-    assert env[config.BACKEND_FOR(branch)] == 'sqlite'
-    assert env[config.RERANK_ENABLED_FOR(branch)] == 'false'
+    instance = Path(data_dir, 'instance_id').read_text()
+    assert not [key for key in _env_keys(data_dir) if branch in key]
     assert branch.startswith('default__rearch_')
     assert len(branch) == 20
     assert ids == set()
@@ -540,7 +539,7 @@ def test_branch_starts_empty_and_names_its_parent(mm_runner):
     assert meta['branch_created_at'] == reply['created_at']
     assert Fingerprint.from_json(meta['embed_fingerprint']) == parent_fp
     assert meta['branch_token'] == parent_token
-    assert len(parent_token) == 32
+    assert re.fullmatch(f'{instance}:[0-9a-f]{{32}}', parent_token)
     assert reply['instruction'] == (
         f'Use memman store {branch} for this thread: pass --store {branch}'
         ' to every memman recall, remember, replace, forget and insights'
@@ -621,21 +620,17 @@ def test_branch_refuses_and_creates_nothing(mm_runner, case, refusal):
     assert _snapshot(data_dir, 'default')[1] == meta_before
 
 
-def test_failed_branch_leaves_no_directory_and_no_env_keys(
-        mm_runner, monkeypatch):
+def test_failed_branch_leaves_no_directory(mm_runner, monkeypatch):
     """Verify a failure after the first write removes what it wrote.
 
     Mutation: the cleanup arm dropped, so a half-made branch directory
-        and its backend key outlive the failure, or the parent token
-        written before the branch steps.
-    Oracle: the store directories, env keys and parent meta before the
-        call.
+        outlives the failure, or the parent token written before the
+        branch steps.
+    Oracle: the store directories and parent meta before the call.
     """
     _, data_dir = mm_runner
     _remember(mm_runner, 'The backup job runs at midnight.')
     stores_before = set(list_local_store_dirs(data_dir))
-    env_path = config.env_file_path(data_dir)
-    env_before = config.parse_env_file(env_path) if env_path.exists() else {}
 
     def failing_open(*args, **kwargs):
         raise RuntimeError('disk full')
@@ -648,7 +643,6 @@ def test_failed_branch_leaves_no_directory_and_no_env_keys(
         branch_mod.create_branch(data_dir, 'default', 'rearch')
 
     assert set(list_local_store_dirs(data_dir)) == stores_before
-    assert config.parse_env_file(env_path) == env_before
     assert _snapshot(data_dir, 'default')[1] == meta_before
 
 
@@ -1112,7 +1106,7 @@ def test_drop_lists_each_branch_row_with_the_parent_row_it_replaced(
 
     Mutation: a copy or a retired row listed, `replaces` naming the
         direct predecessor in place of the parent row at the chain's
-        root, or the directory, env keys or parent token left behind.
+        root, or the directory or parent token left behind.
     Oracle: the ids each remember and replace printed.
     """
     _, data_dir = mm_runner
@@ -1130,7 +1124,6 @@ def test_drop_lists_each_branch_row_with_the_parent_row_it_replaced(
     assert listed == {kept: None, second: stale, own_next: None}
     assert reply['parent'] == 'default'
     assert not Path(store_dir(data_dir, branch)).exists()
-    assert not [key for key in _env_keys(data_dir) if key.endswith(branch)]
     assert f'branch_token:{branch}' not in _snapshot(data_dir, 'default')[1]
 
 
@@ -1192,17 +1185,14 @@ def test_store_branch_prints_the_branch_and_its_instruction(mm_runner):
     assert f'--store {reply["store"]}' in reply['instruction']
 
 
-def test_branch_whose_directory_cannot_be_made_writes_no_env_keys(
+def test_branch_whose_directory_cannot_be_made_refuses(
         mm_runner, monkeypatch):
-    """Verify a failed branch directory create leaves no env keys.
+    """Verify a failed branch directory create ends in a refusal.
 
-    Mutation: the env keys written before the directory, outside the
-        cleanup, which leaves backend keys for a store that never
-        existed.
-    Oracle: the env file read after the call, and a refusal in place of
-        a traceback.
+    Mutation: the OSError arm around mkdir dropped, so the user gets a
+        traceback.
+    Oracle: a stub mkdir that raises PermissionError.
     """
-    _, data_dir = mm_runner
 
     class UnwritablePath(type(Path())):
         def mkdir(self, *args, **kwargs):
@@ -1213,32 +1203,59 @@ def test_branch_whose_directory_cannot_be_made_writes_no_env_keys(
     result = invoke(mm_runner, ['store', 'branch', 'default', 'rearch'])
 
     assert isinstance(result.exception, SystemExit), result.exception
-    assert not [k for k in _env_keys(data_dir) if '__rearch' in k]
 
 
-def test_branch_writes_its_backend_key_before_its_directory(
-        mm_runner, monkeypatch):
-    """Verify the branch's SQLite backend key exists before its directory.
+def test_a_branch_stays_on_sqlite_under_a_postgres_default(mm_runner):
+    """Verify a branch resolves to SQLite and gains no env key in a drain.
 
-    Mutation: the directory made first, so a kill between the two under
-        a Postgres default leaves a directory that store remove, store
-        drop and doctor resolve to Postgres and fail on.
-    Oracle: the env keys a stub mkdir reads at its call.
+    Mutation: the branch name rule missing from the resolver, the
+        drain's backend-key write, or doctor's per-store check, so a
+        branch routes to Postgres, gains a backend key and the default
+        DSN, or doctor reports it on Postgres.
+    Oracle: a Postgres default with no DSN, a parent pinned to SQLite,
+        and the env file and doctor entry read after a drained write.
     """
     _, data_dir = mm_runner
+    _set_env_file_value(config.BACKEND_FOR('default'), 'sqlite')
+    branch = _branch(data_dir)
+    _set_env_file_value(config.DEFAULT_BACKEND, 'postgres')
+
+    _remember(mm_runner, 'The worker splits in two.', branch)
+
+    report = json.loads(invoke(mm_runner, ['doctor']).output)
+    entries = next(
+        c for c in report['checks']
+        if c['name'] == 'per_store_keys')['detail']['stores']
+    assert factory.resolve_store_backend(branch, data_dir) == 'sqlite'
+    assert not [key for key in _env_keys(data_dir) if branch in key]
+    assert next(e for e in entries if e['store'] == branch)['backend'] == (
+        'sqlite')
+
+
+def test_recall_on_a_branch_follows_the_parent_rerank_key(
+        mm_runner, monkeypatch):
+    """Verify recall on a branch reranks as its parent's key says.
+
+    Mutation: recall reading a rerank key under the branch's own name,
+        so the branch falls back to the global default.
+    Oracle: a parent key set to false after the branch exists, and a
+        stub run_recall that records the rerank flag it gets.
+    """
+    from memman.search import recall as recall_mod
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    _set_env_file_value(config.RERANK_ENABLED_FOR('default'), 'false')
     seen = []
 
-    class RecordingPath(type(Path())):
-        def mkdir(self, *args, **kwargs):
-            if '__rearch' in self.name:
-                seen.append({k for k in _env_keys(data_dir) if '__rearch' in k})
-            return super().mkdir(*args, **kwargs)
+    def recording_recall(*args, rerank, **kwargs):
+        seen.append(rerank)
+        return {'results': []}
 
-    monkeypatch.setattr(branch_mod, 'Path', RecordingPath)
+    monkeypatch.setattr(recall_mod, 'run_recall', recording_recall)
 
-    store = _branch(data_dir)
+    invoke(mm_runner, ['recall', '--store', branch, 'worker'])
 
-    assert seen == [{config.BACKEND_FOR(store)}]
+    assert seen == [False]
 
 
 def test_branch_never_takes_a_name_whose_token_the_parent_holds(
@@ -1821,6 +1838,72 @@ def test_a_write_after_drop_meets_the_missing_store_refusal(mm_runner):
     assert 'The worker splits in two.' not in queued_contents(data_dir)
 
 
+@pytest.mark.no_auto_drain
+def test_drop_of_a_hand_deleted_branch_clears_its_token_and_queue(mm_runner):
+    """Verify drop after an rm -rf clears the token and lists queued writes.
+
+    Mutation: drop refusing a missing directory, the parent read from
+        the last `__` of a label ending in `_`, the queued writes
+        purged without being listed, or the parent token left.
+    Oracle: the texts queued before the rm, the parent row id the
+        replace named, and the parent meta and queue read after.
+    """
+    _, data_dir = mm_runner
+    stale = _remember(mm_runner, 'The queue runs on SQLite.')
+    force_drain(data_dir)
+    branch = _branch(data_dir, label='rearch_')
+    invoke(mm_runner, [
+        'remember', '--store', branch, 'The worker splits in two.'])
+    invoke(mm_runner, [
+        'replace', '--store', branch, stale, 'The queue moves to Redis.'])
+    shutil.rmtree(store_dir(data_dir, branch))
+
+    reply = _drop(mm_runner, branch)
+
+    assert (reply['parent'], reply['directory_missing']) == ('default', True)
+    assert reply['dropped'] == [
+        {'id': None, 'content': 'The worker splits in two.', 'replaces': None},
+        {'id': None, 'content': 'The queue moves to Redis.', 'replaces': stale},
+        ]
+    assert f'branch_token:{branch}' not in _snapshot(data_dir, 'default')[1]
+    assert queued_contents(data_dir) == ['The queue runs on SQLite.']
+
+
+def test_drop_of_a_missing_branch_keeps_a_token_another_data_dir_made(
+        mm_runner):
+    """Verify drop leaves a token whose instance id is not this data dir's.
+
+    Mutation: the owner check skipped, so a host sharing the parent
+        loses the token its live branch needs, or a token with no
+        owner part read as this data dir's.
+    Oracle: tokens set by hand, one with another instance id and one in
+        the old ownerless form.
+    """
+    _, data_dir = mm_runner
+    for token in (f'{"0" * 32}:{"f" * 32}', 'f' * 32):
+        key = 'branch_token:default__elsewhere_1a2b'
+        _set_meta(data_dir, 'default', key, token)
+
+        result = invoke(mm_runner, ['store', 'drop', 'default__elsewhere_1a2b'])
+
+        assert result.exit_code != 0
+        assert 'another host or data dir' in result.output
+        assert _snapshot(data_dir, 'default')[1][key] == token
+
+
+def test_drop_of_a_branch_with_no_trace_refuses(mm_runner):
+    """Verify drop of a branch name nothing holds refuses as missing.
+
+    Mutation: drop reporting success for a name with no directory, no
+        parent token and no queued write.
+    Oracle: the missing-store refusal text.
+    """
+    result = invoke(mm_runner, ['store', 'drop', 'default__ghost_1a2b'])
+
+    assert result.exit_code != 0
+    assert 'does not exist' in result.output
+
+
 def test_store_use_refuses_a_branch(mm_runner):
     """Verify store use leaves the host-wide active file off a branch.
 
@@ -1966,32 +2049,64 @@ def test_store_remove_removes_a_sqlite_store_it_cannot_read(mm_runner, damage):
     assert not junk_dir.exists()
 
 
-@pytest.mark.parametrize('holder', ['local branch', 'branch on another host'])
+@pytest.mark.parametrize(('holder', 'marker'), [
+    ('local branch', None),
+    ('hand-deleted branch',
+     'branch gone; memman store drop {branch} clears it'),
+    ('branch on another host', 'branch on another host or data dir'),
+    ])
 def test_store_remove_refuses_a_parent_holding_a_branch_token(
-        mm_runner, holder):
+        mm_runner, holder, marker):
     """Verify store remove keeps a parent while any branch token is on it.
 
     Mutation: no token check in store remove, or a check of local
         branches only, which removes a Postgres parent shared with a
-        branch on another host, or the marker for a key with no local
-        branch missing or misplaced.
+        branch on another host, or a key's marker missing or swapped
+        between a hand-deleted branch of this data dir and another
+        host's branch.
     Oracle: the parent's existence after the call, and the key named in
-        the refusal with the marker only for the other host's key.
+        the refusal with the marker its holder calls for.
     """
     _, data_dir = mm_runner
     invoke(mm_runner, ['store', 'create', 'work'])
-    if holder == 'local branch':
-        key = f'branch_token:{_branch(data_dir, parent="work")}'
+    branch = 'work__elsewhere_1a2b'
+    if holder == 'branch on another host':
+        _set_meta(data_dir, 'work', f'branch_token:{branch}', 'f00d')
     else:
-        key = 'branch_token:work__elsewhere_1a2b'
-        _set_meta(data_dir, 'work', key, 'f00d')
+        branch = _branch(data_dir, parent='work')
+    if holder == 'hand-deleted branch':
+        shutil.rmtree(store_dir(data_dir, branch))
+    key = f'branch_token:{branch}'
 
     result = invoke(mm_runner, ['store', 'remove', 'work', '--yes'])
 
     assert result.exit_code != 0
     assert key in result.output
-    assert (f'{key} (no local branch)' in result.output) == (
-        holder == 'branch on another host')
+    assert (f'{key} (' in result.output) == (marker is not None)
+    if marker is not None:
+        assert f'{key} ({marker.format(branch=branch)})' in result.output
+    assert factory.store_exists('work', data_dir)
+
+
+def test_store_remove_lists_a_local_branch_whose_file_cannot_be_read(
+        mm_runner):
+    """Verify a damaged local branch still gets the branch-token refusal.
+
+    Mutation: the listing opening each local branch, so a database that
+        cannot be read replaces the refusal with an open error naming
+        no token.
+    Oracle: a branch file overwritten with junk, and the key the
+        refusal must name.
+    """
+    _, data_dir = mm_runner
+    invoke(mm_runner, ['store', 'create', 'work'])
+    branch = _branch(data_dir, parent='work')
+    Path(store_dir(data_dir, branch), 'memman.db').write_bytes(b'junk' * 512)
+
+    result = invoke(mm_runner, ['store', 'remove', 'work', '--yes'])
+
+    assert result.exit_code != 0
+    assert f'holds branch tokens: branch_token:{branch}.' in result.output
     assert factory.store_exists('work', data_dir)
 
 

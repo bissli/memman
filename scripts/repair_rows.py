@@ -271,12 +271,21 @@ def _refuse_branch(backend: Backend, store: str) -> None:
     Raises
     ------
     Refused
-        The store's meta holds a branch parent or a branch token.
+        The store's meta holds a branch parent, or a branch token. The
+        message names each branch, since `memman store drop` also clears
+        the token of one removed by hand.
     """
-    if backend.meta.get(BRANCH_PARENT) is not None or any(
-            key.startswith(f'{BRANCH_TOKEN}:')
-            for key in backend.meta.keys()):  # noqa: SIM118
-        raise Refused(f'{store} is a branch or has branches')
+    if backend.meta.get(BRANCH_PARENT) is not None:
+        raise Refused(f'{store} is a branch')
+    prefix = f'{BRANCH_TOKEN}:'
+    branches = sorted(
+        key.removeprefix(prefix)
+        for key in backend.meta.keys()  # noqa: SIM118
+        if key.startswith(prefix))
+    if branches:
+        raise Refused(
+            f'{store} has branches: {", ".join(branches)}; merge or drop'
+            ' each first')
 
 
 def check_ops(op_list: list[dict[str, Any]]) -> None:
@@ -742,17 +751,18 @@ def audit(store: str, data_dir: str) -> None:
     Parameters
     ----------
     store : str
-        Store name, neither a branch nor a branch parent.
+        Store name, not a branch. A branch parent is read like any store.
     data_dir : str
         Base memman data directory.
 
     Raises
     ------
     Refused
-        `store` is a branch or has branches.
+        `store` is a branch.
     """
     with factory.open_backend(store, data_dir, read_only=True) as backend:
-        _refuse_branch(backend, store)
+        if backend.meta.get(BRANCH_PARENT) is not None:
+            raise Refused(f'{store} is a branch')
         integrity = backend.nodes.replacement_integrity()
         row_list = fetch(backend, """
 select id

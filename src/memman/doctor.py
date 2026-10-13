@@ -345,8 +345,9 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        `fail` when a store resolves to an unregistered backend
-        (per-store key, then `MEMMAN_DEFAULT_BACKEND`, then `sqlite`),
+        `fail` when a store resolves to an unregistered backend (`sqlite`
+        with source `branch` for a branch, else the per-store key, then
+        `MEMMAN_DEFAULT_BACKEND`, then `sqlite`),
         or to `postgres` with no DSN in `MEMMAN_POSTGRES_DSN_<store>` or
         `MEMMAN_DEFAULT_POSTGRES_DSN`. Else `pass`, including with no
         stores.
@@ -379,7 +380,10 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
     for store in stores:
         per_key = config.BACKEND_FOR(store)
         per_value = (file_values.get(per_key) or '').strip()
-        if per_value:
+        if factory.is_branch_name(store):
+            kind = 'sqlite'
+            source = 'branch'
+        elif per_value:
             kind = per_value.lower()
             source = 'per_store'
         else:

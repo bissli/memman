@@ -56,12 +56,23 @@ class BackendDescriptor:
     extras_packages: tuple[str, ...]
 
 
+def is_branch_name(store: str) -> bool:
+    """True when `store` has the `<parent>__<label>_<hex>` shape of a branch.
+
+    `memman store create` refuses `__`, so only a branch carries it, and
+    a branch is always a local SQLite store with no env keys.
+    """
+    return '__' in store
+
+
 def resolve_store_backend(store: str, data_dir: str) -> str:
     """Return the backend kind for `store`, lower-cased.
 
-    Reads `MEMMAN_BACKEND_<store>`, then `MEMMAN_DEFAULT_BACKEND`,
-    then falls back to `'sqlite'`.
+    `'sqlite'` for a branch name. Otherwise reads `MEMMAN_BACKEND_<store>`,
+    then `MEMMAN_DEFAULT_BACKEND`, then falls back to `'sqlite'`.
     """
+    if is_branch_name(store):
+        return 'sqlite'
     raw = (
         config.get_store_backend(store, data_dir)
         or config.get_scoped(config.DEFAULT_BACKEND, data_dir)
