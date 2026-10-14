@@ -449,6 +449,10 @@ def _retire_copied(
         return {'result': 'done'}
     if branch_state == 'deleted' and parent_state == 'deleted':
         return {'result': 'done'}
+    if branch_state == 'replaced' and parent_state == 'deleted':
+        branch_head = chain_head(backend.nodes, ins.replaced_by)
+        if branch_head is not None and branch_head.deleted_at is not None:
+            return {'result': 'done'}
     head = before if parent_state.startswith('current') else None
     if parent_state == 'replaced':
         head = chain_head(backend.nodes, before.id)
@@ -506,7 +510,11 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
           replaced  current (with or without a     mark_replaced
                     live predecessor)
           replaced  replaced by the same row       done
-          replaced  replaced by another, deleted   conflict
+          replaced  replaced by another            conflict
+          replaced  deleted, branch chain ending   conflict
+                    current
+          replaced  deleted, branch chain ending   done
+                    forgotten
           deleted   current                        soft_delete_current
           deleted   current_with_live_predecessor  conflict
           deleted   deleted                        done

@@ -517,6 +517,29 @@ def test_merge_forgets_in_the_parent_a_chain_the_branch_forgot(mm_runner):
         [], {'b-stale': True, 'a-head': True})
 
 
+def test_merge_reports_no_conflict_for_a_topic_both_stores_forgot(mm_runner):
+    """Verify merge settles a row the parent forgot and the branch dropped.
+
+    Mutation: a parent-forgotten row the branch replaced read as a
+        conflict even when the branch's chain from it ends forgotten.
+    Oracle: the parent forgets the row; the branch replaces it, then
+        forgets it and its successor, so neither store keeps a claim.
+    """
+    _, data_dir = mm_runner
+    target = _remember(mm_runner, 'The retry cap for batch jobs is three.')
+    branch = _branch(data_dir)
+    successor = _replace(
+        mm_runner, target, 'The retry cap for batch jobs is seven.', branch)
+    for row_id in (target, successor):
+        result = invoke(mm_runner, ['forget', '--store', branch, row_id])
+        assert result.exit_code == 0, result.output
+    assert invoke(mm_runner, ['forget', target]).exit_code == 0
+
+    reply = _merge(mm_runner, branch)
+
+    assert reply['conflicts'] == []
+
+
 def test_replace_on_a_branch_of_a_row_the_parent_replaced_names_the_head(
         mm_runner):
     """Verify replace of a row the parent already replaced names its head.

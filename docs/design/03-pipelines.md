@@ -242,7 +242,9 @@ Ids are random UUIDs, so rows written on either side never collide. Merge leaves
 | ------------ | ------------------------------------------- | ----------------------------------------- |
 | replaced     | current, with or without a live predecessor | `mark_replaced` to the branch's successor |
 | replaced     | replaced by the same successor              | done                                      |
-| replaced     | replaced by another row, or deleted         | conflict                                  |
+| replaced     | replaced by another row                     | conflict                                  |
+| replaced     | deleted, branch chain ending current        | conflict                                  |
+| replaced     | deleted, branch chain ending forgotten      | done                                      |
 | deleted      | current                                     | `soft_delete_current`                     |
 | deleted      | current with a live predecessor             | conflict, as `forget` itself would refuse |
 | deleted      | deleted                                     | done                                      |
