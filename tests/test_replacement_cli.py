@@ -45,6 +45,22 @@ def test_forget_refuses_a_replacement_and_names_replace(mm_runner):
     assert f'replace {p2}' in r.output
 
 
+def test_forget_refusal_names_the_replaced_row_to_forget_first(mm_runner):
+    """`forget` refuses a replacement and names the row to forget first.
+
+    Mutation: the refusal naming only `replace`, so an agent dropping a
+        moot topic replaces it with filler text.
+    Oracle: a remember then a replace; the refusal names `forget` on
+        the replaced row's id.
+    """
+    p1 = _remember(mm_runner, 'the broker is kombu')
+    p2 = _replace(mm_runner, p1, 'the broker is redis now')
+
+    r = invoke(mm_runner, ['forget', p2])
+
+    assert f'forget {p1}' in r.output
+
+
 def test_forget_accepts_a_replaced_row_that_replaced_another(mm_runner):
     """`forget` takes a replaced row, even one that replaced another.
 

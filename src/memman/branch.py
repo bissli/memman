@@ -367,6 +367,20 @@ def _parent_state(backend: Backend, row: Insight) -> str:
     return 'current'
 
 
+def _forget_replaced(backend: Backend, branch: str, id: str) -> bool:
+    """Forget a replaced parent row, with its merge oplog row.
+
+    Returns True when the row was forgotten, False when it already was.
+    """
+    before = backend.nodes.get_include_deleted(id)
+    if not backend.nodes.soft_delete(id):
+        return False
+    backend.oplog.log(
+        operation='forget', insight_id=id, detail=f'merged from {branch}',
+        before=insight_to_delta_dict(before))
+    return True
+
+
 def _retire_copied(
         backend: Backend, branch: str, ins: MigrateInsight, *,
         write: bool) -> dict[str, Any]:
@@ -411,6 +425,14 @@ def _retire_copied(
                     before=insight_to_delta_dict(before),
                     after=(insight_to_delta_dict(successor)
                            if successor is not None else None))
+                if ins.deleted_at is not None:
+                    _forget_replaced(backend, branch, ins.id)
+                return {'result': 'retired'}
+            continue
+        if (branch_state == 'replaced' and ins.deleted_at is not None
+                and parent_state == 'replaced' and before.deleted_at is None
+                and before.replaced_by == ins.replaced_by):
+            if _forget_replaced(backend, branch, ins.id):
                 return {'result': 'retired'}
             continue
         if branch_state == 'deleted' and parent_state == 'current':
@@ -490,6 +512,8 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
           deleted   deleted                        done
           deleted   replaced                       conflict
 
+    - A replaced copy that the branch also forgot is then forgotten in
+      the parent, where it is replaced by the same row.
     - The parent transaction inserts the branch-only rows, applies the
       retirements and removes the parent's token together. A re-run
       that finds the flag set, the token gone and every branch id in
@@ -610,7 +634,8 @@ def merge_branch(data_dir: str, branch: str) -> dict[str, Any]:
                                 and len(row.embedding) != dim):
                             row = dataclasses.replace(row, embedding=None)
                         copied += backend.nodes.insert_raw(row)
-                    for row in rows:
+                    for row in sorted(
+                            rows, key=lambda row: row.replaced_by is None):
                         if row.id not in held or row.id not in retired_ids:
                             continue
                         outcome = _retire_copied(

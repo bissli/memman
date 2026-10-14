@@ -26,7 +26,7 @@ from memman.embed.fingerprint import META_KEY, Fingerprint, swap_command
 from memman.migrate import MigrateInsight
 from memman.store import factory
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
-from memman.store.backend import RecallSession, chain_head
+from memman.store.backend import RecallSession
 from memman.store.errors import BackendError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, WorkerRun
@@ -80,66 +80,32 @@ class OverlayNodeStore(NodeStore):
                 f'branch {self._overlay.name!r} holds no row {id};'
                 ' a branch writes only its own rows')
 
-    def _hold_for_retire(self, id: Id, *, refuse_retired: bool) -> bool:
-        """Make the branch hold `id`, copying a current parent-only row.
+    def _hold_for_retire(self, id: Id, *, copy_replaced: bool) -> bool:
+        """Make the branch hold `id`, copying a parent-only row.
 
         Parameters
         ----------
         id : Id
             The row a retirement targets.
-        refuse_retired : bool
-            Raise on a row the parent already replaced, in place of
-            answering False.
+        copy_replaced : bool
+            Also copy a row the parent already replaced.
 
         Returns
         -------
         bool
             True when the branch holds the row after the call. False
             for a missing row, a row the parent already forgot, and a
-            row the parent already replaced unless `refuse_retired`.
-
-        Raises
-        ------
-        BackendError
-            `refuse_retired` is set and the parent already replaced the
-            row. The message names the current head of its chain.
+            row the parent already replaced unless `copy_replaced`.
         """
         if self._overlay.branch_holds(id):
             return True
         row = self._parent.get_raw(id)
         if row is None or row.deleted_at is not None:
             return False
-        if row.replaced_by is not None:
-            if refuse_retired:
-                raise BackendError(self._retired_message(
-                    row.id, row.replaced_by))
+        if row.replaced_by is not None and not copy_replaced:
             return False
         self._branch.insert_raw(row)
         return True
-
-    def _retired_message(self, id: Id, successor: Id) -> str:
-        """Refusal for a forget of a row the parent already replaced.
-
-        Parameters
-        ----------
-        id : Id
-            The parent row the forget targets.
-        successor : Id
-            The row's `replaced_by`.
-
-        Returns
-        -------
-        str
-            Names the row as retired in the parent and names the head
-            of its chain, or says the chain ends in a forgotten row.
-        """
-        head = chain_head(self, successor)
-        message = (
-            f'insight {id} is already retired in'
-            f' {self._overlay.parent_name} (replaced by {successor})')
-        if head is None or head.deleted_at is not None:
-            return f'{message}; its chain ends in a forgotten row'
-        return f'{message}; forget {head.id} to drop the current claim'
 
     def insert(self, ins: Insight) -> None:
         self._require_unmerged()
@@ -198,21 +164,21 @@ class OverlayNodeStore(NodeStore):
     def soft_delete(self, id: Id) -> bool:
         with self._overlay.transaction():
             self._require_unmerged()
-            if not self._hold_for_retire(id, refuse_retired=True):
+            if not self._hold_for_retire(id, copy_replaced=True):
                 return False
             return self._branch.soft_delete(id)
 
     def soft_delete_current(self, id: Id) -> bool:
         with self._overlay.transaction():
             self._require_unmerged()
-            if not self._hold_for_retire(id, refuse_retired=False):
+            if not self._hold_for_retire(id, copy_replaced=False):
                 return False
             return self._branch.soft_delete_current(id)
 
     def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         with self._overlay.transaction():
             self._require_unmerged()
-            if not self._hold_for_retire(predecessor_id, refuse_retired=False):
+            if not self._hold_for_retire(predecessor_id, copy_replaced=False):
                 return False
             return self._branch.mark_replaced(predecessor_id, successor_id)
 

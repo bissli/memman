@@ -460,24 +460,61 @@ def test_forget_on_a_branch_refuses_a_parent_correction(mm_runner):
     assert 'replaced an earlier row' in result.output
 
 
-def test_forget_on_a_branch_of_a_row_the_parent_replaced_names_the_head(
-        mm_runner):
-    """Verify forget of a row the parent already replaced names its head.
+def test_forget_on_a_branch_drops_a_topic_the_parent_replaced(mm_runner):
+    """Verify a branch forgets a row the parent replaced, then its head.
 
-    Mutation: the overlay answering "not found" for a retired parent row.
-    Oracle: the successor id the parent's replace printed.
+    Mutation: the overlay refusing a row the parent already replaced,
+        or its copy not hiding the parent row, so the head still counts
+        a live predecessor and neither forget works on the branch.
+    Oracle: the single-store route, the replaced row then the head; the
+        branch's recall loses the head and the parent's keeps it.
     """
     _, data_dir = mm_runner
     stale = _remember(mm_runner, 'The backup job runs at midnight.')
-    successor = _replace(
-        mm_runner, stale, 'The backup job runs at two in the morning.')
+    head_text = 'The backup job runs at two in the morning.'
+    successor = _replace(mm_runner, stale, head_text)
     branch = _branch(data_dir)
 
-    result = invoke(mm_runner, ['forget', '--store', branch, stale])
+    codes = [
+        invoke(mm_runner, ['forget', '--store', branch, row_id]).exit_code
+        for row_id in (stale, successor)
+        ]
 
-    assert result.exit_code != 0
-    assert 'already retired in default' in result.output
-    assert f'forget {successor}' in result.output
+    assert codes == [0, 0]
+    assert head_text not in _active_contents(data_dir, branch)
+    assert head_text in _active_contents(data_dir, 'default')
+
+
+def test_merge_forgets_in_the_parent_a_chain_the_branch_forgot(mm_runner):
+    """Verify merge forgets a parent chain the branch forgot, head first by id.
+
+    Mutation: the head's retirement taken before its replaced row's, so
+        the parent's live predecessor turns it into a conflict, or the
+        replaced row's forget dropped at merge.
+    Oracle: a hand-built parent chain whose head id sorts first; both
+        rows forgotten in the parent with no conflict.
+    """
+    _, data_dir = mm_runner
+    with open_sqlite_backend('default', data_dir) as parent:
+        parent.nodes.insert_raw(_row(
+            'b-stale', 'The backup job runs at midnight.', _vec(1.0),
+            replaced_by='a-head'))
+        parent.nodes.insert_raw(_row(
+            'a-head', 'The backup job runs at two.', _vec(1.0)))
+    branch = _branch(data_dir)
+    for row_id in ('b-stale', 'a-head'):
+        result = invoke(mm_runner, ['forget', '--store', branch, row_id])
+        assert result.exit_code == 0, result.output
+
+    reply = _merge(mm_runner, branch)
+
+    with open_sqlite_backend('default', data_dir) as parent:
+        forgotten = {
+            row_id: parent.nodes.get_raw(row_id).deleted_at is not None
+            for row_id in ('b-stale', 'a-head')
+            }
+    assert (reply['conflicts'], forgotten) == (
+        [], {'b-stale': True, 'a-head': True})
 
 
 def test_replace_on_a_branch_of_a_row_the_parent_replaced_names_the_head(
@@ -1368,7 +1405,8 @@ def test_merge_after_a_width_changing_swap_reaches_a_postgres_parent(
     ('deleted', 'current with live predecessor', 'conflict'),
     ('deleted', 'deleted', 'done'),
     ('deleted', 'replaced by other', 'conflict'),
-    ('replaced and deleted', 'replaced by successor', 'done'),
+    ('replaced and deleted', 'current', 'retired'),
+    ('replaced and deleted', 'replaced by successor', 'retired'),
     ])
 def test_merge_applies_the_retirement_table(
         mm_runner, branch_state, parent_state, expected):
@@ -1376,8 +1414,8 @@ def test_merge_applies_the_retirement_table(
 
     Mutation: a table row swapped, the live-predecessor guard skipped,
         a branch row both replaced and deleted read as deleted, which
-        turns a done row into a false conflict, or an oplog row written
-        for a done or conflict row.
+        turns it into a false conflict, or its forget dropped, or an
+        oplog row written for a done or conflict row.
     Oracle: the retirement table of the spec, one row per case.
     """
     _, data_dir = mm_runner
@@ -1411,8 +1449,11 @@ def test_merge_applies_the_retirement_table(
     if expected == 'retired':
         assert reply['retired'] == 1
         assert reply['conflicts'] == []
-        assert (parent_after.replaced_by, parent_after.deleted_at is None) == (
-            (successor, True) if branch_state == 'replaced' else (None, False))
+        assert (parent_after.replaced_by, parent_after.deleted_at is None) == {
+            'replaced': (successor, True),
+            'deleted': (None, False),
+            'replaced and deleted': (successor, False),
+            }[branch_state]
     else:
         assert reply['retired'] == 0
         assert len(reply['conflicts']) == (expected == 'conflict')
@@ -1437,6 +1478,27 @@ def test_merge_writes_an_oplog_row_per_retirement(mm_runner):
     newest = _snapshot(data_dir, 'default')[2][0]
     assert (newest.operation, newest.insight_id, newest.detail) == (
         'forget', target, f'merged from {branch}')
+
+
+def test_merge_logs_the_replace_and_forget_of_one_branch_row(mm_runner):
+    """Verify merge logs both retirements of a row replaced then forgotten.
+
+    Mutation: the replayed forget written without its oplog row.
+    Oracle: the parent oplog's two newest rows, read after the merge.
+    """
+    _, data_dir = mm_runner
+    target = _remember(mm_runner, 'The retry cap for batch jobs is three.')
+    branch = _branch(data_dir)
+    successor = _remember(
+        mm_runner, 'The retry cap for batch jobs is seven.', branch)
+    _retire(data_dir, branch, target, successor=successor)
+    _retire(data_dir, branch, target)
+
+    _merge(mm_runner, branch)
+
+    newest = _snapshot(data_dir, 'default')[2][:2]
+    assert sorted((row.operation, row.insight_id) for row in newest) == [
+        ('forget', target), ('replace', target)]
 
 
 def _queue_status(data_dir, store, status):

@@ -176,11 +176,12 @@ two paths:
 - `replace` with only the related row's still-true claims otherwise
 
 Either way one row holds the new claim. A related row that replaced
-a row not yet forgotten refuses `forget` (see Forgetting), and the
-refusal names `replace`. Following the refusal leaves the new claim
-in two current rows, which duplicates it and loses nothing. When
-every related row is outdated, the agent recalls the topic for the
-rest.
+a row not yet forgotten refuses `forget` (see Forgetting). The
+refusal lists two routes: `replace` to correct the row, or forget
+each row it replaced, then the row itself. For an outdated related
+row the agent takes the forget route: the replaced rows are already
+out of recall, so forgetting them loses nothing. When every related
+row is outdated, the agent recalls the topic for the rest.
 
 ### The text
 
@@ -450,8 +451,10 @@ branch as parent.
 Recall on the branch ranks its rows with the parent's current rows,
 later parent rows included, so a session on the branch needs no
 parent recall and no date filter. A `replace` or `forget` of a parent
-row acts on a copy in the branch until merge. On a row the parent
-already replaced, the verb refuses and names the current row.
+row acts on a copy in the branch until merge. `forget` takes a row
+the parent already replaced too, so a branch drops a topic as one
+store does. `replace` of such a row refuses and names the current
+row.
 
 `store merge` copies the branch's rows into the parent with dates,
 summaries and embeddings, and repeats each `replace` and `forget` made

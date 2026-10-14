@@ -1967,7 +1967,8 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
 
     A replaced row may be forgotten. A missing or already forgotten
     row is refused with the reason, and so is a current row that
-    replaced another, with the `replace` that corrects it.
+    replaced another not yet forgotten. That refusal names the
+    `replace` that corrects it and the forgets that drop its topic.
     """
     with backend.transaction():
         before_ins = backend.nodes.get_include_deleted(id)
@@ -1978,13 +1979,17 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
         # An agent forgetting a wrong correction expects the row it
         # replaced to come back, but that row stays retired, so the
         # topic would leave recall for good.
-        if (before_ins.replaced_by is None
-                and any(p.deleted_at is None
-                        for p in backend.nodes.predecessors(id))):
+        live_ids = [] if before_ins.replaced_by else [
+            p.id for p in backend.nodes.predecessors(id)
+            if p.deleted_at is None
+            ]
+        if live_ids:
             raise click.ClickException(
                 f'insight {id} replaced an earlier row, and forgetting'
                 ' it does not bring that row back; correct it with'
-                f' replace {id} "<new text>"')
+                f' replace {id} "<new text>", or drop the topic with'
+                f' forget {", then forget ".join(live_ids)}, then'
+                f' forget {id}')
         if not backend.nodes.soft_delete(id):
             raise click.ClickException(f'insight {id} not found')
         backend.oplog.log(
@@ -2009,12 +2014,12 @@ def forget(ctx: click.Context, id: str) -> None:
     \b
     Notes
     -----
-    - A current row that replaced another is refused: the row it
-      replaced stays retired, so forgetting it drops the topic from
-      recall. `replace` on its id corrects it.
-    - A replaced row may be forgotten, except on a branch, which
-      refuses a row its parent already replaced. A missing or
-      already forgotten row is refused.
+    - A current row that replaced a row not yet forgotten is refused:
+      the row it replaced stays retired, so forgetting it drops the
+      topic from recall. `replace` on its id corrects it. Forgetting
+      each row it replaced first, then the row, drops the topic.
+    - A replaced row may be forgotten. A missing or already forgotten
+      row is refused.
 
     \b
     Examples
