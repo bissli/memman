@@ -819,3 +819,125 @@ def test_a_pending_row_already_stored_does_not_block(cross_backend_runner):
     result = _run_meta(runner, parent, 'doc=z', where='doc=x/y')
 
     assert _changed(result) == [row_id[:8]]
+
+
+def test_prefix_matching_two_rows_in_one_store_refuses(cross_backend_runner):
+    """Verify a prefix held by two rows of one store is refused by name.
+
+    Mutation: the `ValueError` from `resolve_id` left uncaught, so the run
+        ends on a traceback.
+    Oracle: hand-set ids sharing the prefix `abcd`; the store unchanged.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    _put(data_dir, parent, 'abcd0001', {'doc': 'old'})
+    _put(data_dir, parent, 'abcd0002', {'doc': 'old'})
+    before = _snapshot(data_dir, parent)
+
+    result = _run_meta(runner, parent, 'abcd', 'doc=new')
+
+    assert result.exit_code == 1
+    assert (
+        'prefix abcd matches several rows or queued writes;'
+        ' give more of the id') in result.output
+    assert _snapshot(data_dir, parent) == before
+
+
+def test_a_row_retired_before_its_write_is_left_out_of_changed(
+        cross_backend_runner, monkeypatch):
+    """Verify a row whose update_meta returns False is not reported changed.
+
+    Mutation: every selected row added to `changed` or given an oplog
+        entry, written or not.
+    Oracle: a stub returning False for one row, standing in for a forget
+        between the read and the write; the parent's `meta` oplog rows.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    kept = _put(data_dir, parent, 'aaaa0001', {'doc': 'old'})
+    gone = _put(data_dir, parent, 'aaaa0002', {'doc': 'old'})
+    with factory.open_backend(parent, data_dir) as backend:
+        node_class = type(backend.nodes)
+    real_update = node_class.update_meta
+
+    def update_meta(self, id, meta):
+        return False if id == gone else real_update(self, id, meta)
+
+    monkeypatch.setattr(node_class, 'update_meta', update_meta)
+    result = _run_meta(runner, parent, 'doc=new', where='doc=old')
+
+    with factory.open_backend(parent, data_dir, read_only=True) as backend:
+        logged = [entry.insight_id for entry in backend.oplog.recent(limit=100)
+                  if entry.operation == 'meta']
+    assert _changed(result) == [kept[:8]]
+    assert logged == [kept]
+
+
+@pytest.mark.no_auto_drain
+def test_several_queue_blockers_name_the_first_and_count_the_rest(
+        cross_backend_runner):
+    """Verify two blocking queued writes give the first and `(+1 more)`.
+
+    Mutation: the count suffix dropped or off by one.
+    Oracle: two queued remembers holding the pair, oldest first.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    _put(data_dir, parent, 'aaaa0001', {'doc': 'x/y'})
+    first = _remember_meta(
+        runner, parent, 'The retry cap for batch jobs is three.', 'doc=x/y')
+    _remember_meta(
+        runner, parent, 'The backup job runs at midnight.', 'doc=x/y')
+
+    result = _run_meta(runner, parent, 'doc=z', where='doc=x/y')
+
+    assert result.exit_code == 1
+    assert f'queued write {first} in store {parent} holds' in result.output
+    assert result.output.rstrip().endswith('prints it (+1 more)')
+
+
+def test_zero_match_names_every_member_parent_first(cross_backend_runner):
+    """Verify the zero-match text lists the parent, then each branch.
+
+    Mutation: only the invoking store named, or branches listed first.
+    Oracle: the parent and one branch, run from the branch.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    branch = _make_branch(data_dir, parent)
+
+    result = _run_meta(runner, branch, 'doc=new', where='doc=absent')
+
+    assert result.exit_code == 1
+    assert (
+        f'no current row holds doc=absent in {parent}, {branch};'
+        ) in result.output
+
+
+def test_a_replaced_id_whose_chain_ends_forgotten_says_so(
+        cross_backend_runner):
+    """Verify a replaced id with a forgotten head names no row to edit.
+
+    Mutation: the forgotten head offered as the row to set meta on.
+    Oracle: X replaced by Y, then Y forgotten, by hand.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    row_x = _put(data_dir, parent, 'aaaa0001', {'doc': 'old'})
+    row_y = _put(data_dir, parent, 'aaaa0002', {'doc': 'old'})
+    with factory.open_backend(parent, data_dir) as backend:
+        assert backend.nodes.mark_replaced(row_x, row_y)
+        assert backend.nodes.soft_delete(row_y)
+
+    result = _run_meta(runner, parent, row_x, 'doc=new')
+
+    assert result.exit_code == 1
+    assert (
+        f'insight {row_x} was replaced by {row_y}; its chain ends in a'
+        f' forgotten row, or run insights show {row_x} --history'
+        ) in result.output
