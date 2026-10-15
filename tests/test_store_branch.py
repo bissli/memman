@@ -2028,6 +2028,57 @@ def test_migrate_skips_a_branch(mm_runner, monkeypatch, migrate_all):
     assert all('merge' in line and 'drop' in line for line in skip_lines)
 
 
+@pytest.mark.postgres
+@pytest.mark.parametrize('targets', [
+    ['postgres'], ['postgres', 'sqlite']], ids=['to_pg', 'round_trip'])
+def test_a_branch_survives_a_migration_of_its_parent(
+        mm_runner, env_file, pg_dsn, targets):
+    """Verify a branch reads and merges into its parent after a migration.
+
+    Mutation: migrate drops a meta key, so the parent loses the branch
+        token and the branch refuses, or migrate gives rows new ids, so
+        the parent rows the branch retired show again and merge counts
+        them as branch-only.
+    Oracle: a parent row the branch replaced, one it forgot and one
+        branch-only row; the branch view and the merged parent hold
+        only the successor and the branch-only row.
+    """
+    _, data_dir = mm_runner
+    env_file('MEMMAN_POSTGRES_DSN_migpar', pg_dsn)
+    created = invoke(mm_runner, ['store', 'create', 'migpar'])
+    assert created.exit_code == 0, created.output
+    try:
+        target = _remember(
+            mm_runner, 'The retry cap for batch jobs is three.', 'migpar')
+        gone = _remember(
+            mm_runner, 'The backup job runs at midnight.', 'migpar')
+        branch = _branch(data_dir, parent='migpar')
+        _replace(
+            mm_runner, target, 'The retry cap for batch jobs is seven.',
+            branch)
+        forgot = invoke(mm_runner, ['forget', '--store', branch, gone])
+        assert forgot.exit_code == 0, forgot.output
+        _remember(mm_runner, 'The deploy window opens at nine.', branch)
+        for backend_kind in targets:
+            migrated = invoke(mm_runner, [
+                'migrate', '--store', 'migpar', '--to', backend_kind,
+                '--yes'])
+            assert migrated.exit_code == 0, migrated.output
+
+        branch_view = _active_contents(data_dir, branch)
+        reply = _merge(mm_runner, branch)
+
+        expected = {
+            'The retry cap for batch jobs is seven.',
+            'The deploy window opens at nine.',
+            }
+        parent_view = _active_contents(data_dir, 'migpar')
+        assert (branch_view, reply['conflicts'], parent_view) == (
+            expected, [], expected)
+    finally:
+        factory.drop_store('migpar', data_dir)
+
+
 def test_status_and_store_list_carry_the_branch_fields(mm_runner):
     """Verify status and store list name a branch's parent and date.
 
