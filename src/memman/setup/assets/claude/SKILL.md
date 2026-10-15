@@ -225,6 +225,24 @@ a row by its pointer.
 `--meta doc=` clears them. A replacement whose target is gone when
 the drain stores it is stored as a plain add and keeps no pairs.
 
+`memman insights meta` changes pairs on stored rows in place: the id,
+text and summary stay, and nothing queues. Only the keys named change.
+An empty value removes its key.
+
+```bash
+memman insights meta <id> doc=docs/new.md
+memman insights meta --where doc=docs/old.md doc=docs/new.md
+```
+
+`--where` takes every current row holding exactly that pair, so it
+fixes a pointer whose target moved. Pass the value as stored, without
+the quotes recall adds around a value holding whitespace, `"` or `]`.
+The reply's `changed` lists the rows it edited. The command refuses
+while a queued write holds the `--where` pair or a queued
+`replace --meta` retires a selected id, and the refusal names the
+`insights show` call to wait on. A claim that changed goes through
+`replace`.
+
 ### The write pipeline
 
 `memman remember` queues the write, then reads the store to list
@@ -409,9 +427,10 @@ nothing. Only `memman install`, `memman store create <name>` or
 
 A branch is an empty local store layered over a parent. It takes the
 same content under the same rules as the parent, and reads the parent
-live. The parent gains only a token and keeps serving every other
-session. A branch starts and ends only when the user asks: `store
-merge` keeps the branch's memories, `store drop` discards them.
+live. `store branch` adds a token to the parent. The parent keeps
+serving every other session. A branch starts and ends only when the user
+asks: `store merge` keeps the branch's memories, `store drop` discards
+them.
 
 ```bash
 memman store branch <parent> <label>  # <parent>: the `store` field of `memman status`
@@ -427,9 +446,10 @@ drop. With no such notes, ask the user where it goes, or whether
 later sessions need to know of the branch at all. Every memory verb
 takes `--store <branch>` while the line applies, and every subagent
 brief carries the line. A call without `--store <branch>` reads and
-writes the parent. `store use` refuses a branch, since the active
-file routes every session on the host. `store branch` refuses a
-branch as parent.
+writes the parent. `insights meta` edits the parent and every branch
+at once, whichever store `--store` names. `store use` refuses a
+branch, since the active file routes every session on the host.
+`store branch` refuses a branch as parent.
 
 Recall on the branch ranks its rows with the parent's current rows,
 later parent rows included, so a session on the branch needs no

@@ -340,3 +340,50 @@ def test_codex_only_doctor_ignores_uninstalled_claude_integration(
     assert checks['claude_hooks']['status'] == expected
     if expected == 'warn':
         assert checks['claude_hooks']['detail']['missing']
+
+
+def test_installed_skill_meta_examples_edit_stored_rows(mm_runner):
+    """Verify the skill's insights meta examples run and edit stored rows.
+
+    Mutation: An insights meta example in SKILL.md names a wrong verb or
+    flag or goes missing, so the skill grammar drifts from the CLI.
+    Oracle: Commands parsed from the installed SKILL.md; two rows stored
+    by hand with docs/old.md and docs/other.md, each read back holding
+    docs/new.md.
+    """
+    skills = Path.home() / '.agents/skills'
+    install_codex({'skills_dir': str(skills),
+                   'config_dir': str(Path.home() / '.codex')})
+    source = (skills / 'memman/SKILL.md').read_text()
+    examples = {}
+    for block in source.split('```bash\n')[1:]:
+        for line in block.split('```', 1)[0].splitlines():
+            template = line.split('#', 1)[0].strip()
+            examples[template] = shlex.split(template)[1:]
+    by_where = examples[
+        'memman insights meta --where doc=docs/old.md doc=docs/new.md']
+    by_id = examples['memman insights meta <id> doc=docs/new.md']
+    renamed = invoke(mm_runner, [
+        'remember', 'The billing retry cap stays at three.',
+        '--meta', 'doc=docs/old.md'])
+    assert renamed.exit_code == 0, renamed.output
+    renamed_id = json.loads(renamed.output)['id']
+    pointed = invoke(mm_runner, [
+        'remember', 'The billing export runs nightly.',
+        '--meta', 'doc=docs/other.md'])
+    assert pointed.exit_code == 0, pointed.output
+    pointed_id = json.loads(pointed.output)['id']
+    force_drain(mm_runner[1])
+
+    where_result = invoke(mm_runner, by_where)
+    id_result = invoke(mm_runner, [
+        pointed_id if arg == '<id>' else arg for arg in by_id])
+
+    assert where_result.exit_code == 0, where_result.output
+    assert json.loads(where_result.output)['changed'] == [renamed_id[:8]]
+    assert id_result.exit_code == 0, id_result.output
+    assert json.loads(id_result.output)['changed'] == [pointed_id[:8]]
+    for row_id in (renamed_id, pointed_id):
+        shown = invoke(mm_runner, ['insights', 'show', row_id])
+        assert shown.exit_code == 0, shown.output
+        assert json.loads(shown.output)['meta'] == {'doc': 'docs/new.md'}

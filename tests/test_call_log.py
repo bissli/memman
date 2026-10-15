@@ -21,6 +21,7 @@ _LINE_RE = re.compile(
 _AGENT_VERB_ARGS = [
     ('doctor', []),
     ('forget', ['no-such-id']),
+    ('insights meta', ['no-such-id', 'doc=x']),
     ('insights review', []),
     ('insights show', ['no-such-id']),
     ('recall', ['retry host']),
@@ -93,7 +94,7 @@ def test_each_agent_verb_logs_its_calls(mm_runner, verb, args):
 
     Mutation: dropping `@claude_callable` from one of these verbs, or
         logging only the leaf name (`show` for `insights show`).
-    Oracle: the hand-kept list of the eight agent verbs.
+    Oracle: the hand-kept list of the nine agent verbs.
     """
     _, data_dir = mm_runner
     invoke(mm_runner, [*verb.split(), *args])

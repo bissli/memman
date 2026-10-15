@@ -564,6 +564,25 @@ where id = %s
         with self._conn.cursor() as cur:
             cur.execute(sql, (summary, summary_model, id))
 
+    def update_meta(self, id: Id, meta: dict[str, str] | None) -> bool:
+        select_sql = self._q("""
+select content from {s}.insights
+where id = %s and deleted_at is null and replaced_by is null
+""")
+        update_sql = self._q("""
+update {s}.insights
+set meta = %s::jsonb, kw_tokens = %s, updated_at = now()
+where id = %s and deleted_at is null and replaced_by is null
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(select_sql, (id,))
+            row = cur.fetchone()
+            if row is None:
+                return False
+            tokens = sorted(insight_tokens(Insight(content=row[0], meta=meta)))
+            cur.execute(update_sql, (meta_to_json(meta), tokens, id))
+            return cur.rowcount != 0
+
     def count_active(self) -> int:
         sql = self._q("""
 select count(*) from {s}.insights where deleted_at is null and replaced_by is null
@@ -824,7 +843,7 @@ insert into {self._schema}.oplog
 values (%s, %s, %s, %s::jsonb, %s::jsonb)
 """
         try:
-            with self._conn.cursor() as cur:
+            with self._conn.transaction(), self._conn.cursor() as cur:
                 cur.execute(
                     sql,
                     (operation, insight_id, detail,

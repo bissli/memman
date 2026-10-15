@@ -214,6 +214,27 @@ class NodeStore(Protocol):
         """
         ...
 
+    def update_meta(self, id: Id, meta: dict[str, str] | None) -> bool:
+        """Replace a current row's meta pairs in place.
+
+        Content, summary, embedding and chain stay; `updated_at` is
+        stamped. The write joins the caller's `transaction()`.
+
+        Parameters
+        ----------
+        id : Id
+            Full row id.
+        meta : dict[str, str] or None
+            The row's whole new meta. None or {} stores NULL.
+
+        Returns
+        -------
+        bool
+            True when written. False when the row is missing, forgotten
+            or replaced; nothing is written then.
+        """
+        ...
+
     def count_active(self) -> int:
         """Count current insights: neither deleted nor replaced.
         """

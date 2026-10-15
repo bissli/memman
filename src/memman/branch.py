@@ -20,14 +20,18 @@ Notes
 - A branch row whose id the parent holds is a copy, made when the
   branch retired that parent row. Every other branch row is
   branch-only.
+- `insights meta` is the one write that reaches the parent from a
+  branch session: `held_family` opens the parent on its own backend.
 """
 
+import contextlib
 import dataclasses
 import logging
 import os
 import secrets
 import shutil
 import sqlite3
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,8 +48,8 @@ from memman.store.backend import Backend, chain_head
 from memman.store.errors import BackendError, StoreMissingError
 from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
 from memman.store.overlay import BRANCH_CREATED_AT, BRANCH_MERGING
-from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN, parent_token_key
-from memman.store.overlay import token_refusal
+from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN, OverlayBackend
+from memman.store.overlay import parent_token_key, token_refusal
 from memman.store.sqlite import open_sqlite_backend
 
 logger = logging.getLogger('memman')
@@ -95,7 +99,7 @@ def _require_existing(store: str, data_dir: str) -> None:
 
 
 def _acquire_drain_lock(data_dir: str) -> int:
-    """Take the drain lock, refusing while a drain runs.
+    """Take the drain lock, refusing while another holder runs.
 
     Raises
     ------
@@ -106,7 +110,94 @@ def _acquire_drain_lock(data_dir: str) -> int:
         return drain_lock.acquire(data_dir)
     except drain_lock.DrainLockBusy as exc:
         raise click.ClickException(
-            'a drain is running; re-run in a moment') from exc
+            'a drain, store merge, store drop, migrate, backup restore or'
+            ' insights meta is running; re-run when it ends') from exc
+
+
+@contextlib.contextmanager
+def held_family(
+        data_dir: str, store: str) -> Iterator[list[tuple[str, Backend]]]:
+    """Open a store's family for an in-place edit, under the drain lock.
+
+    The family is the parent plus every local branch of it, whichever
+    member `store` names.
+
+    Parameters
+    ----------
+    data_dir : str
+        Base memman data directory.
+    store : str
+        The invoking store: the parent or one of its branches.
+
+    Yields
+    ------
+    list[tuple[str, Backend]]
+        `(name, backend)`, parent first, then branches by name. The
+        parent opens writable on its own backend; a branch opens as its
+        `OverlayBackend`, whose node writes and transaction are the
+        branch's. Skipped: a branch directory with no readable
+        database, a branch whose merge committed the parent, and a
+        sibling whose token differs from the parent's.
+
+    Raises
+    ------
+    click.ClickException
+        The lock is held, the invoking store is missing, the parent
+        cannot open, a branch is merging with its token still in the
+        parent, or the invoking branch's token differs from the
+        parent's. Raised before the caller writes anything.
+    """
+    lock_fd = _acquire_drain_lock(data_dir)
+    try:
+        try:
+            info = read_branch_info(store, data_dir)
+        except BackendError as exc:
+            raise click.ClickException(str(exc)) from exc
+        parent = store if info is None else info['parent']
+        # The run holds the drain lock; the libpq default can block for
+        # minutes on a host that drops packets.
+        os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
+        if info is None:
+            _require_existing(store, data_dir)
+        with contextlib.ExitStack() as stack:
+            try:
+                # The writable open would create a missing database.
+                with factory.open_backend(parent, data_dir, read_only=True):
+                    pass
+                parent_backend = stack.enter_context(
+                    factory.open_backend(parent, data_dir))
+            except (ConfigError, BackendError, sqlite3.Error) as exc:
+                raise click.ClickException(
+                    f'cannot read store {parent!r}: {exc}') from exc
+            members: list[tuple[str, Backend]] = [(parent, parent_backend)]
+            for name in sorted(_db.list_local_store_dirs(data_dir)):
+                if not name.startswith(f'{parent}__'):
+                    continue
+                try:
+                    branch_info = read_branch_info(name, data_dir)
+                except BackendError as exc:
+                    logger.debug(f'insights meta skips store {name!r}: {exc}')
+                    continue
+                if branch_info is None or branch_info['parent'] != parent:
+                    continue
+                overlay = stack.enter_context(
+                    factory.open_backend(name, data_dir))
+                assert isinstance(overlay, OverlayBackend), name
+                parent_token = parent_backend.meta.get(parent_token_key(name))
+                if overlay.branch.meta.get(BRANCH_MERGING) is not None:
+                    if parent_token is not None:
+                        raise click.ClickException(
+                            f'store {name} is merging into its parent;'
+                            f' re-run memman store merge {name} to finish it')
+                    continue
+                if parent_token != overlay.branch.meta.get(BRANCH_TOKEN):
+                    if name == store:
+                        raise click.ClickException(token_refusal(name, parent))
+                    continue
+                members.append((name, overlay))
+            yield members
+    finally:
+        drain_lock.release(lock_fd)
 
 
 def instance_id(data_dir: str) -> str:

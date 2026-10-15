@@ -94,7 +94,7 @@ memman install --codex
 
 In Codex, `$memman` invokes the skill, as in `Use $memman to recall our deployment decisions`. A new session loads a skill the running one does not show. Codex gets no lifecycle hooks: the skill alone tells the agent when to recall and save, and the agent runs the same CLI.
 
-The Codex sandbox blocks writes to the memman data directory and the provider network calls, so a sandboxed `memman` call fails or stops for approval. Installation therefore writes `$CODEX_HOME/rules/memman.rules`, one `prefix_rule(..., decision="allow")` line for each of the eleven verbs Claude Code also allows: `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store branch`, `store drop`, and `store merge`. Codex runs an allowed verb outside the sandbox with no prompt. An interactive installation lists the rules and asks first. With `--no-wizard` or no terminal, it writes them without a prompt. A `--store` after the verb, as in `memman recall --store NAME`, matches the verb's rule. A call that puts a global option first, such as `memman --store NAME recall`, matches no rule and still prompts. Installation leaves `config.toml`, `AGENTS.md`, and every other rules file unchanged.
+The Codex sandbox blocks writes to the memman data directory and the provider network calls, so a sandboxed `memman` call fails or stops for approval. Installation therefore writes `$CODEX_HOME/rules/memman.rules`, one `prefix_rule(..., decision="allow")` line for each of the twelve verbs Claude Code also allows: `doctor`, `forget`, `insights meta`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `store branch`, `store drop`, and `store merge`. Codex runs an allowed verb outside the sandbox with no prompt. An interactive installation lists the rules and asks first. With `--no-wizard` or no terminal, it writes them without a prompt. A `--store` after the verb, as in `memman recall --store NAME`, matches the verb's rule. A call that puts a global option first, such as `memman --store NAME recall`, matches no rule and still prompts. Installation leaves `config.toml`, `AGENTS.md`, and every other rules file unchanged.
 
 Codex needs `memman` on its shell's `PATH`. For a custom data directory, the Codex environment sets `MEMMAN_DATA_DIR`, or the call passes `memman --data-dir PATH ...`.
 
@@ -259,6 +259,21 @@ Every pair prints at the end of the memory's recall line and under `meta` in `in
 
 `replace` without `--meta` keeps the target's pairs. With any `--meta`, the successor holds exactly the pairs given, so `--meta doc=` clears them. The worker stores a replacement whose target is gone at commit as a plain add, with no pairs.
 
+`insights meta` changes pairs on stored memories in place. The id, content, summary, and vector stay, nothing queues, and no model runs. Each `key=value` sets its key and keeps the memory's other keys. An empty value removes its key, and a memory left with no key stores none.
+
+```bash
+memman insights meta 16c6c667 doc=docs/auth.md                  # one memory by id or prefix
+memman insights meta 16c6c667 4be0a1c2 ticket=                  # remove a key from two memories
+memman insights meta --where doc=docs/old.md doc=docs/new.md    # every current memory holding the pair
+```
+
+- `--where` selects every current memory whose pairs hold that key and value. The match is case-sensitive and whole: `doc=a/b` matches neither `a/b/` nor `A/B`. A `--where` that matches nothing exits 1, so a rerun after a rename reports the zero match.
+- The command applies to the store's whole family: the parent and every local branch of it, whichever of them `--store` names. A branch's retired copy of a parent memory keeps its old pairs.
+- The reply is `{action, store, changed}`, where `changed` lists the 8-character ids of the memories it edited. A rerun of the id form changes nothing and returns an empty list. `memman insights meta <changed ids> key=<old value>` undoes a rename.
+- Each edited memory gets a `meta` operation-log entry whose `detail` holds the old and new pairs. `memman log list` prints the entry.
+- It refuses while the scheduler is stopped, while another drain-lock holder runs, while a branch of the family is merging with its token still in the parent, and while a queued write holds the `--where` pair or, in the id form, replaces a selected memory with its own `--meta`. The refusal names the `insights show <id> --store <store>` call that prints the queued write once the drain stores it. A queued `replace` without `--meta` takes the new pairs when the drain stores it.
+- The same relative path stamped from two repositories into one store matches both, and `changed` names every memory edited. The drain stores a write queued after the run, or a failed write retried later, with its queued pairs. A rerun fixes it. On a Postgres store shared by several hosts, the lock and the queue check cover this host only, and a branch made on another host keeps the old value and merges it back.
+
 ### Rejected input
 
 Both commands check the text in this order and report the first problem:
@@ -323,10 +338,12 @@ No memory expires automatically. `insights review` flags memories that may need 
 memman insights show <id>              # one memory as JSON, including replaced memories
 memman insights show <id> --history    # the replacement chain through <id>, oldest first
 memman insights review [--limit N]     # memories with quality warnings
+memman insights meta <id>... key=value # set or remove meta pairs in place
 ```
 
 - `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `replaced`, or `forgotten`. A forgotten entry omits the content. An ID still in the write queue reports that processing is pending.
 - `review` checks current memories, newest first, against the same patterns as `quality_warnings`, and stops after `--limit` flagged memories (default 20).
+- `meta` edits the [meta pairs](#meta-pairs) of stored memories by id or by `--where key=value`, across the store and its branches.
 
 ---
 
@@ -427,7 +444,7 @@ memman store drop work__rearch_7f3a    # list the branch's own rows, then delete
 
 ### Store branches
 
-A branch is an empty SQLite store layered over its live parent store. It holds the same kind of memory as the parent, under the same content rules. Its writes stay apart from the parent's rows, and recall on the branch also reads the parent's current rows. It ends when the user says so, with `store merge` or `store drop`. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
+A branch is an empty SQLite store layered over its live parent store. It holds the same kind of memory as the parent, under the same content rules. Its writes other than `insights meta` stay apart from the parent's rows, and recall on the branch also reads the parent's current rows. It ends when the user says so, with `store merge` or `store drop`. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
 
 | Command                         | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -438,7 +455,7 @@ A branch is an empty SQLite store layered over its live parent store. It holds t
 - The parent of a branch is the `branch_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store. `store branch` refuses a branch as parent. Any number of branches of one parent can stay open. Siblings see each other's rows only after one merges.
 - The `instruction` line reads "Use memman store <branch>: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A session that reads the line passes `--store <branch>` to every memory verb. A session without it uses the parent.
 - A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. Recall also refuses when the parent's `meta` lacks `branch_token:<branch>`, as after a parent removed and recreated under the same name, pointed at another database, or restored from an older backup. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>` and re-save each listed row worth storing in the parent. `status` counts the rows recall sees.
-- `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `forget` of a parent row the parent already replaced does the same. A `replace` of a parent row the parent already retired fails, and names the current head when its chain has one.
+- `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. `insights meta` edits the parent and every branch of it, whichever store `--store` names, and a later `drop` of the branch leaves the parent's edits in place. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `forget` of a parent row the parent already replaced does the same. A `replace` of a parent row the parent already retired fails, and names the current head when its chain has one.
 - `merge` refuses a store that is not a branch, the active branch, a missing parent, queued writes for the branch, a pending or failed parent `replace` whose target's chain holds a row the branch retired, an embed swap or re-embed in progress in either store, a branch whose embedding fingerprint differs from the parent's, and a parent that does not hold the branch's token. After the checks it refuses every further write to the branch. Each `conflicts` entry is a copied row the branch and the parent retired differently. The parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
 - A `merge` that stops part way says to re-run `merge`, which finishes it. A re-run after the parent commit writes nothing more to the parent and reports the conflicts as the parent holds them. `drop` refuses a branch whose merge stopped after the parent commit, the active branch, and a branch with queued writes. A missing parent does not stop `drop`. An unreachable parent stops it only for a branch whose merge started.
 - A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time. On a branch whose parent is missing or unreachable, `doctor` reports a failed `integrity` check and runs the other checks, `branches` included.
@@ -522,7 +539,7 @@ A store with no memories skips `integrity`, `enrichment_coverage`, and `embeddin
 
 ### Agent call log
 
-`log calls` reports call counts by UTC date and command as JSON. It covers the eleven agent verbs: `recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `status`, `doctor`, `store branch`, `store merge`, and `store drop`. `--since` accepts the same time windows as `log list`.
+`log calls` reports call counts by UTC date and command as JSON. It covers the twelve agent verbs: `recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `insights meta`, `status`, `doctor`, `store branch`, `store merge`, and `store drop`. `--since` accepts the same time windows as `log list`.
 
 Each call appends a record to `<data dir>/logs/calls.log`:
 

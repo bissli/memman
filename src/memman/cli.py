@@ -47,9 +47,9 @@ from memman.migrate import MigrateError, SchemaState
 from memman.migrate import _verify_destination_counts, held_drain_lock
 from memman.queue import STATUS_FAILED, claim, enqueue, find_pending
 from memman.queue import find_pending_replace, finish_worker_run, get_row
-from memman.queue import last_worker_run, list_rows, mark_done, mark_failed
-from memman.queue import purge_done, queue_db, queue_db_path, retry_row
-from memman.queue import start_worker_run
+from memman.queue import last_worker_run, list_pending, list_rows, mark_done
+from memman.queue import mark_failed, purge_done, queue_db, queue_db_path
+from memman.queue import retry_row, start_worker_run
 from memman.queue import stats as queue_stats
 from memman.setup.archive import archive_postgres_schema
 from memman.store import factory
@@ -866,7 +866,7 @@ def queue(ctx: click.Context) -> None:
 
 @cli.group()
 def insights() -> None:
-    """Operations on stored insights (show, review).
+    """Operations on stored insights (show, review, meta).
     """
 
 
@@ -1707,6 +1707,43 @@ class _StoreContext:
         self.close()
 
 
+def _queued_replace_target(backend: 'Backend', replaced_id: str) -> str:
+    """The row a queued replace of `replaced_id` retires when drained.
+
+    An earlier queued replace may have replaced the target between
+    enqueue and claim. Following the chain to its current head leaves
+    the topic with one current row.
+
+    Parameters
+    ----------
+    backend : Backend
+        The store the queue row names.
+    replaced_id : str
+        The queue row's `replaced_id`.
+
+    Returns
+    -------
+    str
+        The current head of the chain from `replaced_id`. A forgotten or
+        missing head returns `replaced_id`, and `_apply_plan` degrades
+        to a named add. On a branch the walk follows only a successor
+        the branch holds: following one the parent wrote would retire it
+        with text that never saw it.
+    """
+    old = backend.nodes.get_include_deleted(replaced_id)
+    seen: set[str] = set()
+    while (old is not None and old.replaced_by
+            and old.id not in seen
+            and (not isinstance(backend, OverlayBackend)
+                 or backend.branch_holds(old.replaced_by))):
+        seen.add(old.id)
+        old = backend.nodes.get_include_deleted(old.replaced_by)
+    if (old is not None and old.deleted_at is None
+            and old.replaced_by is None):
+        return old.id
+    return replaced_id
+
+
 def _process_queue_row(
         row: 'QueueRow',
         ctx: _StoreContext) -> None:
@@ -1754,27 +1791,10 @@ def _process_queue_row(
     replaced_id = row.replaced_id or ''
     redirected_from = ''
     if replaced_id:
-        # Notes:
-        # - An earlier queued replace may have replaced the target
-        #   between enqueue and claim. Following the chain to its
-        #   current head leaves the topic with one current row.
-        # - A forgotten or missing head passes the original id
-        #   through, and `_apply_plan` degrades to a named add.
-        # - A branch follows only a successor it holds. Following one
-        #   the parent wrote retires it with text that never saw it.
-        old = backend.nodes.get_include_deleted(replaced_id)
-        seen: set[str] = set()
-        while (old is not None and old.replaced_by
-                and old.id not in seen
-                and (not isinstance(backend, OverlayBackend)
-                     or backend.branch_holds(old.replaced_by))):
-            seen.add(old.id)
-            old = backend.nodes.get_include_deleted(old.replaced_by)
-        if (old is not None and old.deleted_at is None
-                and old.replaced_by is None
-                and old.id != replaced_id):
+        target_id = _queued_replace_target(backend, replaced_id)
+        if target_id != replaced_id:
             redirected_from = replaced_id
-            replaced_id = old.id
+            replaced_id = target_id
     # The row takes the write's `queue_uuid` as its id, the id
     # `remember` and `replace` printed, and carries it as `queue_uuid`
     # too: run_remember stores this object directly, so omitting it
@@ -3480,6 +3500,257 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
             entry['content'] = row.content
         chain.append(entry)
     _json_out({'requested': id, 'chain': chain})
+
+
+@claude_callable
+@insights.command('meta')
+@click.argument('tokens', nargs=-1, required=False)
+@click.option('--where', 'where', multiple=True, metavar='KEY=VALUE',
+              help='Select every current row holding exactly this pair.')
+@click.pass_context
+def insights_meta(
+        ctx: click.Context, tokens: tuple[str, ...],
+        where: tuple[str, ...]) -> None:
+    """Set or remove meta pairs on stored rows in place.
+
+    \b
+    Parameters
+    ----------
+    tokens : str
+        Ids (full or any unambiguous prefix), then KEY=VALUE pairs; a
+        token holding `=` is a pair. Each pair sets its key and keeps
+        the row's other keys. An empty value (`doc=`) removes the key.
+    where : tuple of str
+        KEY=VALUE, given once, non-empty value. Selects every current
+        row holding exactly that pair in the store's family: the parent
+        and every local branch.
+
+    \b
+    Returns
+    -------
+    JSON
+        {action, store, changed}. `changed` lists the rows whose pairs
+        changed, as eight-character ids.
+
+    \b
+    Raises
+    ------
+    click.ClickException
+        A refusal in Notes, which writes nothing; or a member write that
+        failed, naming the stores already written.
+
+    \b
+    Notes
+    -----
+    - Keeps id, text, summary and vector; no queue, no LLM call. `replace
+      --meta` instead sets a successor's whole set.
+    - Refused while the scheduler is stopped, while a named id is still
+      queued or a queued `replace --meta` would retire it, while a
+      pending write holds the --where pair, while a drain, store merge,
+      store drop, migrate or backup restore runs, or while a branch
+      merges.
+
+    \b
+    Examples
+    --------
+    memman insights meta 16c6c667 doc=docs/auth.md
+    memman insights meta 16c6c667 4be0a1c2 ticket=
+    memman insights meta --where doc=docs/old.md doc=docs/new.md
+    """  # noqa: D301, D410, D411
+    _require_started('write')
+    if len(where) > 1:
+        raise click.ClickException(
+            'give --where once; it selects every current row holding one'
+            ' KEY=VALUE pair')
+    if '' in tokens:
+        raise click.ClickException(
+            'an empty id matches every row; give an id or a prefix of one')
+    pairs = tuple(token for token in tokens if '=' in token)
+    ids = [token for token in tokens if '=' not in token]
+    if ids and where:
+        raise click.ClickException(
+            f'{ids[0]} is read as an id; give ids or --where KEY=VALUE, one'
+            ' selector per call, and quote a value that holds spaces')
+    if not ids and not where:
+        raise click.ClickException(
+            'name the rows: give their ids, or --where KEY=VALUE for every'
+            ' current row holding that pair')
+    if not pairs:
+        raise click.ClickException(
+            'give at least one KEY=VALUE to set; an empty value removes the'
+            " key; insights show <id> prints a row's pairs")
+    sets = _parse_meta(pairs) or {}
+    removals = {
+        key for key, _, value in (pair.partition('=') for pair in pairs)
+        if not value
+        }
+    where_key = where_value = ''
+    if where:
+        try:
+            where_meta = _parse_meta(where)
+        except click.ClickException as exc:
+            raise click.ClickException(
+                exc.message.replace('--meta', '--where')) from exc
+        if not where_meta:
+            raise click.ClickException(
+                f'--where {where[0]} has an empty value; give the value the'
+                ' rows hold now')
+        ((where_key, where_value),) = where_meta.items()
+
+    data_dir = ctx.obj['data_dir']
+    name = _resolve_store_name(data_dir, ctx.obj['store'])
+    with branch_mod.held_family(data_dir, name) as members:
+        backend_by_name = dict(members)
+        own_nodes = {
+            member: (backend.branch.nodes
+                     if isinstance(backend, OverlayBackend) else backend.nodes)
+            for member, backend in members
+            }
+        with queue_db(data_dir) as conn:
+            pending = [
+                row for row in list_pending(conn, list(backend_by_name))
+                if not backend_by_name[row.store].nodes.has_row_with_queue_uuid(
+                    row.queue_uuid)
+                ]
+        pending_by_uuid = {row.queue_uuid: row for row in pending}
+
+        selected: dict[str, tuple[str, Insight]] = {}
+        for token in ids:
+            hits = {
+                row.queue_uuid for row in pending
+                if row.queue_uuid.startswith(token)
+                }
+            stored: list[tuple[str, Insight]] = []
+            for member, nodes in own_nodes.items():
+                try:
+                    full_id = nodes.resolve_id(token)
+                except ValueError as exc:
+                    raise click.ClickException(
+                        f'prefix {token} matches several rows or queued'
+                        ' writes; give more of the id') from exc
+                row = nodes.get_include_deleted(full_id)
+                if row is not None:
+                    hits.add(row.id)
+                    stored.append((member, row))
+            if not hits:
+                raise click.ClickException(f'insight {token} not found')
+            if len(hits) > 1:
+                raise click.ClickException(
+                    f'prefix {token} matches several rows or queued writes;'
+                    ' give more of the id')
+            (full_id,) = hits
+            current = [
+                (member, row) for member, row in stored
+                if row.deleted_at is None and row.replaced_by is None
+                ]
+            if current:
+                selected[full_id] = current[0]
+                continue
+            if not stored:
+                queued_store = next(
+                    row.store for row in pending if row.queue_uuid == full_id)
+                raise click.ClickException(
+                    f'insight {full_id} is still queued in store'
+                    f' {queued_store}; re-run once memman insights show'
+                    f' {full_id} --store {queued_store} prints it')
+            replaced = next(
+                ((member, row) for member, row in stored if row.replaced_by),
+                None)
+            if replaced is None:
+                raise click.ClickException(f'insight {full_id} was forgotten')
+            member, row = replaced
+            head = chain_head(backend_by_name[member].nodes, row.id)
+            next_step = (
+                f'set meta on {head.id}'
+                if head is not None and head.deleted_at is None
+                else 'its chain ends in a forgotten row')
+            raise click.ClickException(
+                f'insight {row.id} was replaced by {row.replaced_by};'
+                f' {next_step}, or run insights show {row.id} --history')
+        if where:
+            for member, nodes in own_nodes.items():
+                for row in nodes.get_all_active():
+                    if row.meta and row.meta.get(where_key) == where_value:
+                        selected[row.id] = (member, row)
+
+        blockers = []
+        for queued in pending:
+            show = (f'memman insights show {queued.queue_uuid} --store'
+                    f' {queued.store} prints it')
+            if where:
+                if queued.meta and queued.meta.get(where_key) == where_value:
+                    blockers.append(
+                        f'queued write {queued.queue_uuid} in store'
+                        f' {queued.store} holds {where_key}={where_value};'
+                        f' re-run once {show}')
+            elif queued.replaced_id and queued.meta is not None:
+                target_id = _queued_replace_target(
+                    backend_by_name[queued.store], queued.replaced_id)
+                earlier = pending_by_uuid.get(target_id)
+                while earlier is not None and earlier.replaced_id:
+                    target_id = _queued_replace_target(
+                        backend_by_name[earlier.store], earlier.replaced_id)
+                    earlier = pending_by_uuid.get(target_id)
+                if target_id in selected:
+                    blockers.append(
+                        f'queued replace {queued.queue_uuid} in store'
+                        f' {queued.store} of {target_id[:8]} sets its own'
+                        f' meta; re-run on {queued.queue_uuid} once {show}')
+        if blockers:
+            more = f' (+{len(blockers) - 1} more)' if len(blockers) > 1 else ''
+            raise click.ClickException(blockers[0] + more)
+        if where and not selected:
+            raise click.ClickException(
+                f'no current row holds {where_key}={where_value} in'
+                f' {", ".join(backend_by_name)}; it may already be changed,'
+                f' or the stored value differs; recall --basic {where_value}'
+                ' finds it')
+
+        changes_by_member: dict[
+            str, list[tuple[str, dict[str, str] | None, dict[str, str] | None]]] = {}
+        for full_id, (member, row) in sorted(selected.items()):
+            new_meta = {**(row.meta or {}), **sets}
+            for key in removals:
+                new_meta.pop(key, None)
+            if (row.meta or None) == (new_meta or None):
+                continue
+            meta_bytes = len(format_meta(new_meta).encode('utf-8'))
+            if meta_bytes > _MAX_META_BYTES:
+                raise click.ClickException(
+                    f'meta of {full_id[:8]} would be {meta_bytes} bytes, max'
+                    f' {_MAX_META_BYTES}; nothing was written. Keep each value'
+                    ' a short pointer such as a path or ticket')
+            changes_by_member.setdefault(member, []).append(
+                (full_id, row.meta, new_meta or None))
+
+        changed: list[str] = []
+        committed: list[str] = []
+        for member, backend in members:
+            if member not in changes_by_member:
+                continue
+            written = []
+            try:
+                with backend.transaction():
+                    for full_id, old_meta, new_meta in changes_by_member[member]:
+                        if backend.nodes.update_meta(full_id, new_meta):
+                            backend.oplog.log(
+                                operation='meta', insight_id=full_id,
+                                detail=json.dumps(
+                                    {'before': old_meta, 'after': new_meta}))
+                            written.append(full_id)
+            except Exception as exc:
+                done = ', '.join(committed) if committed else 'none'
+                raise click.ClickException(
+                    f'meta edit failed in store {member}: {exc}; stores'
+                    f' already written: {done}; re-run to finish') from exc
+            committed.append(member)
+            changed.extend(written)
+    logger.debug(f'insights meta: {len(changed)}/{len(selected)} rows changed')
+    _json_out({
+        'action': 'meta',
+        'store': name,
+        'changed': sorted({full_id[:8] for full_id in changed}),
+        })
 
 
 @cli.command()

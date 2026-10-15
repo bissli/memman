@@ -389,6 +389,40 @@ returning id, store, content, replaced_id,
         meta=None if row[7] is None else json.loads(row[7]))
 
 
+def list_pending(conn: sqlite3.Connection, stores: list[str]) -> list[QueueRow]:
+    """Pending queue rows of the named stores, claimed rows included.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open queue database.
+    stores : list[str]
+        Store names to read; an empty list returns no rows.
+
+    Returns
+    -------
+    list[QueueRow]
+        Oldest first. `meta` is None for a write queued without pairs
+        and {} for one queued with only empty values.
+    """
+    if not stores:
+        return []
+    sql = f"""
+select id, store, content, replaced_id, attempts, queue_uuid, author, meta
+from queue
+where status = 'pending' and store in ({','.join('?' * len(stores))})
+order by id
+"""
+    return [
+        QueueRow(
+            id=row[0], store=row[1], content=row[2],
+            replaced_id=row[3],
+            attempts=row[4], queue_uuid=row[5], author=row[6],
+            meta=None if row[7] is None else json.loads(row[7]))
+        for row in conn.execute(sql, stores).fetchall()
+        ]
+
+
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
     """Mark a claimed row as successfully processed.
     """

@@ -9,8 +9,9 @@ Notes
 - A store is a branch exactly when its meta holds `branch_parent`.
 - Every id the branch holds, in any state, hides the parent row with
   that id.
-- The parent opens with `read_only=True`, so a write to it raises on
-  either backend.
+- The parent opens with `read_only=True`, so a write to it through the
+  overlay raises on either backend. `branch.held_family` opens the
+  parent on its own backend for `insights meta`.
 - Every node write raises while the branch's meta holds
   `branch_merging`, which `branch.merge_branch` sets before it reads
   the branch.
@@ -206,6 +207,11 @@ class OverlayNodeStore(NodeStore):
         self._require_held(id)
         self._branch.update_enrichment(
             id, summary=summary, summary_model=summary_model)
+
+    def update_meta(self, id: Id, meta: dict[str, str] | None) -> bool:
+        self._require_unmerged()
+        self._require_held(id)
+        return self._branch.update_meta(id, meta)
 
     def count_active(self) -> int:
         """Rows recall sees: parent current rows not hidden, plus branch ones.

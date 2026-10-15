@@ -160,6 +160,9 @@ class SqliteNodeStore(NodeStore):
             self, id: Id, *, summary: str, summary_model: str) -> None:
         _node.update_enrichment(self._db, id, summary, summary_model)
 
+    def update_meta(self, id: Id, meta: dict[str, str] | None) -> bool:
+        return _node.update_insight_meta(self._db, id, meta)
+
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
 

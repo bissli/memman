@@ -15,7 +15,7 @@ import click
 import pytest
 from click.testing import CliRunner
 from memman import branch as branch_mod
-from memman import config
+from memman import config, drain_lock
 from memman.cli import cli, list_agent_commands, list_claude_permissions
 from memman.embed import registry
 from memman.embed.fingerprint import META_KEY, Fingerprint, swap_command
@@ -2677,3 +2677,26 @@ def test_store_use_and_remove_name_a_missing_store_alike(mm_runner, verb):
     result = invoke(mm_runner, ['store', verb, 'ghost'])
 
     assert str(StoreMissingError('ghost')) in result.output
+
+
+@pytest.mark.parametrize('verb', ['merge', 'drop'])
+def test_merge_and_drop_name_every_lock_holder_when_refused(mm_runner, verb):
+    """Verify merge and drop refuse a held drain lock with the shared text.
+
+    Mutation: the old "a drain is running" text, which names a drain
+        while an insights meta edit holds the lock.
+    Oracle: the lock held by the test through drain_lock.acquire, and the
+        lock-busy text all lock-taking verbs share.
+    """
+    _, data_dir = mm_runner
+    branch = _branch(data_dir)
+    fd = drain_lock.acquire(data_dir)
+    try:
+        result = invoke(mm_runner, ['store', verb, branch])
+    finally:
+        drain_lock.release(fd)
+
+    assert result.exit_code != 0
+    assert ('a drain, store merge, store drop, migrate, backup restore or'
+            ' insights meta is running; re-run when it ends') in result.output
+    assert Path(store_dir(data_dir, branch)).exists()

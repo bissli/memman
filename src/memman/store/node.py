@@ -262,6 +262,35 @@ def update_enrichment(
         (summary, summary_model, id))
 
 
+def update_insight_meta(
+        db: 'DB', id: str, meta: dict[str, str] | None) -> bool:
+    """Replace a current insight's meta pairs and stamp `updated_at`.
+
+    Parameters
+    ----------
+    db : DB
+        Open store.
+    id : str
+        Full row id.
+    meta : dict[str, str] or None
+        The row's whole new meta. None or {} stores NULL.
+
+    Returns
+    -------
+    bool
+        True when written; False when the row is missing, deleted, or
+        replaced.
+    """
+    now = format_timestamp(datetime.now(timezone.utc))
+    sql = """
+update insights
+set meta = ?, updated_at = ?
+where id = ? and deleted_at is null and replaced_by is null
+"""
+    cursor = db._exec(sql, (meta_to_json(meta), now, id))
+    return cursor.rowcount != 0
+
+
 def count_active_insights(db: 'DB') -> int:
     """Return the number of current insights, neither deleted nor replaced.
     """

@@ -1,4 +1,4 @@
-r"""Hard-delete, rewrite or re-tag memman rows, keeping every chain whole.
+r"""Hard-delete or rewrite memman rows, keeping every chain whole.
 
 Usage
 -----
@@ -9,7 +9,6 @@ Run from the memman repo, so the dev install of memman loads:
     audit STORE
     delete STORE ID [ID ...] [OPTIONS]
     rewrite STORE ID TEXT [TEXT ...] [OPTIONS]
-    meta STORE ID KEY=VALUE [KEY=VALUE ...] [OPTIONS]
     apply STORE PLAN [OPTIONS]
 
 OPTIONS:
@@ -23,7 +22,6 @@ commands take:
 
     {"action": "delete", "id": "<id>"}
     {"action": "rewrite", "id": "<id>", "content": ["<text>", ...]}
-    {"action": "meta", "id": "<id>", "meta": {"<key>": "<value>", ...}}
 
 The data dir is `MEMMAN_DATA_DIR`, else `~/.memman`. The endpoint, key
 and model come from its `env` file, as for every memman command, so a
@@ -53,7 +51,6 @@ id lists:
 - `detached`: rewritten rows that were replaced.
 - `revived`: rewritten rows that were forgotten.
 - `inserted`: new rows holding a `rewrite`'s further texts.
-- `meta_set`: rows a `meta` op changed.
 - `enriched`: rewritten and new rows stamped enriched. Empty on a dry
   run.
 - `enrich_error`: present only when enrichment raised after the commit.
@@ -104,15 +101,6 @@ Rewrite
 - A real rewrite run refuses first when the store's embedder is
   unavailable. A dry run skips this check.
 
-Meta
-----
-- The row's pairs become exactly those given, as `--meta` on `replace`
-  does. An empty value drops its key, and all-empty values clear the
-  meta.
-- Keys and values face the `--meta` checks.
-- The text, chain and enrichment stay as they are, since the summary
-  and vector read the text alone. A `meta` op costs no LLM call.
-
 Safety
 ------
 - Ops run in order in one transaction, each seeing what the ones before
@@ -144,10 +132,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import click
 from memman import config, drain_lock
 from memman.backup import build_bundle
-from memman.cli import _META_KEY_RE, _content_refusal_message, _parse_meta
+from memman.cli import _content_refusal_message
 from memman.embed import fingerprint
 from memman.embed.swap import META_STATE as EMBED_SWAP_STATE
 from memman.exceptions import ConfigError, EmbedFingerprintError
@@ -159,15 +146,13 @@ from memman.search.keyword import insight_tokens
 from memman.store import factory
 from memman.store.backend import Backend
 from memman.store.db import default_data_dir
-from memman.store.model import Insight, format_timestamp
-from memman.store.model import insight_to_delta_dict, meta_to_json
+from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
 from memman.store.overlay import BRANCH_PARENT, BRANCH_TOKEN
 from memman.store.sqlite import SqliteBackend
 
 _OP_KEYS = {
     'delete': {'action', 'id'},
     'rewrite': {'action', 'id', 'content'},
-    'meta': {'action', 'id', 'meta'},
     }
 
 
@@ -306,7 +291,7 @@ def check_ops(op_list: list[dict[str, Any]]) -> None:
         raise Refused('no ops')
     for idx, op in enumerate(op_list):
         if not isinstance(op, dict) or op.get('action') not in _OP_KEYS:
-            raise Refused(f'op {idx}: action must be delete, rewrite or meta')
+            raise Refused(f'op {idx}: action must be delete or rewrite')
         if set(op) != _OP_KEYS[op['action']]:
             raise Refused(
                 f'op {idx}: {op["action"]} takes exactly the keys'
@@ -314,21 +299,6 @@ def check_ops(op_list: list[dict[str, Any]]) -> None:
         if not isinstance(op['id'], str) or not op['id']:
             raise Refused(f'op {idx}: id must be a non-empty string')
         if op['action'] == 'delete':
-            continue
-        if op['action'] == 'meta':
-            meta = op['meta']
-            if (not isinstance(meta, dict)
-                or not all(isinstance(value, str) for value in meta.values())):
-                raise Refused(f'op {idx}: meta must map keys to text')
-            bad_keys = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
-            if bad_keys:
-                raise Refused(
-                    f'op {idx} ({op["id"]}): meta key {bad_keys[0]!r} is not'
-                    ' lower-case letters and _')
-            try:
-                _parse_meta(tuple(f'{key}={value}' for key, value in meta.items()))
-            except click.ClickException as exc:
-                raise Refused(f'op {idx} ({op["id"]}): {exc.message}') from exc
             continue
         content_list = op['content']
         if (not isinstance(content_list, list) or not content_list
@@ -514,46 +484,6 @@ set content = ?, summary = null, summary_model = null,
         report['revived'].append(row_id)
 
 
-def _set_meta(
-        backend: Backend, row_id: str, meta: dict[str, str],
-        report: dict[str, Any]) -> None:
-    """Set one row's meta pairs, keeping its text, chain and enrichment.
-
-    Parameters
-    ----------
-    backend : Backend
-        Store inside the caller's open transaction.
-    row_id : str
-        A stored row in any state.
-    meta : dict[str, str]
-        Pairs `check_ops` passed, the row's whole new meta. A key left
-        out or given an empty value is dropped.
-    report : dict[str, Any]
-        The `run_ops` report, extended in place: `meta_set`.
-    """
-    row = backend.nodes.get_include_deleted(row_id)
-    new_meta = {key: value for key, value in meta.items() if value} or None
-    now = format_timestamp(datetime.now(timezone.utc))
-    if isinstance(backend, SqliteBackend):
-        execute(
-            backend, 'update {t}insights set meta = ?, updated_at = ? where id = ?',
-            (meta_to_json(new_meta), now, row_id))
-    else:
-        execute(
-            backend,
-            'update {t}insights set meta = ?, kw_tokens = ?, updated_at = ?'
-            ' where id = ?',
-            (meta_to_json(new_meta),
-             [] if row.deleted_at is not None
-             else sorted(insight_tokens(Insight(content=row.content, meta=new_meta))),
-             now, row_id))
-    backend.oplog.log(
-        operation='meta',
-        insight_id=row_id,
-        detail=json.dumps({'before': row.meta, 'after': new_meta}))
-    report['meta_set'].append(row_id)
-
-
 def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
     """Run checked ops in order. The caller holds the transaction.
 
@@ -569,7 +499,7 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
     dict[str, Any]
         Id lists by outcome, as the module docstring's Output section
         names them: `deleted`, `spliced`, `repointed`, `rewritten`,
-        `detached`, `revived`, `inserted` and `meta_set`.
+        `detached`, `revived` and `inserted`.
 
     Raises
     ------
@@ -584,7 +514,7 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
         integrity_before['unterminated'])
     report: dict[str, Any] = {
         'deleted': [], 'spliced': [], 'repointed': [], 'rewritten': [],
-        'detached': [], 'revived': [], 'inserted': [], 'meta_set': [],
+        'detached': [], 'revived': [], 'inserted': [],
         }
     for op in op_list:
         row_id = op['id']
@@ -596,10 +526,8 @@ def run_ops(backend: Backend, op_list: list[dict[str, Any]]) -> dict[str, Any]:
             raise Refused(f'no row {row_id}')
         if op['action'] == 'delete':
             _delete(backend, row_id, report)
-        elif op['action'] == 'rewrite':
-            _rewrite(backend, row_id, op['content'], report)
         else:
-            _set_meta(backend, row_id, op['meta'], report)
+            _rewrite(backend, row_id, op['content'], report)
 
     integrity_after = backend.nodes.replacement_integrity()
     for population, ids in integrity_after.items():
@@ -811,14 +739,10 @@ def main() -> int:
     rewrite_parser.add_argument('store')
     rewrite_parser.add_argument('id')
     rewrite_parser.add_argument('content', nargs='+')
-    meta_parser = sub.add_parser('meta')
-    meta_parser.add_argument('store')
-    meta_parser.add_argument('id')
-    meta_parser.add_argument('pairs', nargs='+')
     apply_parser = sub.add_parser('apply')
     apply_parser.add_argument('store')
     apply_parser.add_argument('plan')
-    for write_parser in (delete_parser, rewrite_parser, meta_parser, apply_parser):
+    for write_parser in (delete_parser, rewrite_parser, apply_parser):
         write_parser.add_argument('--dry-run', action='store_true')
         write_parser.add_argument(
             '--backup-dir', default=config.get(config.BACKUP_TARGET))
@@ -831,14 +755,6 @@ def main() -> int:
             return 0
         if args.command == 'delete':
             op_list = [{'action': 'delete', 'id': row_id} for row_id in args.ids]
-        elif args.command == 'meta':
-            meta = {}
-            for pair in args.pairs:
-                key, sep, value = pair.partition('=')
-                if not sep or key in meta:
-                    raise Refused(f'{pair!r} is not one key=value pair')
-                meta[key] = value
-            op_list = [{'action': 'meta', 'id': args.id, 'meta': meta}]
         elif args.command == 'rewrite':
             op_list = [
                 {'action': 'rewrite', 'id': args.id, 'content': args.content}]
