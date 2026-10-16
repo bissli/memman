@@ -259,7 +259,7 @@ def test_pending_replace_with_explicit_meta_of_a_selected_id_refuses(
     assert result.exit_code != 0
     assert f'queued replace {queued} in store {parent} of ' in result.output
     assert (
-        f'sets its own meta; re-run on {queued} once memman insights show'
+        f'also changes doc; re-run on {queued} once memman insights show'
         f' {queued} --store {parent} prints it') in result.output
     assert _snapshot(data_dir, parent) == before
 
@@ -634,7 +634,7 @@ def test_pending_replace_of_a_replaced_row_blocks_an_edit_of_its_head(
     assert (
         f'queued replace {queued} in store {parent} of ') in result.output
     assert (
-        f'sets its own meta; re-run on {queued} once memman insights show'
+        f'also changes doc; re-run on {queued} once memman insights show'
         f' {queued} --store {parent} prints it') in result.output
     assert _snapshot(data_dir, parent) == before
 
@@ -786,12 +786,12 @@ def test_pending_replace_chained_through_a_queued_replace_refuses(
     queued = json.loads(second.output)['id']
     before = _snapshot(data_dir, parent)
 
-    result = _run_meta(runner, parent, row_x, 'ticket=t1')
+    result = _run_meta(runner, parent, row_x, 'doc=b')
 
     assert result.exit_code != 0
     assert (
-        f'queued replace {queued} in store {parent} of {row_x[:8]} sets its'
-        ' own meta') in result.output
+        f'queued replace {queued} in store {parent} of {row_x[:8]} also'
+        ' changes doc') in result.output
     assert _snapshot(data_dir, parent) == before
 
 
@@ -941,3 +941,177 @@ def test_a_replaced_id_whose_chain_ends_forgotten_says_so(
         f'insight {row_x} was replaced by {row_y}; its chain ends in a'
         f' forgotten row, or run insights show {row_x} --history'
         ) in result.output
+
+
+def _queue_replace(runner, store, target, *pairs, text=None):
+    """Queue a replace of target on store with pairs and return its id.
+    """
+    args = ['replace', '--store', store]
+    for pair in pairs:
+        args += ['--meta', pair]
+    result = invoke(runner, args + [
+        target, text or 'The retry cap for batch jobs is five.'])
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)['id']
+
+
+@pytest.mark.no_auto_drain
+def test_insights_meta_edit_survives_a_queued_replace_of_other_keys(
+        cross_backend_runner):
+    """Verify an in-place edit reaches a successor whose replace names other keys.
+
+    Mutation: refusing every queued replace with --meta, or resolving
+        the merge at enqueue so the queue row carries the old hq.
+    Oracle: hand-merged {hq: B, ticket: T}.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'hq': 'A'})
+    successor = _queue_replace(runner, parent, target, 'ticket=T')
+
+    result = _run_meta(runner, parent, target, 'hq=B')
+    force_drain(data_dir)
+
+    assert _changed(result) == [target[:8]]
+    assert _meta_of(data_dir, parent, successor) == {'hq': 'B', 'ticket': 'T'}
+
+
+@pytest.mark.no_auto_drain
+def test_insights_meta_refuses_a_queued_replace_naming_its_key(
+        cross_backend_runner):
+    """Verify the refusal names the queued replace and the shared key.
+
+    Mutation: no key check, so the drain overwrites the edit's hq.
+    Oracle: the queued replace's id and the key hq in the text.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'hq': 'A'})
+    queued = _queue_replace(runner, parent, target, 'hq=C')
+    before = _snapshot(data_dir, parent)
+
+    result = _run_meta(runner, parent, target, 'hq=B')
+
+    assert result.exit_code == 1
+    assert (
+        f'queued replace {queued} in store {parent} of {target[:8]} also'
+        f' changes hq; re-run on {queued} once memman insights show'
+        f' {queued} --store {parent} prints it') in result.output
+    assert _snapshot(data_dir, parent) == before
+
+
+@pytest.mark.no_auto_drain
+def test_where_form_refuses_a_queued_replace_naming_its_key(
+        cross_backend_runner):
+    """Verify --where also refuses a queued replace naming a key it sets.
+
+    Mutation: the key check limited to the id form, so the successor
+        holds the replace's ticket and the edit's is lost.
+    Oracle: the queued replace's id in the refusal.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'hq': 'old'})
+    queued = _queue_replace(runner, parent, target, 'ticket=U')
+
+    result = _run_meta(runner, parent, 'ticket=T', where='hq=old')
+
+    assert result.exit_code == 1, result.output
+    assert f'queued replace {queued} in store {parent}' in result.output
+
+
+@pytest.mark.no_auto_drain
+def test_chained_queued_replaces_carry_an_edit_of_another_key(
+        cross_backend_runner):
+    """Verify an edit of X reaches the head of two queued replaces of X.
+
+    Mutation: the chain walk dropped, or the base read from the queue.
+    Oracle: hand-folded {doc: old, ticket: t1} and {doc: a, ticket: t1}.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'doc': 'old'})
+    first = _queue_replace(runner, parent, target)
+    second = _queue_replace(
+        runner, parent, first, 'doc=a', text='The retry cap is six.')
+
+    result = _run_meta(runner, parent, target, 'ticket=t1')
+    force_drain(data_dir)
+
+    assert _changed(result) == [target[:8]]
+    assert _meta_of(data_dir, parent, first) == {'doc': 'old', 'ticket': 't1'}
+    assert _meta_of(data_dir, parent, second) == {'doc': 'a', 'ticket': 't1'}
+
+
+@pytest.mark.no_auto_drain
+def test_chained_queued_replace_naming_the_key_refuses(cross_backend_runner):
+    """Verify the walk through a queued replace still finds a key conflict.
+
+    Mutation: the chain walk dropped, so only direct targets are checked.
+    Oracle: the second replace's id in the refusal.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'doc': 'old'})
+    first = _queue_replace(runner, parent, target)
+    second = _queue_replace(
+        runner, parent, first, 'doc=a', text='The retry cap is six.')
+
+    result = _run_meta(runner, parent, target, 'doc=b')
+
+    assert result.exit_code == 1
+    assert f'queued replace {second} in store {parent} of {target[:8]}' in (
+        result.output)
+
+
+@pytest.mark.no_auto_drain
+def test_insights_meta_refuses_an_edit_a_queued_replace_pushes_past_the_cap(
+        cross_backend_runner):
+    """Verify an edit refuses when the queued successor would pass the cap.
+
+    Mutation: the cap checked on the edited row alone, so the drain
+        stores 214 bytes on the successor.
+    Oracle: `[ref=` + 100 + ` ticket=` + 100 + `]` is 214 bytes by hand,
+        and the edited row alone is 106.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'ref': 'x' * 50})
+    queued = _queue_replace(runner, parent, target, 'ticket=' + 'y' * 100)
+    before = _snapshot(data_dir, parent)
+
+    result = _run_meta(runner, parent, target, 'ref=' + 'x' * 100)
+
+    assert result.exit_code == 1
+    assert '214 bytes' in result.output
+    assert queued in result.output
+    assert _snapshot(data_dir, parent) == before
+
+
+@pytest.mark.no_auto_drain
+def test_branch_replace_merges_onto_the_parent_rows_pairs(
+        cross_backend_runner):
+    """Verify a branch replace of a parent row keeps the row's other keys.
+
+    Mutation: the drain reading no base on the overlay, or whole-set
+        replace.
+    Oracle: hand-merged {doc: d, hq: a}.
+    """
+    runner = cross_backend_runner
+    _, data_dir = runner
+    parent = _store_name()
+    target = _put(data_dir, parent, 'aaaa0001', {'hq': 'a'})
+    branch = _make_branch(data_dir, parent)
+    successor = _queue_replace(runner, branch, target, 'doc=d')
+
+    force_drain(data_dir)
+
+    rows, _ = _branch_state(data_dir, branch)
+    assert rows[target].replaced_by == successor
+    assert rows[successor].meta == {'doc': 'd', 'hq': 'a'}

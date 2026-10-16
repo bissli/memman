@@ -199,9 +199,9 @@ regularly, so the agent needs no confirmation.
 `remember` and `replace` take `--meta key=value`, repeatable, for a
 short pointer kept beside the text: the work folder a fact belongs
 to, or a ticket. A key is lower-case letters and `_`. A value holds
-no line break, control character, or format character, and an empty
-value sets nothing. The pairs as recall prints them are at most 200
-bytes. Over that, or malformed, the CLI refuses and nothing queues.
+no line break, control character, or format character. The pairs as
+recall prints them are at most 200 bytes. Over that, or malformed,
+the CLI refuses and nothing queues.
 
 ```bash
 memman remember --meta doc=docs/auth.md --meta ticket=ABC-12 "<thought>"
@@ -220,14 +220,12 @@ mention of it is the pair. `recall --basic` matches the stored meta
 text as well as the content, so `memman recall --basic <path>` finds
 a row by its pointer.
 
-`replace` without `--meta` keeps the target's pairs. With any
-`--meta`, the successor holds exactly the pairs given, so
-`--meta doc=` clears them. A replacement whose target is gone when
-the drain stores it is stored as a plain add and keeps no pairs.
+Each pair sets its key and keeps the row's other keys, and an empty
+value removes its key. The successor of a `replace` starts from the
+pairs its target holds when the drain stores it.
 
 `memman insights meta` changes pairs on stored rows in place: the id,
-text and summary stay, and nothing queues. Only the keys named change.
-An empty value removes its key.
+text and summary stay, and nothing queues.
 
 ```bash
 memman insights meta <id> doc=docs/new.md
@@ -238,8 +236,7 @@ memman insights meta --where doc=docs/old.md doc=docs/new.md
 fixes a pointer whose target moved. Pass the value as stored, without
 the quotes recall adds around a value holding whitespace, `"` or `]`.
 The reply's `changed` lists the rows it edited. The command refuses
-while a queued write holds the `--where` pair or a queued
-`replace --meta` retires a selected id, and the refusal names the
+while a queued write would undo the edit, and the refusal names the
 `insights show` call to wait on. A claim that changed goes through
 `replace`.
 

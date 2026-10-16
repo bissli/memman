@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 
 import pytest
 from memman.migrate import MigrateInsight
+from memman.queue import enqueue, queue_db
+from memman.store import factory
 from memman.store.model import BRIEF_CONTENT_CHARS, insight_to_recall_line
-from tests.conftest import invoke, make_insight, parse_remember
+from tests.conftest import force_drain, invoke, make_insight, parse_remember
 from tests.conftest import queued_contents
 
 
@@ -146,17 +148,18 @@ def test_replace_without_meta_keeps_the_target_pairs(mm_runner):
     assert _show(mm_runner, fact['id'])['meta'] == {'ref': 'docs/a/'}
 
 
-def test_replace_with_meta_stores_exactly_the_pairs_given(mm_runner):
-    """Verify a replace with --meta replaces the whole set.
+def test_replace_with_meta_sets_its_key_and_keeps_the_others(mm_runner):
+    """Verify a replace with --meta sets its key over the target's pairs.
 
-    Mutation: merging the given pairs over the target's.
-    Oracle: only the pair passed to replace.
+    Mutation: storing only the given pairs, as a whole-set replace does.
+    Oracle: the target's ref plus the ticket passed to replace.
     """
     old_id = _remember_with_ref(mm_runner)
     result = invoke(mm_runner, [
         'replace', old_id, '--meta', 'ticket=B-2', 'the corrected claim'])
     fact = parse_remember(result, mm_runner)
-    assert _show(mm_runner, fact['id'])['meta'] == {'ticket': 'B-2'}
+    assert _show(mm_runner, fact['id'])['meta'] == {
+        'ref': 'docs/a/', 'ticket': 'B-2'}
 
 
 def test_replace_with_an_empty_value_clears_the_pairs(mm_runner):
@@ -171,6 +174,182 @@ def test_replace_with_an_empty_value_clears_the_pairs(mm_runner):
         'replace', old_id, '--meta', 'ref=', 'the corrected claim'])
     fact = parse_remember(result, mm_runner)
     assert 'meta' not in _show(mm_runner, fact['id'])
+
+
+def _stored(mm_runner: tuple, *pairs: str) -> str:
+    """Remember one claim with pairs, drain, and return its id.
+    """
+    args = ['remember']
+    for pair in pairs:
+        args += ['--meta', pair]
+    result = invoke(mm_runner, args + ['The retry cap for batch jobs is three.'])
+    assert result.exit_code == 0, result.output
+    force_drain(mm_runner[1])
+    return json.loads(result.output)['id']
+
+
+def _queued_replace(
+        mm_runner: tuple, target: str, *pairs: str,
+        text: str = 'The retry cap for batch jobs is five.') -> str:
+    """Queue a replace of target with pairs and return its id, undrained.
+    """
+    args = ['replace', target]
+    for pair in pairs:
+        args += ['--meta', pair]
+    result = invoke(mm_runner, args + [text])
+    assert result.exit_code == 0, result.output
+    return json.loads(result.output)['id']
+
+
+@pytest.mark.no_auto_drain
+def test_replace_meta_sets_its_key_and_keeps_the_other_keys(mm_runner):
+    """Verify replace --meta changes the named key and keeps the rest.
+
+    Mutation: storing only the given pairs (whole-set replace).
+    Oracle: hand-merged {ref: docs/a/, ticket: B-2}.
+    """
+    target = _stored(mm_runner, 'ref=docs/a/', 'ticket=A-1')
+    successor = _queued_replace(mm_runner, target, 'ticket=B-2')
+
+    force_drain(mm_runner[1])
+
+    assert _show(mm_runner, successor)['meta'] == {
+        'ref': 'docs/a/', 'ticket': 'B-2'}
+
+
+@pytest.mark.no_auto_drain
+def test_replace_empty_value_removes_only_its_key(mm_runner):
+    """Verify `--meta ticket=` on replace drops ticket and keeps ref.
+
+    Mutation: an empty value clearing every pair, or being ignored.
+    Oracle: hand-merged {ref: docs/a/}.
+    """
+    target = _stored(mm_runner, 'ref=docs/a/', 'ticket=A-1')
+    successor = _queued_replace(mm_runner, target, 'ticket=')
+
+    force_drain(mm_runner[1])
+
+    assert _show(mm_runner, successor)['meta'] == {'ref': 'docs/a/'}
+
+
+@pytest.mark.no_auto_drain
+def test_redirected_replace_merges_onto_the_head_it_retires(mm_runner):
+    """Verify a replace the drain redirects merges onto the chain head.
+
+    Mutation: merging onto the row the queue names, or whole-set
+        replace, so the first replace's ticket is lost.
+    Oracle: hand-merged {ref: a, ticket: T, doc: d}. The second replace
+        goes straight into queue.db, as two racing CLIs leave it.
+    """
+    _, data_dir = mm_runner
+    target = _stored(mm_runner, 'ref=a')
+    _queued_replace(mm_runner, target, 'ticket=T')
+    with queue_db(data_dir) as conn:
+        _, second = enqueue(
+            conn, store='default', content='The retry cap is six.',
+            replaced_id=target, meta={'doc': 'd'})
+
+    force_drain(data_dir)
+
+    assert _show(mm_runner, second)['meta'] == {
+        'ref': 'a', 'ticket': 'T', 'doc': 'd'}
+
+
+@pytest.mark.no_auto_drain
+def test_degraded_replace_stores_only_its_own_pairs(mm_runner):
+    """Verify a replace whose target was forgotten keeps only its pairs.
+
+    Mutation: the base taken from the target when the link fails.
+    Oracle: the replace's own {doc: d}.
+    """
+    target = _stored(mm_runner, 'hq=A')
+    successor = _queued_replace(mm_runner, target, 'doc=d')
+    forget = invoke(mm_runner, ['forget', target])
+    assert forget.exit_code == 0, forget.output
+
+    force_drain(mm_runner[1])
+
+    assert _show(mm_runner, successor)['meta'] == {'doc': 'd'}
+
+
+@pytest.mark.no_auto_drain
+def test_replace_refuses_pairs_whose_merge_passes_the_cap(mm_runner):
+    """Verify the cap applies to the merged pairs and nothing queues.
+
+    Mutation: the cap checked on the given pairs alone.
+    Oracle: `[ref=` + 100 + ` ticket=` + 100 + `]` is 214 bytes by hand.
+    """
+    target = _stored(mm_runner, 'ref=' + 'x' * 100)
+
+    result = invoke(mm_runner, [
+        'replace', target, '--meta', 'ticket=' + 'y' * 100,
+        'The retry cap for batch jobs is five.'])
+
+    assert result.exit_code == 1
+    assert '214 bytes' in result.output
+    assert len(queued_contents(mm_runner[1])) == 1
+
+
+@pytest.mark.no_auto_drain
+def test_replace_of_a_queued_target_refuses_a_merge_past_the_cap(mm_runner):
+    """Verify a queued target's own pairs count toward the cap.
+
+    Mutation: the cap checked on the given pairs alone for a queued
+        target, so the drain stores 214 bytes.
+    Oracle: `[ref=` + 100 + ` ticket=` + 100 + `]` is 214 bytes by hand.
+    """
+    queued = invoke(mm_runner, [
+        'remember', '--meta', 'ref=' + 'x' * 100,
+        'The retry cap for batch jobs is three.'])
+    assert queued.exit_code == 0, queued.output
+
+    result = invoke(mm_runner, [
+        'replace', json.loads(queued.output)['id'],
+        '--meta', 'ticket=' + 'y' * 100, 'The retry cap for batch jobs is five.'])
+
+    assert result.exit_code == 1
+    assert '214 bytes' in result.output
+    assert len(queued_contents(mm_runner[1])) == 1
+
+
+@pytest.mark.no_auto_drain
+def test_drain_reads_the_base_after_the_link(mm_runner, monkeypatch):
+    """Verify the successor's base is the target's pairs as of the link.
+
+    Mutation: the target read before mark_replaced, which misses an
+        edit committed between the read and the link.
+    Oracle: a stub that edits the target's meta just before linking.
+    """
+    target = _stored(mm_runner, 'doc=old')
+    successor = _queued_replace(mm_runner, target)
+    with factory.open_backend('default', mm_runner[1]) as backend:
+        node_class = type(backend.nodes)
+    real_mark = node_class.mark_replaced
+
+    def mark_replaced(self, predecessor_id, successor_id):
+        self.update_meta(predecessor_id, {'doc': 'edited'})
+        return real_mark(self, predecessor_id, successor_id)
+
+    monkeypatch.setattr(node_class, 'mark_replaced', mark_replaced)
+
+    force_drain(mm_runner[1])
+
+    assert _show(mm_runner, successor)['meta'] == {'doc': 'edited'}
+
+
+def test_remember_empty_value_sets_no_pair(mm_runner):
+    """Verify remember stores no pair for an empty value.
+
+    Mutation: the drain storing a queued empty value as a pair.
+    Oracle: only doc=d, by hand.
+    """
+    result = invoke(mm_runner, [
+        'remember', '--meta', 'hq=', '--meta', 'doc=d',
+        'The retry cap for batch jobs is three.'])
+
+    fact = parse_remember(result, mm_runner)
+
+    assert _show(mm_runner, fact['id'])['meta'] == {'doc': 'd'}
 
 
 # --- Store round trips, both backends ---

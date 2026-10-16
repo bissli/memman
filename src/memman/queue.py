@@ -198,9 +198,8 @@ def enqueue(
         Resolved from the agent's shell at enqueue time and carried to
         the drain; the drain never re-resolves it from the environment.
     meta : dict[str, str] or None, default None
-        The `--meta` pairs. None, for no `--meta` at all, is kept apart
-        from `{}`, since a replace queued with None takes its target's
-        pairs.
+        The `--meta` pairs as given; an empty value removes its key
+        when the drain applies them. None or `{}` stores NULL.
 
     Returns
     -------
@@ -230,7 +229,7 @@ values (?, ?, ?, ?, ?, ?, ?)
     cur = conn.execute(sql, (
         store, content, replaced_id,
         queue_uuid, now, author,
-        None if meta is None else json.dumps(meta, ensure_ascii=False)))
+        json.dumps(meta, ensure_ascii=False) if meta else None))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id, queue_uuid
@@ -402,8 +401,8 @@ def list_pending(conn: sqlite3.Connection, stores: list[str]) -> list[QueueRow]:
     Returns
     -------
     list[QueueRow]
-        Oldest first. `meta` is None for a write queued without pairs
-        and {} for one queued with only empty values.
+        Oldest first. `meta` is None for a write queued without pairs;
+        an empty value is a key the write removes.
     """
     if not stores:
         return []

@@ -26,7 +26,8 @@ from memman.llm.client import get_llm_client
 from memman.pipeline.enrich import enrich_with_llm
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
+from memman.store.model import Insight, format_timestamp
+from memman.store.model import insight_to_delta_dict, merge_meta
 
 logger = logging.getLogger('memman')
 
@@ -109,8 +110,9 @@ def _apply_plan(
         The target store.
     insight : Insight
         The row to store; its timestamps are refreshed from the stored
-        row. A None `meta` takes the target's pairs when the replace
-        links.
+        row. Its `meta`, the pairs the write gave, is applied over the
+        pairs of the `replaced_id` row as read after the link, or over
+        none when the write stores as a plain add.
     replaced_id : str
         The row a `replace` retires; '' for a plain add.
     embed_vec : list[float] or None
@@ -130,13 +132,15 @@ def _apply_plan(
     """
     replaced = False
     target_gone: dict[str, str | None] | None = None
+    base_meta = None
     if replaced_id:
-        before_target = backend.nodes.get_include_deleted(replaced_id)
         linked = backend.nodes.mark_replaced(replaced_id, insight.id)
+        # Read after the link, which holds the row, so an edit another
+        # host commits before it is in the base.
+        before_target = backend.nodes.get_include_deleted(replaced_id)
         if linked and before_target is not None:
             replaced = True
-            if insight.meta is None:
-                insight.meta = before_target.meta
+            base_meta = before_target.meta
             backend.oplog.log(
                 operation='replace', insight_id=replaced_id,
                 detail=f'replaced by {insight.id}',
@@ -165,6 +169,7 @@ def _apply_plan(
                 ' current; stored without the link',
                 after=insight_to_delta_dict(insight))
 
+    insight.meta = merge_meta(base_meta, insight.meta)
     backend.nodes.insert(insight)
     stored = backend.nodes.get(insight.id)
     if stored is not None and stored.created_at is not None:

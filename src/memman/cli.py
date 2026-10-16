@@ -65,7 +65,7 @@ from memman.store.factory import known_backends, list_stores
 from memman.store.factory import resolve_store_backend, resolve_store_pg_dsn
 from memman.store.model import Insight, format_meta, format_timestamp
 from memman.store.model import insight_to_delta_dict, insight_to_full_dict
-from memman.store.model import insight_to_recall_line
+from memman.store.model import insight_to_recall_line, merge_meta
 from memman.store.node import count_active_insights, get_stats
 from memman.store.node import iter_for_reembed
 from memman.store.overlay import BRANCH_CREATED_AT, BRANCH_MERGING
@@ -238,55 +238,65 @@ def _content_refusal_message(
     return None
 
 
-def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str] | None:
+def _parse_meta(pairs: tuple[str, ...]) -> dict[str, str]:
     """Return the `--meta` pairs of a write as a dict.
 
     Parameters
     ----------
     pairs : tuple[str, ...]
         `key=value` strings as given. The key is lower-case letters and
-        `_`. An empty value sets no pair, so on `replace` `--meta doc=`
-        clears the target's pairs.
+        `_`. An empty value is kept, as the key the write removes.
 
     Returns
     -------
-    dict[str, str] or None
-        None when no `--meta` was given; `{}` when every value was
-        empty.
+    dict[str, str]
+        `{}` when no pair was given.
 
     Raises
     ------
     click.ClickException
-        A pair without `=`, a bad or repeated key, a control character
-        or format character in a value, or `format_meta` of the result
-        over `_MAX_META_BYTES` UTF-8 bytes.
+        A pair without `=`, a bad or repeated key, or a control
+        character or format character in a value.
     """
-    if not pairs:
-        return None
     meta: dict[str, str] = {}
-    seen: set[str] = set()
     for pair in pairs:
         key, sep, value = pair.partition('=')
         if not sep or not _META_KEY_RE.fullmatch(key):
             raise click.ClickException(
                 f'--meta {pair!r} is not key=value with a key of'
                 ' lower-case letters and _')
-        if key in seen:
+        if key in meta:
             raise click.ClickException(f'--meta key {key!r} given twice')
-        seen.add(key)
         if any(unicodedata.category(c) in _META_REFUSED_CATEGORIES
                for c in value):
             raise click.ClickException(
                 f'--meta {key!r} holds a line break, control or format'
                 ' character')
-        if value:
-            meta[key] = value
-    meta_bytes = len(format_meta(meta).encode('utf-8'))
+        meta[key] = value
+    return meta
+
+
+def _require_meta_fits(meta: dict[str, str] | None, subject: str) -> None:
+    """Refuse pairs whose `format_meta` form passes `_MAX_META_BYTES`.
+
+    Parameters
+    ----------
+    meta : dict[str, str] or None
+        The pairs a row would store.
+    subject : str
+        Opens the refusal, such as `meta of 16c6c667`.
+
+    Raises
+    ------
+    click.ClickException
+        Over `_MAX_META_BYTES` UTF-8 bytes.
+    """
+    meta_bytes = len(format_meta(meta or {}).encode('utf-8'))
     if meta_bytes > _MAX_META_BYTES:
         raise click.ClickException(
-            f'--meta too long ({meta_bytes} bytes, max {_MAX_META_BYTES}).'
-            ' Keep each value a short pointer such as a path or ticket')
-    return meta
+            f'{subject} would be {meta_bytes} bytes, max {_MAX_META_BYTES};'
+            ' nothing was written. Keep each value a short pointer such as'
+            ' a path or ticket')
 
 
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
@@ -1101,6 +1111,7 @@ def remember(
     if refusal:
         raise click.ClickException(refusal)
     meta = _parse_meta(meta_pairs)
+    _require_meta_fits(merge_meta(None, meta), '--meta')
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -2071,8 +2082,8 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.argument('id')
 @click.argument('content', nargs=-1, required=True)
 @click.option('--meta', 'meta_pairs', multiple=True, metavar='KEY=VALUE',
-              help="The successor's pairs, replacing the target's."
-              " Repeatable; omit to keep the target's.")
+              help="Sets a key on the successor, which keeps the target's"
+              ' other pairs; KEY= removes it. Repeatable.')
 @click.pass_context
 def replace(
         ctx: click.Context, id: str, content: tuple[str, ...],
@@ -2088,9 +2099,12 @@ def replace(
     content : str
         The corrected text, stored as one row exactly as typed.
     meta : str
-        `key=value`, repeatable, as `remember` takes it. With no
-        `--meta` the successor keeps the target's pairs. With any, it
-        holds exactly the pairs given, so `--meta doc=` clears them.
+        `key=value`, repeatable, as `remember` takes it. The successor
+        starts from the pairs its target holds when the drain stores it;
+        each pair sets its key, and an empty value removes it. A
+        successor the drain stores as a plain add keeps only these pairs.
+        The merge against the target's pairs as read now, or a queued
+        target's own pairs, is at most 200 bytes.
 
     \b
     Notes
@@ -2148,6 +2162,15 @@ def replace(
             f' {next_step}, or run insights show {old.id} --history')
     else:
         id = old.id
+    if meta:
+        base_meta = old.meta if queued is None else None
+        if queued is not None:
+            with queue_db(data_dir_val) as conn:
+                base_meta = next((
+                    row.meta for row in list_pending(conn, [name])
+                    if row.queue_uuid == queued), None)
+        _require_meta_fits(
+            merge_meta(base_meta, meta), f'meta of the successor of {id[:8]}')
 
     with queue_db(data_dir_val) as conn:
         # The drain would chain this write behind the pending one and
@@ -3547,11 +3570,12 @@ def insights_meta(
     \b
     Notes
     -----
-    - Keeps id, text, summary and vector; no queue, no LLM call. `replace
-      --meta` instead sets a successor's whole set.
+    - Keeps id, text, summary and vector; no queue, no LLM call.
     - Refused while the scheduler is stopped, while a named id is still
-      queued or a queued `replace --meta` would retire it, while a
-      pending write holds the --where pair, while a drain, store merge,
+      queued, while a queued `replace` that retires a selected row
+      changes a key this call changes or would store over 200 bytes of
+      meta after it, while a pending write holds the
+      --where pair, while a drain, store merge,
       store drop, migrate or backup restore runs, or while a branch
       merges.
 
@@ -3584,23 +3608,18 @@ def insights_meta(
         raise click.ClickException(
             'give at least one KEY=VALUE to set; an empty value removes the'
             " key; insights show <id> prints a row's pairs")
-    sets = _parse_meta(pairs) or {}
-    removals = {
-        key for key, _, value in (pair.partition('=') for pair in pairs)
-        if not value
-        }
+    given = _parse_meta(pairs)
     where_key = where_value = ''
     if where:
         try:
-            where_meta = _parse_meta(where)
+            ((where_key, where_value),) = _parse_meta(where).items()
         except click.ClickException as exc:
             raise click.ClickException(
                 exc.message.replace('--meta', '--where')) from exc
-        if not where_meta:
+        if not where_value:
             raise click.ClickException(
                 f'--where {where[0]} has an empty value; give the value the'
                 ' rows hold now')
-        ((where_key, where_value),) = where_meta.items()
 
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
@@ -3679,16 +3698,18 @@ def insights_meta(
                         selected[row.id] = (member, row)
 
         blockers = []
+        successors_by_target: dict[str, list[QueueRow]] = {}
         for queued in pending:
             show = (f'memman insights show {queued.queue_uuid} --store'
                     f' {queued.store} prints it')
-            if where:
-                if queued.meta and queued.meta.get(where_key) == where_value:
-                    blockers.append(
-                        f'queued write {queued.queue_uuid} in store'
-                        f' {queued.store} holds {where_key}={where_value};'
-                        f' re-run once {show}')
-            elif queued.replaced_id and queued.meta is not None:
+            if (where and queued.meta
+                    and queued.meta.get(where_key) == where_value):
+                blockers.append(
+                    f'queued write {queued.queue_uuid} in store'
+                    f' {queued.store} holds {where_key}={where_value};'
+                    f' re-run once {show}')
+                continue
+            if queued.replaced_id and queued.meta:
                 target_id = _queued_replace_target(
                     backend_by_name[queued.store], queued.replaced_id)
                 earlier = pending_by_uuid.get(target_id)
@@ -3696,11 +3717,18 @@ def insights_meta(
                     target_id = _queued_replace_target(
                         backend_by_name[earlier.store], earlier.replaced_id)
                     earlier = pending_by_uuid.get(target_id)
-                if target_id in selected:
+                if target_id not in selected:
+                    continue
+                shared = sorted(set(queued.meta) & set(given))
+                if shared:
                     blockers.append(
                         f'queued replace {queued.queue_uuid} in store'
-                        f' {queued.store} of {target_id[:8]} sets its own'
-                        f' meta; re-run on {queued.queue_uuid} once {show}')
+                        f' {queued.store} of {target_id[:8]} also changes'
+                        f' {", ".join(shared)}; re-run on'
+                        f' {queued.queue_uuid} once {show}')
+                else:
+                    successors_by_target.setdefault(target_id, []).append(
+                        queued)
         if blockers:
             more = f' (+{len(blockers) - 1} more)' if len(blockers) > 1 else ''
             raise click.ClickException(blockers[0] + more)
@@ -3714,19 +3742,17 @@ def insights_meta(
         changes_by_member: dict[
             str, list[tuple[str, dict[str, str] | None, dict[str, str] | None]]] = {}
         for full_id, (member, row) in sorted(selected.items()):
-            new_meta = {**(row.meta or {}), **sets}
-            for key in removals:
-                new_meta.pop(key, None)
-            if (row.meta or None) == (new_meta or None):
+            new_meta = merge_meta(row.meta, given)
+            if (row.meta or None) == new_meta:
                 continue
-            meta_bytes = len(format_meta(new_meta).encode('utf-8'))
-            if meta_bytes > _MAX_META_BYTES:
-                raise click.ClickException(
-                    f'meta of {full_id[:8]} would be {meta_bytes} bytes, max'
-                    f' {_MAX_META_BYTES}; nothing was written. Keep each value'
-                    ' a short pointer such as a path or ticket')
+            _require_meta_fits(new_meta, f'meta of {full_id[:8]}')
+            for queued in successors_by_target.get(full_id, []):
+                _require_meta_fits(
+                    merge_meta(new_meta, queued.meta),
+                    f'meta of queued replace {queued.queue_uuid} in store'
+                    f' {queued.store} of {full_id[:8]}')
             changes_by_member.setdefault(member, []).append(
-                (full_id, row.meta, new_meta or None))
+                (full_id, row.meta, new_meta))
 
         changed: list[str] = []
         committed: list[str] = []

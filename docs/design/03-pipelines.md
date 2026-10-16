@@ -54,7 +54,7 @@ Each drain processes up to 100 entries by default, stopping when it reaches its 
 6. **Commit one transaction.** Retire the replacement target by linking it to the new ID when it is still current, then insert the new memory, save generated fields and markers, and record operations.
 7. **Finish the queue entry.** Mark it done, or record an error for retry.
 
-A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. It takes the target's meta pairs when the `replace` gave no `--meta` and the target is still current at commit. If the target is not current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
+A replacement always creates a new memory with its own content, author, timestamps, summary, and vector. Its meta pairs are the target's pairs, read inside the commit transaction, with the `replace`'s own pairs applied over them: each sets its key, and an empty value removes it. A memory stored without a replacement link holds only the `replace`'s own pairs. If the target is not current at commit time, the worker stores the new memory without a replacement link and records `target_gone` in the result and `target-gone` in the operation log.
 
 ### Failure and retry
 

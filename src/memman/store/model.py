@@ -30,8 +30,9 @@ class Insight:
     ----------
     meta : dict[str, str] or None
         The `--meta` pairs. None and `{}` both store as no meta. On an
-        Insight a `replace` queues, None means no `--meta` was given,
-        so the drain copies the target's pairs.
+        Insight the drain builds from a queue row, the pairs the write
+        gave, where an empty value removes its key; `_apply_plan`
+        resolves them against the target's pairs.
     """
 
     id: str = ''
@@ -113,6 +114,27 @@ def format_meta(meta: dict[str, str]) -> str:
             value = json.dumps(value, ensure_ascii=False)
         pairs.append(f'{key}={value}')
     return f"[{' '.join(pairs)}]"
+
+
+def merge_meta(
+        base: dict[str, str] | None,
+        given: dict[str, str] | None) -> dict[str, str] | None:
+    """Pairs of base after each given pair is applied; None when none remain.
+
+    Parameters
+    ----------
+    base : dict[str, str] or None
+        The row's current pairs.
+    given : dict[str, str] or None
+        Pairs a command gave. A value sets its key, and an empty value
+        removes it.
+
+    Returns
+    -------
+    dict[str, str] or None
+    """
+    merged = {**(base or {}), **(given or {})}
+    return {key: value for key, value in merged.items() if value} or None
 
 
 def meta_to_json(meta: dict[str, str] | None) -> str | None:

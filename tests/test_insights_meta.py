@@ -408,7 +408,7 @@ def test_meta_where_selects_only_the_exact_pair(cross_backend_runner):
         runner, 'The zebra cache evicts after an hour.', 'doc=x/y')
     _replace_with_meta(
         runner, replaced, 'The zebra cache evicts after two hours.',
-        'ticket=T2')
+        'doc=', 'ticket=T2')
     forgotten = _remember_with(
         runner, 'The giraffe scheduler polls every minute.', 'doc=x/y')
     assert invoke(runner, ['forget', forgotten]).exit_code == 0
@@ -438,7 +438,7 @@ def test_meta_where_held_only_by_retired_rows_is_a_zero_match(
         runner, 'The zebra cache evicts after an hour.', 'doc=x/y')
     _replace_with_meta(
         runner, replaced, 'The zebra cache evicts after two hours.',
-        'ticket=T2')
+        'doc=', 'ticket=T2')
     forgotten = _remember_with(
         runner, 'The giraffe scheduler polls every minute.', 'doc=x/y')
     assert invoke(runner, ['forget', forgotten]).exit_code == 0

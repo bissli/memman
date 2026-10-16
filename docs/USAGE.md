@@ -253,13 +253,13 @@ The worker processes replacements in queue order within a store. A correction of
 memman remember --meta ticket=ABC-12 --meta doc=docs/auth.md "The gateway refreshes the auth token, so a client never retries a refresh itself."
 ```
 
-A key is lower-case letters and `_`. A value holds no line break, control character, or format character, and an empty value sets nothing. The pairs as recall prints them are at most 200 bytes. A refused pair stops the write before it queues.
+A key is lower-case letters and `_`. A value holds no line break, control character, or format character. The pairs as recall prints them are at most 200 bytes. A refused pair stops the write before it queues.
 
 Every pair prints at the end of the memory's recall line and under `meta` in `insights show`. Enrichment, the embedding, and the reranker read the content alone, so a summary never drops or rewrites a pair. The keyword channel counts a word found in a key or a value, and `--basic` matches the stored meta text as well as the content.
 
-`replace` without `--meta` keeps the target's pairs. With any `--meta`, the successor holds exactly the pairs given, so `--meta doc=` clears them. The worker stores a replacement whose target is gone at commit as a plain add, with no pairs.
+Each pair sets its key and keeps the memory's other keys, and an empty value removes its key. The successor of a `replace` starts from the pairs its target holds when the drain stores it, so a `replace` without `--meta` keeps them. The 200-byte cap counts the merged pairs. A replacement whose target is gone when the drain stores it keeps only its own pairs.
 
-`insights meta` changes pairs on stored memories in place. The id, content, summary, and vector stay, nothing queues, and no model runs. Each `key=value` sets its key and keeps the memory's other keys. An empty value removes its key, and a memory left with no key stores none.
+`insights meta` changes pairs on stored memories in place. The id, content, summary, and vector stay, nothing queues, and no model runs. A memory left with no key stores none.
 
 ```bash
 memman insights meta 16c6c667 doc=docs/auth.md                  # one memory by id or prefix
@@ -271,7 +271,7 @@ memman insights meta --where doc=docs/old.md doc=docs/new.md    # every current 
 - The command applies to the store's whole family: the parent and every local branch of it, whichever of them `--store` names. A branch's retired copy of a parent memory keeps its old pairs.
 - The reply is `{action, store, changed}`, where `changed` lists the 8-character ids of the memories it edited. A rerun of the id form changes nothing and returns an empty list. `memman insights meta <changed ids> key=<old value>` undoes a rename.
 - Each edited memory gets a `meta` operation-log entry whose `detail` holds the old and new pairs. `memman log list` prints the entry.
-- It refuses while the scheduler is stopped, while another drain-lock holder runs, while a branch of the family is merging with its token still in the parent, and while a queued write holds the `--where` pair or, in the id form, replaces a selected memory with its own `--meta`. The refusal names the `insights show <id> --store <store>` call that prints the queued write once the drain stores it. A queued `replace` without `--meta` takes the new pairs when the drain stores it.
+- It refuses while the scheduler is stopped, while another drain-lock holder runs, while a branch of the family is merging with its token still in the parent, while a queued write holds the `--where` pair, and while a queued `replace` of a selected memory changes a key this call changes or would store over 200 bytes of meta after the edit. The refusal names the `insights show <id> --store <store>` call that prints the queued write once the drain stores it. A queued `replace` that changes only other keys applies over the edit when the drain stores it.
 - The same relative path stamped from two repositories into one store matches both, and `changed` names every memory edited. The drain stores a write queued after the run, or a failed write retried later, with its queued pairs. A rerun fixes it. On a Postgres store shared by several hosts, the lock and the queue check cover this host only, and a branch made on another host keeps the old value and merges it back.
 
 ### Rejected input
