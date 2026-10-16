@@ -7,6 +7,10 @@ This guide covers setup, memory commands, and maintenance. The [README](../READM
 | Task                                    | Section                                                                        |
 | --------------------------------------- | ------------------------------------------------------------------------------ |
 | Install or change providers             | [Installation](#install-and-uninstall), [provider setup](#provider-setup)      |
+| Run on Windows                          | [Windows under WSL2](#windows-under-wsl2)                                      |
+| Control vendor data retention           | [Data retention and training](#data-retention-and-training)                    |
+| Estimate provider cost                  | [Cost](#cost)                                                                  |
+| Decide what to store                    | [Memory content](#memory-content)                                              |
 | Save, find, correct, or forget a memory | [Memory commands](#memory-commands)                                            |
 | Inspect memory history or quality       | [Insights](#insights)                                                          |
 | Separate projects or change databases   | [Store management](#store-management)                                          |
@@ -36,9 +40,9 @@ Without `--verbose` or `--debug`, the stderr level is `MEMMAN_LOG_LEVEL` (defaul
 
 ## Install and uninstall
 
-`pipx install memman` installs the package, and `memman install` configures it. `pipx install 'memman[postgres]'` adds Postgres support. memman needs Python 3.11+.
+`pipx install memman` installs the package, and `memman install` configures it. `pipx install 'memman[postgres]'` adds Postgres support. memman needs Python 3.11+ on Linux, macOS, or Windows under WSL2.
 
-The default setup uses one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the wizard asks for one key. [Provider setup](#provider-setup) lists the alternatives.
+The default setup uses SQLite for storage, and one OpenRouter endpoint and key for summaries, embeddings, and reranking, so the wizard asks for one key. [Provider setup](#provider-setup) lists the alternatives.
 
 ```bash
 memman install                        # interactive wizard in a terminal
@@ -60,6 +64,18 @@ memman uninstall --claude-code
 | `--endpoint URL` | Endpoint URL for the LLM, embeddings, and rerank. Skips the endpoint prompt. Must start with `http://` or `https://`.                                                     |
 | `--no-wizard`    | Skip all prompts, even in a terminal. Flags, the shell, and defaults supply every value.                                                                                  |
 
+### Install wizard
+
+The wizard runs only in a terminal and only without `--no-wizard`. Each step prompts only when no flag supplies the value and the env file lacks it. The key and model steps also skip the prompt when the shell exports the `MEMMAN_` variable. Key prompts hide the input.
+
+1. **Endpoint.** Any OpenAI-compatible URL that answers `/chat/completions`, `/embeddings`, and `/rerank`. The default is `https://openrouter.ai/api/v1`.
+2. **API key.** `MEMMAN_API_KEY`. Required for any endpoint outside the local machine and optional for `localhost`. On an OpenRouter endpoint with no key set, the prompt offers the shell's `OPENROUTER_API_KEY` as its default.
+3. **Models.** Asked only on an endpoint other than OpenRouter, because the shipped defaults for `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` are OpenRouter ids. Each model ID passes unchanged to the endpoint.
+4. **Backend.** `sqlite` or `postgres`. Offered only when the `memman[postgres]` extra is installed.
+5. **Postgres DSN.** Asked for the `postgres` backend. The wizard connects, checks that the `pgvector` extension exists, and allows three attempts. A DSN that names a host other than `localhost` prints a hint to run Postgres behind PgBouncer in transaction-pooling mode.
+
+Without the wizard, installation stops when a required value is missing: `MEMMAN_API_KEY` on a non-loopback endpoint, the DSN for `--backend postgres`, or any of `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` on an endpoint other than OpenRouter. The error names the key.
+
 ### Installed files and services
 
 Installation writes settings, configures a worker, and adds detected agent integrations. Passing `--claude-code` or `--codex` selects only the named integration. Passing both installs both.
@@ -76,13 +92,24 @@ Installation writes settings, configures a worker, and adds detected agent integ
 | `~/Library/LaunchAgents/com.memman.enrich.plist`       | macOS worker schedule.                          |
 | `~/.memman/logs/`                                      | Worker output.                                  |
 
-memman detects Claude Code by a `claude` binary on `PATH` or an existing `~/.claude` directory. The next new Claude Code session loads the hooks. If no supported agent is detected or explicitly selected, installation configures only the scheduler.
+memman detects Claude Code by a `claude` binary on `PATH` or an existing `~/.claude` directory. The next new Claude Code session loads the hooks. They deliver the session guide and remind the agent to recall. The agent runs every memory command itself, and no hook writes a memory. If no supported agent is detected or explicitly selected, installation configures only the scheduler.
 
 On a host without systemd or launchd, the operator sets `MEMMAN_SCHEDULER_KIND=serve` in the process environment and runs `memman scheduler serve` to process writes.
 
 Existing env-file values take precedence. Installation refuses conflicting flags and prints the `config set` command needed to change the value. It also checks prerequisites and, for OpenRouter, model availability. Installation reports a catalog outage and continues.
 
-After a package upgrade, `memman install` refreshes hook registrations, scheduler units, and new default settings. The [integration chapter](design/05-integration.md) describes the installed hooks and permission entries.
+After a package upgrade, `memman install` refreshes hook registrations, scheduler units, and new default settings:
+
+```bash
+pipx upgrade memman
+memman install
+```
+
+The [integration chapter](design/05-integration.md) describes the installed hooks and permission entries.
+
+### Windows under WSL2
+
+On Windows, pipx installs memman inside a WSL2 distribution, and Claude Code or Codex runs in that same distribution. The worker needs systemd, and `systemd=true` under `[boot]` in `/etc/wsl.conf` turns it on. The data directory stays on the Linux filesystem, because SQLite file locking is unreliable on a `/mnt/c` path. WSL shuts an idle distribution down after the `instanceIdleTimeout` in `%UserProfile%\.wslconfig`, which stops the worker. Queued writes then wait until the next session starts the distribution again. `instanceIdleTimeout=-1` under `[general]` keeps the distribution running.
 
 ### Codex
 
@@ -101,18 +128,6 @@ Codex needs `memman` on its shell's `PATH`. For a custom data directory, the Cod
 Store selection is the same for both agents: `--store NAME`, before or after the verb, takes precedence over `MEMMAN_STORE`, then the saved active store. Codex's shell must inherit `MEMMAN_STORE` to use it. A store name starts with a letter or digit and holds only letters, digits, dashes, and underscores, so it can never name a filesystem path. The selected store must exist: every memory verb refuses a store that does not, and creates nothing.
 
 Both agents share the same stores and background worker. Reinstallation refreshes the skill link and the rules file. A different skill already named `memman` stays in place, and installation reports the conflict. `memman doctor` reports a broken Codex skill link and how to repair it.
-
-### Install wizard
-
-The wizard runs only in a terminal and only without `--no-wizard`. Each step prompts only when no flag supplies the value and the env file lacks it. The key and model steps also skip the prompt when the shell exports the `MEMMAN_` variable. Key prompts hide the input.
-
-1. **Endpoint.** Any OpenAI-compatible URL that answers `/chat/completions`, `/embeddings`, and `/rerank`. The default is `https://openrouter.ai/api/v1`.
-2. **API key.** `MEMMAN_API_KEY`. Required for any endpoint outside the local machine and optional for `localhost`. On an OpenRouter endpoint with no key set, the prompt offers the shell's `OPENROUTER_API_KEY` as its default.
-3. **Models.** Asked only on an endpoint other than OpenRouter, because the shipped defaults for `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` are OpenRouter ids. Each model ID passes unchanged to the endpoint.
-4. **Backend.** `sqlite` or `postgres`. Offered only when the `memman[postgres]` extra is installed.
-5. **Postgres DSN.** Asked for the `postgres` backend. The wizard connects, checks that the `pgvector` extension exists, and allows three attempts. A DSN that names a host other than `localhost` prints a hint to run Postgres behind PgBouncer in transaction-pooling mode.
-
-Without the wizard, installation stops when a required value is missing: `MEMMAN_API_KEY` on a non-loopback endpoint, the DSN for `--backend postgres`, or any of `MEMMAN_LLM_MODEL`, `MEMMAN_EMBED_MODEL`, and `MEMMAN_RERANK_MODEL` on an endpoint other than OpenRouter. The error names the key.
 
 ### Uninstall
 
@@ -133,11 +148,13 @@ A selective uninstall that leaves another integration installed keeps the shared
 
 It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, and it keeps the stores, the queue, and the logs. When an integration cleanup reports an error, uninstall stops and leaves the scheduler and backup schedule in place. Uninstall checks for a Codex skill conflict before it changes any integration or setting.
 
+`pipx uninstall memman` then removes the package.
+
 ---
 
 ## Provider setup
 
-memman sends summaries, embeddings, and reranking to one OpenAI-compatible endpoint with one key. The defaults below are the shipped models. The [README cost table](../README.md#cost) estimates their combined cost.
+memman sends summaries, embeddings, and reranking to one OpenAI-compatible endpoint with one key. The defaults below are the shipped models, and [Cost](#cost) estimates what they cost.
 
 | Setting               | Default                          | Purpose                                                              |
 | --------------------- | -------------------------------- | -------------------------------------------------------------------- |
@@ -161,7 +178,7 @@ At install on an OpenRouter endpoint, installation fills a blank `MEMMAN_API_KEY
 
 ### Voyage models through OpenRouter
 
-OpenRouter runs Voyage models on the operator's own key (OpenRouter BYOK). OpenRouter's Voyage provider calls MongoDB's Atlas Embedding and Reranking API, so the BYOK key must be a MongoDB Atlas model API key (Atlas project, AI Model APIs). A voyageai.com dashboard key does not work. Atlas has its own training opt-out, the organization setting "Help Improve Voyage AI Models", which is on by default.
+OpenRouter runs Voyage models on the operator's own key (OpenRouter BYOK). OpenRouter's Voyage provider calls MongoDB's Atlas Embedding and Reranking API, so the BYOK key must be a MongoDB Atlas model API key (Atlas project, AI Model APIs). A voyageai.com dashboard key does not work.
 
 Existing stores keep their recorded embedding model until an explicit [swap or re-embed](#embedding-operations).
 
@@ -178,6 +195,27 @@ The reranker posts `{model, query, documents, top_n}` to `<MEMMAN_ENDPOINT>/rera
 ```bash
 memman config set MEMMAN_RERANK_ENABLED false
 ```
+
+### Data retention and training
+
+Every summary, embedding, and rerank request carries memory text to the endpoint. memman sends no routing or privacy fields with it, so the provider accounts decide which vendors see that text and what they keep. Two account settings, both the operator's choice, keep it out of vendor retention and training:
+
+- **OpenRouter ZDR.** The OpenRouter account's zero-data-retention (ZDR) setting routes requests only to endpoints that keep no data. Under it, enrichment fails when no ZDR endpoint serves `MEMMAN_LLM_MODEL`. The [daily model check](design/03-pipelines.md#daily-model-check) runs at install and once a day, and reports a model with no ZDR endpoint.
+- **Atlas training opt-out.** The Voyage calls go to MongoDB Atlas, which has its own organization setting, "Help Improve Voyage AI Models". It is on by default. Turning it off keeps embedded and reranked text out of Voyage model training.
+
+The OpenRouter account's Allowed Providers setting narrows routing further, to the vendors on its list. memman neither requires nor checks an allowlist. The sample configuration below allows only Amazon Bedrock, which serves the default summary model, and Voyage AI by MongoDB, which serves the default embedding and rerank models. The default models run under that configuration:
+
+![OpenRouter Allowed Providers set to Amazon Bedrock and Voyage AI by MongoDB](openrouter-allowed-providers-sample.jpg)
+
+### Cost
+
+On the default models, summaries for 1,000 stored memories cost $0.17. MongoDB Atlas bills the embedding and rerank calls that OpenRouter forwards, so memman states no price for them. The [README](../README.md#cost) tabulates the three steps. The summary figure rests on these assumptions:
+
+- **Summaries.** 1,200 input and 100 output tokens per memory, at $0.10 in and $0.50 out per million tokens ([OpenRouter pricing](https://openrouter.ai/anthropic/claude-haiku-5.5)).
+- **Embeddings.** Memories of 150 - 250 tokens and short queries.
+- **Reranking.** Up to 100 candidates per recall, 150 - 250 tokens per query and memory pair. A query of two words or fewer skips reranking.
+
+Longer memories, retries, and other models change the total. memman calls the endpoint with its own API key, and a Claude Pro or Max subscription does not cover those charges. [Credential requirements](#credential-requirements) lists the key each step uses, and the [Reranker](#reranker) setting turns reranking off.
 
 ### Credential requirements
 
@@ -200,6 +238,8 @@ A normal store session builds the global embedding client as well as the store-b
 
 ## Memory commands
 
+The agent runs these commands through its shell tool. They behave the same in an interactive shell:
+
 ```bash
 memman remember "The retry cap stays at three, since a fourth try only adds load."
 memman recall "retry cap" --limit 10
@@ -212,9 +252,24 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 `remember`, `replace`, and `forget` refuse to run while the scheduler is stopped (see [Scheduler](#scheduler)).
 
+### Memory content
+
+Each memory holds one self-contained claim, on one line, within 1,000 UTF-8 bytes. The claim is a lasting finding. A finding is worth storing when a later session without it would redo work, repeat a mistake, or ask the user again.
+
+Use cases of memories worth storing:
+
+- a user preference, only when it changes future work and no file that loads every session already holds it
+- a decision about the work, with its reason
+- a lasting fact about a system, project, or tool
+- a root cause and its fix, stated as the resulting fact
+- an experiment's result and what it means
+- an approach ruled out, with the reason
+
+The agent never stores session state: where a session left off, the next step, a plan and its steps, a commit or release receipt, an open question, the working tree's state, or a pointer to resume. It stores the decision, fact, or result the work reached. A finding may carry a `--meta` pointer to its work folder. Every memory states the claim that holds, never the event that changed it.
+
 ### remember and replace
 
-`remember` queues a new memory. The worker stores it on its next drain, a pass over the write queue that the [scheduler](#scheduler) starts on a timer. Recall finds the memory only after that. Submission returns one line of JSON:
+`remember` queues a new memory. The worker stores it on its next drain, a pass over the write queue that the [scheduler](#scheduler) starts on a timer. It adds a short summary and an embedding and stores the text as written. Recall finds the memory only after that. Submission returns one line of JSON:
 
 | Field              | Meaning                                                                        |
 | ------------------ | ------------------------------------------------------------------------------ |
@@ -245,6 +300,21 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 The worker processes replacements in queue order within a store. A correction of a previous correction replaces its successor. `insights show <id> --history` displays the chain.
 
+### Rejected input
+
+Both commands check the text in this order and report the first problem:
+
+1. **Size.** More than 1,000 UTF-8 bytes.
+2. **Line number.** Text that names a line of a file, because a line number is outdated after the next edit:
+   - a source, config, or doc file name followed by a line: `scripts/auth.py:88`, `config.yaml:12`, `app.py-1233`, `cli.py ~1190`,
+   - `line N` or `lines N`,
+   - a bare `:N` or `L123` after the start, a space, `(`, `,`, or a semicolon: `at :1774`, `emsx.py L419`.
+
+   Both commands accept a host port (`localhost:6379`, `db.example.com:5432`), an image tag (`python:3.11`), a clock time (`14:18`), `code:404`, a slice (`[:80]`), and `DISPLAY=:99`. They refuse a port without its host (`:9222`).
+3. **Author.** Text whose first word is the value of `MEMMAN_AUTHOR`, ignoring case. The author field already records who wrote it. The check runs only when `MEMMAN_AUTHOR` is set, so the login-name fallback never refuses.
+4. **Line break.** Text that spans several lines.
+5. **Leading label.** Text that opens with at most three words, a colon, and a space: `Fix:`, `AWS gotcha:`, `User decision:`. A longer phrase before the colon is allowed because it may be part of a sentence, such as "The rule is simple:". A quote or backtick ends the match, so text may start with a quoted error. The error says to open on the subject and state the lasting finding as a sentence, or store nothing when the text is session state.
+
 ### Meta pairs
 
 `remember` and `replace` take `--meta key=value`, repeatable, for a pointer kept beside the text:
@@ -273,21 +343,6 @@ memman insights meta --where doc=docs/old.md doc=docs/new.md    # every current 
 - Each edited memory gets a `meta` operation-log entry whose `detail` holds the old and new pairs. `memman log list` prints the entry.
 - It refuses while the scheduler is stopped, while another drain-lock holder runs, while a branch of the family is merging with its token still in the parent, while a queued write holds the `--where` pair, and while a queued `replace` of a selected memory changes a key this call changes or would store over 200 bytes of meta after the edit. The refusal names the `insights show <id> --store <store>` call that prints the queued write once the drain stores it. A queued `replace` that changes only other keys applies over the edit when the drain stores it.
 - The same relative path stamped from two repositories into one store matches both, and `changed` names every memory edited. The drain stores a write queued after the run, or a failed write retried later, with its queued pairs. A rerun fixes it. On a Postgres store shared by several hosts, the lock and the queue check cover this host only, and a branch made on another host keeps the old value and merges it back.
-
-### Rejected input
-
-Both commands check the text in this order and report the first problem:
-
-1. **Size.** More than 1,000 UTF-8 bytes.
-2. **Line number.** Text that names a line of a file, because a line number is outdated after the next edit:
-   - a source, config, or doc file name followed by a line: `scripts/auth.py:88`, `config.yaml:12`, `app.py-1233`, `cli.py ~1190`,
-   - `line N` or `lines N`,
-   - a bare `:N` or `L123` after the start, a space, `(`, `,`, or a semicolon: `at :1774`, `emsx.py L419`.
-
-   Both commands accept a host port (`localhost:6379`, `db.example.com:5432`), an image tag (`python:3.11`), a clock time (`14:18`), `code:404`, a slice (`[:80]`), and `DISPLAY=:99`. They refuse a port without its host (`:9222`).
-3. **Author.** Text whose first word is the value of `MEMMAN_AUTHOR`, ignoring case. The author field already records who wrote it. The check runs only when `MEMMAN_AUTHOR` is set, so the login-name fallback never refuses.
-4. **Line break.** Text that spans several lines.
-5. **Leading label.** Text that opens with at most three words, a colon, and a space: `Fix:`, `AWS gotcha:`, `User decision:`. A longer phrase before the colon is allowed because it may be part of a sentence, such as "The rule is simple:". A quote or backtick ends the match, so text may start with a quoted error. The error says to open on the subject and state the lasting finding as a sentence, or store nothing when the text is session state.
 
 ### recall
 
@@ -328,7 +383,7 @@ memman config set MEMMAN_RERANK_ENABLED_work false
 
 `forget` accepts a replaced memory. It refuses a current memory whose predecessor is not forgotten. The error names `replace`, which keeps the correction chain intact, and the forgets that drop the topic: each predecessor, then the memory. It also refuses a queued write.
 
-No memory expires automatically. `insights review` flags memories that may need updating or removal.
+A memory stays until the agent replaces or forgets it, and nothing expires on its own. `recall` omits a replaced memory, and `insights show --history` still lists it. `insights review` flags memories that may need updating or removal.
 
 ---
 
@@ -344,6 +399,205 @@ memman insights meta <id>... key=value # set or remove meta pairs in place
 - `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `replaced`, or `forgotten`. A forgotten entry omits the content. An ID still in the write queue reports that processing is pending.
 - `review` checks current memories, newest first, against the same patterns as `quality_warnings`, and stops after `--limit` flagged memories (default 20).
 - `meta` edits the [meta pairs](#meta-pairs) of stored memories by id or by `--where key=value`, across the store and its branches.
+
+---
+
+## Store management
+
+A store is a named, isolated set of memories: one SQLite file or one Postgres schema. [Chapter 2](design/02-concepts.md) explains why stores exist.
+
+```bash
+memman store list            # JSON: {stores, active, branches}
+memman store create work
+memman store use work        # write "work" to the active-store file
+memman store remove old-project [--yes]
+memman store branch work rearch        # a branch of work, named work__rearch_<4 hex>
+memman store merge work__rearch_7f3a   # replay the branch into work, then delete it
+memman store drop work__rearch_7f3a    # list the branch's own rows, then delete it
+```
+
+- A store name starts with a letter or digit and continues with letters, digits, `_`, or `-`. A Postgres store also needs a name that is a valid SQL identifier. `store create` refuses a name holding `__`, which marks a branch.
+- A store exists once `store create` has made it. Every command that opens a store, `remember` and `replace` included, refuses a store that does not exist with `store "<name>" does not exist (create it with memman store create <name>)` and writes nothing: no directory, no Postgres schema, no env key. `memman install` creates the store the active-store file names.
+- `store use` accepts only an existing store, and refuses a branch.
+- `store remove` asks first unless the call passes `--yes`. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It refuses a branch and names `store merge` and `store drop`. It refuses a store that holds a `branch_token:<branch>` meta key, the mark of an open branch on this host or another. It lists each such key. It marks a key whose branch this data dir made and does not hold, which `store drop <branch>` clears, and a key another host or data dir made, which only that host's merge or drop ends. When it cannot read a SQLite store's file, it skips these checks and removes the store.
+- `memman store` with no subcommand runs `store list`.
+
+**Store selection**, from highest priority to lowest:
+
+1. the `--store <name>` flag, before or after an agent verb,
+2. the `MEMMAN_STORE` environment variable,
+3. the active-store file `<data dir>/active`,
+4. `default`.
+
+**Per-directory stores.** memman reads `MEMMAN_STORE` from the process environment, so two agent sessions on one host can use different stores, and a tool that sets variables per directory switches the store on a directory change.
+
+| Mechanism                          | Setup                                                    | Scope                                                           |
+| ---------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `direnv`                           | `.envrc` in the project holds `export MEMMAN_STORE=work` | Every shell, agent, and subprocess started in the directory     |
+| `--store` flag                     | `--store work` on each command                           | One command                                                     |
+| Project `CLAUDE.md` or `AGENTS.md` | A directive telling the agent to pass `--store work`     | Sessions that read that file                                    |
+| `memman store use work`            | Writes the global active-store file                      | Every caller on the host. The most recent `use` sets the store. |
+
+Named stores separate projects. The scheduler processes only the queue in its configured data directory, so a separate `MEMMAN_DATA_DIR` per project creates queues that no scheduler processes.
+
+### Store branches
+
+A branch is an empty SQLite store layered over its live parent store. It holds the same kind of memory as the parent, under the same content rules. Its writes other than `insights meta` stay apart from the parent's rows, and recall on the branch also reads the parent's current rows. It ends when the user says so, with `store merge` or `store drop`. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
+
+| Command                         | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store branch <parent> <label>` | Creates an empty `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `path`, `created_at`, and `instruction`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `store merge <branch>`          | Copies the branch's own rows into the parent, repeats the branch's `replace` and `forget` on parent rows, deletes the branch. Prints `copied`, `retired`, and `conflicts`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `store drop <branch>`           | Deletes the branch and discards its rows. Prints `dropped` and the `{id, content, replaces}` of each current branch row. After a token refusal, merge cannot run, so the agent re-saves every listed claim worth storing with `remember --store <parent>` or `replace --store <parent> <replaces>`. Otherwise the user names the claims to keep, and the agent offers each experiment result or ruled-out approach the branch reached. `replaces` names the parent row the row corrects, else null. After an `rm -rf` of the branch directory, removes the parent's token and the queued writes, and lists those writes with `id` null. Refuses a branch another host or data dir made. |
+
+- The parent of a branch is the `branch_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store. `store branch` refuses a branch as parent. Any number of branches of one parent can stay open. Siblings see each other's rows only after one merges.
+- The `instruction` line reads "Use memman store <branch>: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A session that reads the line passes `--store <branch>` to every memory verb. A session without it uses the parent.
+- A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. Recall also refuses when the parent's `meta` lacks `branch_token:<branch>`, as after a parent removed and recreated under the same name, pointed at another database, or restored from an older backup. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>` and re-save each listed row worth storing in the parent. `status` counts the rows recall sees.
+- `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. `insights meta` edits the parent and every branch of it, whichever store `--store` names, and a later `drop` of the branch leaves the parent's edits in place. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `forget` of a parent row the parent already replaced does the same. A `replace` of a parent row the parent already retired fails, and names the current head when its chain has one.
+- `merge` refuses a store that is not a branch, the active branch, a missing parent, queued writes for the branch, a pending or failed parent `replace` whose target's chain holds a row the branch retired, an embed swap or re-embed in progress in either store, a branch whose embedding fingerprint differs from the parent's, and a parent that does not hold the branch's token. After the checks it refuses every further write to the branch. Each `conflicts` entry is a copied row the branch and the parent retired differently. The parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
+- A `merge` that stops part way says to re-run `merge`, which finishes it. A re-run after the parent commit writes nothing more to the parent and reports the conflicts as the parent holds them. `drop` refuses a branch whose merge stopped after the parent commit, the active branch, and a branch with queued writes. A missing parent does not stop `drop`. An unreachable parent stops it only for a branch whose merge started.
+- A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time. On a branch whose parent is missing or unreachable, `doctor` reports a failed `integrity` check and runs the other checks, `branches` included.
+
+### Migration between SQLite and Postgres
+
+`memman migrate` copies stores between backends in either direction.
+
+```bash
+memman migrate --store work --dry-run    # SQLite -> Postgres, print the plan only
+memman migrate --store work              # SQLite -> Postgres, asks first
+memman migrate --store work --to sqlite  # Postgres -> SQLite
+memman migrate --all --yes               # every store, no prompt
+```
+
+| Flag           | Meaning                                                       |
+| -------------- | ------------------------------------------------------------- |
+| `--store NAME` | The store to migrate. Required unless `--all` is given.       |
+| `--all`        | Every store in the data directory.                            |
+| `--to NAME`    | Target backend, `postgres` or `sqlite`. Default `postgres`.   |
+| `--dry-run`    | Print the plan and change nothing. Only with `--to postgres`. |
+| `--yes`        | Skip the confirmation prompt.                                 |
+
+| Direction       | Source                                                                                         | Destination                       | Resulting backend settings                                                 |
+| --------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------- |
+| `--to postgres` | SQLite store, moved to `archive/<store>/<YYYYMMDD>_<NN>/`                                      | `store_<name>` schema in Postgres | `MEMMAN_BACKEND_<store>=postgres`, plus `MEMMAN_POSTGRES_DSN_<store>`      |
+| `--to sqlite`   | Postgres `store_<name>`, dumped to `archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump`, then dropped | New SQLite store                  | `MEMMAN_BACKEND_<store>=sqlite`, and `MEMMAN_POSTGRES_DSN_<store>` removed |
+
+- Both directions need `pg_dump` on `PATH` and hold the drain lock, so a scheduled drain cannot run during the copy.
+- The DSN for `--to postgres` is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. `--all` needs `MEMMAN_DEFAULT_POSTGRES_DSN`.
+- The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also labels each target schema `[will create]`, `[EMPTY, will recreate]`, or `[POPULATED, will DROP CASCADE and recreate]`. `--to sqlite` refuses a store whose SQLite directory already exists.
+- The command skips a store already on the target backend and says so.
+- It refuses a store with an embedding swap in progress. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and before cutover `--abort` discards it.
+- It refuses a store whose name is not a valid Postgres identifier, or skips it under `--all`, and the message names a fix, such as a portable name to create and migrate.
+- A migration in the other direction reverses the change. `memman doctor` checks the result: its `stale_post_migrate_source` check warns when SQLite files remain in a store that routes to Postgres.
+
+---
+
+## Status and logs
+
+```bash
+memman status                            # statistics for the selected store (JSON)
+memman doctor [--text]                   # health checks (JSON, or colored text)
+memman log list                          # operation log (JSON, last 20)
+memman log list --limit 50               # more entries
+memman log list --since 7d               # entries from the last 7 days
+memman log list --since 7d --stats       # counts by operation
+memman log list --text                   # text table
+memman log worker [--errors] [--lines N]
+memman log worker --stack [--lines N]
+memman log calls [--since 7d]            # agent-verb calls per date and verb
+```
+
+**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, the oplog size, and the storage path.
+
+**`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
+
+| Group              | Checks                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `branches` |
+| Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                |
+| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `codex_skill`, `optional_extras`      |
+| Providers          | `llm_probe`, `embed_probe`                                                                                                                  |
+
+A store with no memories skips `integrity`, `enrichment_coverage`, and `embedding_consistency`. `branches` covers the data directory: it lists each open branch with its parent and creation time, and warns when a parent is missing.
+
+`enrichment_coverage` warns on any memory whose enrichment never completed, reports the count as `stranded`, and names `memman enrich --stranded-only` as the fix.
+
+**`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
+
+**`log worker`** prints the last 50 lines (`--lines N`) of a worker log:
+
+| Flag       | File                                                |
+| ---------- | --------------------------------------------------- |
+| (none)     | `~/.memman/logs/enrich.log`, the worker's stdout    |
+| `--errors` | `~/.memman/logs/enrich.err`, the worker's stderr    |
+| `--stack`  | `<data dir>/logs/memman.log` and its rotated copies |
+
+`memman.log` holds the tracebacks that a one-line error leaves out. `--stack` and `--errors` cannot be combined. `enrich.log` and `enrich.err` stay under `~/.memman/logs` regardless of `--data-dir`.
+
+### Agent call log
+
+`log calls` reports call counts by UTC date and command as JSON. It covers the twelve agent verbs: `recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `insights meta`, `status`, `doctor`, `store branch`, `store merge`, and `store drop`. `--since` accepts the same time windows as `log list`.
+
+Each call appends a record to `<data dir>/logs/calls.log`:
+
+```text
+<UTC start>|<verb>|<store>|<exit code>|<ms>
+```
+
+A record holds no argument and no memory text. An invalid store name prints as `?`. A command rejected during argument parsing, a hook, and worker activity produce no entry. `log calls` counts a malformed line under `meta.malformed` and leaves it out of the command totals. No step rotates or trims the file.
+
+---
+
+## Scheduler
+
+The scheduler starts a drain of the write queue every 60 seconds by default. It is a systemd timer on Linux, a launchd agent on macOS, or a `memman scheduler serve` process. Its state is `started` or `stopped`, kept in `~/.memman/scheduler.state`.
+
+```bash
+memman scheduler status [--text]      # platform, state, interval, next run, log paths, last drain
+memman scheduler start [--text]       # accept writes and resume drains
+memman scheduler stop [--text]        # refuse writes and pause drains
+memman scheduler trigger              # start a drain now and return at once
+memman scheduler interval [--seconds N]
+memman scheduler install [--interval N] [--endpoint URL]
+memman scheduler uninstall
+memman scheduler serve [--interval N] [--once]
+memman scheduler debug on|off|status
+```
+
+**Recall remains available while the scheduler is stopped.** `remember`, `replace`, and `forget` exit with status 1 and report that writes are disabled. The error names `memman scheduler start`, which enables writes.
+
+`scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `enrich`, `embed swap`, and `embed reembed`.
+
+| Command                       | Behavior                                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trigger`                     | Ask systemd or launchd to start a drain; return `dispatched` immediately. `log worker` shows the result. Serve mode uses `serve --once` instead. |
+| `interval`                    | Show the interval, or set it with `--seconds N`. systemd and launchd require at least 60 seconds.                                                |
+| `install`                     | Install only the scheduler, filling missing settings and refusing conflicting flags. `--interval` defaults to 60 and must be at least 60.        |
+| `uninstall`                   | Remove the scheduler unit and state files, and strip secret settings. Keep the Claude Code integration.                                          |
+| `serve`                       | Run drains in the foreground; `--once` processes one drain and exits.                                                                            |
+| `debug on` / `off` / `status` | Control or inspect worker tracing.                                                                                                               |
+
+**Serve mode.** Hosts without systemd or launchd use `MEMMAN_SCHEDULER_KIND=serve`. The loop reads its interval from `--interval`, then the installed `MEMMAN_INTERVAL`, then 60. An interval of zero runs drains without a pause. In this mode `scheduler interval` only records the value, and a new interval takes effect when the loop restarts with `--interval N`. SIGTERM or SIGINT stops it after the current memory, with exit code zero.
+
+**Debug output.** `debug on` updates `~/.memman/debug.state`. Later drains write `~/.memman/logs/debug.log` at mode 0600, including raw model requests, responses, and memory content. `debug off` stops tracing and retains the file. The process-environment variable `MEMMAN_DEBUG` overrides the state file.
+
+### Queue
+
+```bash
+memman scheduler queue list [--limit N]    # status counts and recent writes (default 50)
+memman scheduler queue failed [--limit N]  # failed writes (default 50)
+memman scheduler queue show <row_id>       # one write in full
+memman scheduler queue retry <row_id>      # return one failed write to pending
+memman scheduler queue purge --done        # delete done writes
+```
+
+`memman scheduler queue` with no subcommand runs `queue list`. Each queued write has one status:
+
+| Status    | Meaning                                                                                                                                                                                |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pending` | Waiting for a drain, or claimed by one. The next drain takes over a claim older than 600 seconds. A write keeps this status however long the scheduler stays stopped.                  |
+| `done`    | Stored. Later maintenance deletes completed entries older than 60 seconds.                                                                                                             |
+| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it. |
 
 ---
 
@@ -415,205 +669,6 @@ memman scheduler start
 
 ---
 
-## Store management
-
-A store is a named, isolated set of memories: one SQLite file or one Postgres schema. [Chapter 2](design/02-concepts.md) explains why stores exist.
-
-```bash
-memman store list            # JSON: {stores, active, branches}
-memman store create work
-memman store use work        # write "work" to the active-store file
-memman store remove old-project [--yes]
-memman store branch work rearch        # a branch of work, named work__rearch_<4 hex>
-memman store merge work__rearch_7f3a   # replay the branch into work, then delete it
-memman store drop work__rearch_7f3a    # list the branch's own rows, then delete it
-```
-
-- A store name starts with a letter or digit and continues with letters, digits, `_`, or `-`. A Postgres store also needs a name that is a valid SQL identifier. `store create` refuses a name holding `__`, which marks a branch.
-- A store exists once `store create` has made it. Every command that opens a store, `remember` and `replace` included, refuses a store that does not exist with `store "<name>" does not exist (create it with memman store create <name>)` and writes nothing: no directory, no Postgres schema, no env key. `memman install` creates the store the active-store file names.
-- `store use` accepts only an existing store, and refuses a branch.
-- `store remove` asks first unless the call passes `--yes`. It refuses the store named in the active-store file. It deletes the store's data, its queued writes, and its `MEMMAN_BACKEND_<store>`, `MEMMAN_POSTGRES_DSN_<store>`, and `MEMMAN_RERANK_ENABLED_<store>` keys. It refuses a branch and names `store merge` and `store drop`. It refuses a store that holds a `branch_token:<branch>` meta key, the mark of an open branch on this host or another. It lists each such key. It marks a key whose branch this data dir made and does not hold, which `store drop <branch>` clears, and a key another host or data dir made, which only that host's merge or drop ends. When it cannot read a SQLite store's file, it skips these checks and removes the store.
-- `memman store` with no subcommand runs `store list`.
-
-**Store selection**, from highest priority to lowest:
-
-1. the `--store <name>` flag, before or after an agent verb,
-2. the `MEMMAN_STORE` environment variable,
-3. the active-store file `<data dir>/active`,
-4. `default`.
-
-### Store branches
-
-A branch is an empty SQLite store layered over its live parent store. It holds the same kind of memory as the parent, under the same content rules. Its writes other than `insights meta` stay apart from the parent's rows, and recall on the branch also reads the parent's current rows. It ends when the user says so, with `store merge` or `store drop`. [Chapter 3](design/03-pipelines.md#36-store-branches) describes the three flows.
-
-| Command                         | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `store branch <parent> <label>` | Creates an empty `<parent>__<label>_<4 hex>` on SQLite, whatever the parent's backend. Prints `store`, `parent`, `path`, `created_at`, and `instruction`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `store merge <branch>`          | Copies the branch's own rows into the parent, repeats the branch's `replace` and `forget` on parent rows, deletes the branch. Prints `copied`, `retired`, and `conflicts`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `store drop <branch>`           | Deletes the branch and discards its rows. Prints `dropped` and the `{id, content, replaces}` of each current branch row. After a token refusal, merge cannot run, so the agent re-saves every listed claim worth storing with `remember --store <parent>` or `replace --store <parent> <replaces>`. Otherwise the user names the claims to keep, and the agent offers each experiment result or ruled-out approach the branch reached. `replaces` names the parent row the row corrects, else null. After an `rm -rf` of the branch directory, removes the parent's token and the queued writes, and lists those writes with `id` null. Refuses a branch another host or data dir made. |
-
-- The parent of a branch is the `branch_parent` entry in its `meta` table, which `status` and `store list` print. `merge` and `drop` refuse any store without it, so no agent verb can delete an ordinary store. `store branch` refuses a branch as parent. Any number of branches of one parent can stay open. Siblings see each other's rows only after one merges.
-- The `instruction` line reads "Use memman store <branch>: pass --store <branch> to every memman recall, remember, replace, forget and insights show call." A session that reads the line passes `--store <branch>` to every memory verb. A session without it uses the parent.
-- A `--store <branch>` recall ranks the branch's rows and the parent's current rows in one pass. A row the branch holds hides the parent row with the same id. Recall refuses when the parent's embedding fingerprint differs from the branch's, and the message names the branch's embed swap. Recall also refuses when the parent's `meta` lacks `branch_token:<branch>`, as after a parent removed and recreated under the same name, pointed at another database, or restored from an older backup. The message names the fix: repair a parent that points at the wrong database, else `store drop <branch>` and re-save each listed row worth storing in the parent. `status` counts the rows recall sees.
-- `remember`, `replace`, and `forget` with `--store <branch>` write only the branch. `insights meta` edits the parent and every branch of it, whichever store `--store` names, and a later `drop` of the branch leaves the parent's edits in place. A `replace` or `forget` of a current parent row copies the row into the branch and retires the copy there. A `forget` of a parent row the parent already replaced does the same. A `replace` of a parent row the parent already retired fails, and names the current head when its chain has one.
-- `merge` refuses a store that is not a branch, the active branch, a missing parent, queued writes for the branch, a pending or failed parent `replace` whose target's chain holds a row the branch retired, an embed swap or re-embed in progress in either store, a branch whose embedding fingerprint differs from the parent's, and a parent that does not hold the branch's token. After the checks it refuses every further write to the branch. Each `conflicts` entry is a copied row the branch and the parent retired differently. The parent keeps its own state, and the operator or agent settles the entry with `replace` or `forget`.
-- A `merge` that stops part way says to re-run `merge`, which finishes it. A re-run after the parent commit writes nothing more to the parent and reports the conflicts as the parent holds them. `drop` refuses a branch whose merge stopped after the parent commit, the active branch, and a branch with queued writes. A missing parent does not stop `drop`. An unreachable parent stops it only for a branch whose merge started.
-- A branch cannot be the active store. `migrate` skips it, and `backup` bundles it like any store. `doctor` lists each branch with its parent and creation time. On a branch whose parent is missing or unreachable, `doctor` reports a failed `integrity` check and runs the other checks, `branches` included.
-
-**Per-directory stores.** memman reads `MEMMAN_STORE` from the process environment, so a tool that sets variables per directory switches the store on a directory change.
-
-| Mechanism                          | Setup                                                    | Scope                                                           |
-| ---------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| `direnv`                           | `.envrc` in the project holds `export MEMMAN_STORE=work` | Every shell, agent, and subprocess started in the directory     |
-| `--store` flag                     | `--store work` on each command                           | One command                                                     |
-| Project `CLAUDE.md` or `AGENTS.md` | A directive telling the agent to pass `--store work`     | Sessions that read that file                                    |
-| `memman store use work`            | Writes the global active-store file                      | Every caller on the host. The most recent `use` sets the store. |
-
-Named stores separate projects. The scheduler processes only the queue in its configured data directory, so a separate `MEMMAN_DATA_DIR` per project creates queues that no scheduler processes.
-
-### Migration between SQLite and Postgres
-
-`memman migrate` copies stores between backends in either direction.
-
-```bash
-memman migrate --store work --dry-run    # SQLite -> Postgres, print the plan only
-memman migrate --store work              # SQLite -> Postgres, asks first
-memman migrate --store work --to sqlite  # Postgres -> SQLite
-memman migrate --all --yes               # every store, no prompt
-```
-
-| Flag           | Meaning                                                       |
-| -------------- | ------------------------------------------------------------- |
-| `--store NAME` | The store to migrate. Required unless `--all` is given.       |
-| `--all`        | Every store in the data directory.                            |
-| `--to NAME`    | Target backend, `postgres` or `sqlite`. Default `postgres`.   |
-| `--dry-run`    | Print the plan and change nothing. Only with `--to postgres`. |
-| `--yes`        | Skip the confirmation prompt.                                 |
-
-| Direction       | Source                                                                                         | Destination                       | Resulting backend settings                                                 |
-| --------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------- |
-| `--to postgres` | SQLite store, moved to `archive/<store>/<YYYYMMDD>_<NN>/`                                      | `store_<name>` schema in Postgres | `MEMMAN_BACKEND_<store>=postgres`, plus `MEMMAN_POSTGRES_DSN_<store>`      |
-| `--to sqlite`   | Postgres `store_<name>`, dumped to `archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump`, then dropped | New SQLite store                  | `MEMMAN_BACKEND_<store>=sqlite`, and `MEMMAN_POSTGRES_DSN_<store>` removed |
-
-- Both directions need `pg_dump` on `PATH` and hold the drain lock, so a scheduled drain cannot run during the copy.
-- The DSN for `--to postgres` is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. `--all` needs `MEMMAN_DEFAULT_POSTGRES_DSN`.
-- The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also labels each target schema `[will create]`, `[EMPTY, will recreate]`, or `[POPULATED, will DROP CASCADE and recreate]`. `--to sqlite` refuses a store whose SQLite directory already exists.
-- The command skips a store already on the target backend and says so.
-- It refuses a store with an embedding swap in progress. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and before cutover `--abort` discards it.
-- It refuses a store whose name is not a valid Postgres identifier, or skips it under `--all`, and the message names a fix, such as a portable name to create and migrate.
-- A migration in the other direction reverses the change. `memman doctor` checks the result: its `stale_post_migrate_source` check warns when SQLite files remain in a store that routes to Postgres.
-
----
-
-## Status and logs
-
-```bash
-memman status                            # statistics for the selected store (JSON)
-memman doctor [--text]                   # health checks (JSON, or colored text)
-memman log list                          # operation log (JSON, last 20)
-memman log list --limit 50               # more entries
-memman log list --since 7d               # entries from the last 7 days
-memman log list --since 7d --stats       # counts by operation
-memman log list --text                   # text table
-memman log calls [--since 7d]            # agent-verb calls per date and verb
-memman log worker [--errors] [--lines N]
-memman log worker --stack [--lines N]
-```
-
-**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, the oplog size, and the storage path.
-
-**`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
-
-| Group              | Checks                                                                                                                                      |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `branches` |
-| Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                |
-| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `codex_skill`, `optional_extras`      |
-| Providers          | `llm_probe`, `embed_probe`                                                                                                                  |
-
-A store with no memories skips `integrity`, `enrichment_coverage`, and `embedding_consistency`. `branches` covers the data directory: it lists each open branch with its parent and creation time, and warns when a parent is missing.
-
-`enrichment_coverage` warns on any memory whose enrichment never completed, reports the count as `stranded`, and names `memman enrich --stranded-only` as the fix.
-
-**`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
-
-### Agent call log
-
-`log calls` reports call counts by UTC date and command as JSON. It covers the twelve agent verbs: `recall`, `remember`, `replace`, `forget`, `insights show`, `insights review`, `insights meta`, `status`, `doctor`, `store branch`, `store merge`, and `store drop`. `--since` accepts the same time windows as `log list`.
-
-Each call appends a record to `<data dir>/logs/calls.log`:
-
-```text
-<UTC start>|<verb>|<store>|<exit code>|<ms>
-```
-
-A record holds no argument and no memory text. An invalid store name prints as `?`. A command rejected during argument parsing, a hook, and worker activity produce no entry. `log calls` counts a malformed line under `meta.malformed` and leaves it out of the command totals. No step rotates or trims the file.
-
-**`log worker`** prints the last 50 lines (`--lines N`) of a worker log:
-
-| Flag       | File                                                |
-| ---------- | --------------------------------------------------- |
-| (none)     | `~/.memman/logs/enrich.log`, the worker's stdout    |
-| `--errors` | `~/.memman/logs/enrich.err`, the worker's stderr    |
-| `--stack`  | `<data dir>/logs/memman.log` and its rotated copies |
-
-`memman.log` holds the tracebacks that a one-line error leaves out. `--stack` and `--errors` cannot be combined. `enrich.log` and `enrich.err` stay under `~/.memman/logs` regardless of `--data-dir`.
-
----
-
-## Scheduler
-
-The scheduler starts a drain of the write queue every 60 seconds by default. It is a systemd timer on Linux, a launchd agent on macOS, or a `memman scheduler serve` process. Its state is `started` or `stopped`, kept in `~/.memman/scheduler.state`.
-
-```bash
-memman scheduler status [--text]      # platform, state, interval, next run, log paths, last drain
-memman scheduler start [--text]       # accept writes and resume drains
-memman scheduler stop [--text]        # refuse writes and pause drains
-memman scheduler trigger              # start a drain now and return at once
-memman scheduler interval [--seconds N]
-memman scheduler install [--interval N] [--endpoint URL]
-memman scheduler uninstall
-memman scheduler serve [--interval N] [--once]
-memman scheduler debug on|off|status
-```
-
-**Recall remains available while the scheduler is stopped.** `remember`, `replace`, and `forget` exit with status 1 and report that writes are disabled. The error names `memman scheduler start`, which enables writes.
-
-`scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `enrich`, `embed swap`, and `embed reembed`.
-
-| Command                       | Behavior                                                                                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `trigger`                     | Ask systemd or launchd to start a drain; return `dispatched` immediately. `log worker` shows the result. Serve mode uses `serve --once` instead. |
-| `interval`                    | Show the interval, or set it with `--seconds N`. systemd and launchd require at least 60 seconds.                                                |
-| `install`                     | Install only the scheduler, filling missing settings and refusing conflicting flags. `--interval` defaults to 60 and must be at least 60.        |
-| `uninstall`                   | Remove the scheduler unit and state files, and strip secret settings. Keep the Claude Code integration.                                          |
-| `serve`                       | Run drains in the foreground; `--once` processes one drain and exits.                                                                            |
-| `debug on` / `off` / `status` | Control or inspect worker tracing.                                                                                                               |
-
-**Serve mode.** Hosts without systemd or launchd use `MEMMAN_SCHEDULER_KIND=serve`. The loop reads its interval from `--interval`, then the installed `MEMMAN_INTERVAL`, then 60. An interval of zero runs drains without a pause. In this mode `scheduler interval` only records the value, and a new interval takes effect when the loop restarts with `--interval N`. SIGTERM or SIGINT stops it after the current memory, with exit code zero.
-
-**Debug output.** `debug on` updates `~/.memman/debug.state`. Later drains write `~/.memman/logs/debug.log` at mode 0600, including raw model requests, responses, and memory content. `debug off` stops tracing and retains the file. The process-environment variable `MEMMAN_DEBUG` overrides the state file.
-
-### Queue
-
-```bash
-memman scheduler queue list [--limit N]    # status counts and recent writes (default 50)
-memman scheduler queue failed [--limit N]  # failed writes (default 50)
-memman scheduler queue show <row_id>       # one write in full
-memman scheduler queue retry <row_id>      # return one failed write to pending
-memman scheduler queue purge --done        # delete done writes
-```
-
-`memman scheduler queue` with no subcommand runs `queue list`. Each queued write has one status:
-
-| Status    | Meaning                                                                                                                                                                                |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pending` | Waiting for a drain, or claimed by one. The next drain takes over a claim older than 600 seconds. A write keeps this status however long the scheduler stays stopped.                  |
-| `done`    | Stored. Later maintenance deletes completed entries older than 60 seconds.                                                                                                             |
-| `failed`  | Five attempts failed. The waits between attempts are 60, 120, 240, and 480 seconds. The text stays in the queue, and no automatic step deletes it. `queue retry <row_id>` requeues it. |
-
----
-
 ## Backup
 
 `memman backup` snapshots all stores and the write queue, either on demand or on a schedule. The target belongs outside the source data directory, on storage that survives the loss of that directory. memman does not check the target location. Snapshots use SQLite's online backup API or Postgres `pg_dump -Fc` while the worker continues running.
@@ -680,21 +735,6 @@ The file uses `KEY=VALUE` entries and mode 0600. The parser ignores blank lines 
 3. the shell: the `MEMMAN_` name, then, for `MEMMAN_API_KEY` on an OpenRouter endpoint, `OPENROUTER_API_KEY`,
 4. the included default (`INSTALL_DEFAULTS` in `src/memman/config.py`).
 
-### Process-control variables
-
-These come from the process environment and are not installed in the settings file:
-
-| Variable                | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`       | Select the settings and data directory.                                 |
-| `MEMMAN_STORE`          | Select a store for this process.                                        |
-| `MEMMAN_AUTHOR`         | Identify the caller submitting a memory; defaults to the OS login name. |
-| `MEMMAN_DEBUG`          | Override the debug state file.                                          |
-| `MEMMAN_SCHEDULER_KIND` | Override scheduler detection, including serve mode.                     |
-| `MEMMAN_WORKER`         | Mark a worker process for logging.                                      |
-
-The queue preserves the author supplied at submission time.
-
 **Reading and changing settings.**
 
 ```bash
@@ -728,6 +768,21 @@ A DSN is a libpq connection URI: `postgresql://[user[:password]@][host][:port]/[
 | TLS required | `postgresql://memman@db.internal/memman?sslmode=require` | Any libpq parameter works, such as `application_name`    |
 
 > **Security.** memman stores every DSN in plain text in the env file at mode 0600. Root and any process running as the same user can read it.
+
+### Process-control variables
+
+These come from the process environment and are not installed in the settings file:
+
+| Variable                | Purpose                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`       | Select the settings and data directory.                                 |
+| `MEMMAN_STORE`          | Select a store for this process.                                        |
+| `MEMMAN_AUTHOR`         | Identify the caller submitting a memory; defaults to the OS login name. |
+| `MEMMAN_DEBUG`          | Override the debug state file.                                          |
+| `MEMMAN_SCHEDULER_KIND` | Override scheduler detection, including serve mode.                     |
+| `MEMMAN_WORKER`         | Mark a worker process for logging.                                      |
+
+The queue preserves the author supplied at submission time.
 
 ### Runtime settings
 
