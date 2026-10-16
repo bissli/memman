@@ -452,7 +452,7 @@ def _enqueue_into_existing_store(
         *, replaced_id: str | None = None,
         author: str | None = None,
         meta: dict[str, str] | None = None) -> tuple[int, str]:
-    """Queue a write for `name` after checking the store exists.
+    """Queue a write for `name` once the store and target checks pass.
 
     Parameters
     ----------
@@ -465,7 +465,7 @@ def _enqueue_into_existing_store(
     content : str
         The memory text.
     replaced_id : str or None, default None
-        Id the write replaces, as `memman.queue.enqueue` takes it.
+        Full id the write replaces, as `memman.queue.enqueue` takes it.
     author : str or None, default None
         Resolved author.
     meta : dict[str, str] or None, default None
@@ -479,17 +479,30 @@ def _enqueue_into_existing_store(
     Raises
     ------
     click.ClickException
-        The store does not exist, its config cannot reach it (no DSN,
-        no postgres extra), or it is a branch a merge started. Nothing
-        is queued. A Postgres connection error is no answer, so that
-        write queues.
+        The store is missing, its config cannot reach it (no DSN, no
+        postgres extra), it is merging into its parent, or
+        `replaced_id` has a replace pending. Nothing is queued. A
+        Postgres connection error queues the write.
     """
-    if resolve_store_backend(name, data_dir) == 'sqlite':
-        # Pairs with the queue checks of `branch._remove_branch` and
-        # `branch.merge_branch`, so a write cannot outlive a drop or
-        # slip past a merge.
-        conn.execute('begin immediate')
+    sqlite_store = resolve_store_backend(name, data_dir) == 'sqlite'
+    if not sqlite_store:
+        # psycopg's default connect timeout outlasts an agent's tool
+        # timeout, which then retries the write.
+        os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
         try:
+            exists = factory.store_exists(name, data_dir)
+        except StoreConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+        except BackendError as exc:
+            logger.debug(f'store check for {name!r} failed, queuing: {exc}')
+            exists = True
+        if not exists:
+            raise click.ClickException(str(StoreMissingError(name)))
+    # `branch._remove_branch` and `branch.merge_branch` take this lock
+    # too, so no replace, drop or merge runs between check and insert.
+    conn.execute('begin immediate')
+    try:
+        if sqlite_store:
             if not store_exists(data_dir, name):
                 raise click.ClickException(str(StoreMissingError(name)))
             try:
@@ -503,30 +516,22 @@ def _enqueue_into_existing_store(
                 raise click.ClickException(
                     f'store {name!r} is merging into its parent; re-run'
                     f' memman store merge {name} to finish it')
-            queued = enqueue(
-                conn, store=name, content=content,
-                replaced_id=replaced_id, author=author, meta=meta)
-        except BaseException:
-            conn.execute('rollback')
-            raise
-        conn.execute('commit')
-        return queued
-    # libpq reads this at each connect and a DSN's own connect_timeout
-    # wins. psycopg's default outlasts an agent's tool timeout, which
-    # then retries the write.
-    os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
-    try:
-        exists = factory.store_exists(name, data_dir)
-    except StoreConfigError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except BackendError as exc:
-        logger.debug(f'store check for {name!r} failed, queuing: {exc}')
-        exists = True
-    if not exists:
-        raise click.ClickException(str(StoreMissingError(name)))
-    return enqueue(
-        conn, store=name, content=content,
-        replaced_id=replaced_id, author=author, meta=meta)
+        if replaced_id is not None:
+            pending = find_pending_replace(conn, name, replaced_id)
+            if pending is not None:
+                pending_id, pending_text = pending
+                raise click.ClickException(
+                    f'insight {replaced_id} already has a replace pending'
+                    f' as {pending_id}: "{pending_text}"; replace'
+                    f' {pending_id} with text that keeps it and adds yours')
+        queued = enqueue(
+            conn, store=name, content=content,
+            replaced_id=replaced_id, author=author, meta=meta)
+    except BaseException:
+        conn.execute('rollback')
+        raise
+    conn.execute('commit')
+    return queued
 
 
 def _get_llm_client_or_fail() -> 'MemmanLLMClient':
@@ -2173,16 +2178,6 @@ def replace(
             merge_meta(base_meta, meta), f'meta of the successor of {id[:8]}')
 
     with queue_db(data_dir_val) as conn:
-        # The drain would chain this write behind the pending one and
-        # retire it, so the first correction is lost unless this text
-        # restates it.
-        pending = find_pending_replace(conn, name, id)
-        if pending is not None:
-            pending_id, pending_text = pending
-            raise click.ClickException(
-                f'insight {id} already has a replace pending as'
-                f' {pending_id}: "{pending_text}"; replace {pending_id}'
-                ' with text that keeps it and adds yours')
         row_id, queue_uuid = _enqueue_into_existing_store(
             conn, data_dir_val, name, content_str,
             replaced_id=id, author=author, meta=meta)

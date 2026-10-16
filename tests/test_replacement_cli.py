@@ -8,6 +8,7 @@ import json
 import sqlite3
 
 import pytest
+from memman.queue import enqueue, find_pending_replace, queue_db, queue_db_path
 from memman.store.db import store_dir
 from tests.conftest import invoke, parse_remember, queued_contents
 
@@ -205,3 +206,52 @@ def test_replace_refuses_a_target_with_a_replace_pending(mm_runner, drained):
     assert 'the broker is kombu and the retry cap is five' in second.output
     assert ('the broker is redis and the retry cap is three'
             not in queued_contents(data_dir))
+
+
+@pytest.mark.no_auto_drain
+def test_replace_check_and_enqueue_hold_one_write_lock(
+        cross_backend_runner, monkeypatch):
+    """Verify a replace racing between check and insert cannot queue.
+
+    Mutation: the pending-replace check outside the enqueue's
+        `begin immediate`, so two concurrent replaces of one target
+        both queue.
+    Oracle: a competing replace with zero busy timeout, run between
+        the check and the insert; only the first replace's text queues.
+    """
+    _, data_dir = cross_backend_runner
+    target = json.loads(invoke(cross_backend_runner, [
+        'remember', 'the broker is kombu and the retry cap is three',
+        ]).output)['id']
+    with queue_db(data_dir) as conn:
+        store = conn.execute(
+            'select store from queue where queue_uuid = ?',
+            (target,)).fetchone()[0]
+
+    def _check_then_compete(conn, store, replaced_id):
+        pending = find_pending_replace(conn, store, replaced_id)
+        competitor = sqlite3.connect(
+            queue_db_path(data_dir), isolation_level=None, timeout=0)
+        try:
+            competitor.execute('begin immediate')
+            enqueue(
+                competitor, store=store, replaced_id=replaced_id,
+                content='the broker is redis and the retry cap is three')
+            competitor.execute('commit')
+        except sqlite3.OperationalError as exc:
+            assert 'locked' in str(exc)
+        finally:
+            competitor.close()
+        return pending
+
+    monkeypatch.setattr('memman.cli.find_pending_replace', _check_then_compete)
+
+    result = invoke(cross_backend_runner, [
+        'replace', target, 'the broker is kombu and the retry cap is five'])
+
+    with queue_db(data_dir) as conn:
+        replace_contents = [row[0] for row in conn.execute(
+            'select content from queue where store = ? and replaced_id = ?',
+            (store, target)).fetchall()]
+    assert result.exit_code == 0, result.output
+    assert replace_contents == ['the broker is kombu and the retry cap is five']
