@@ -6,15 +6,15 @@
 
 A memory is one saved claim. The CLI and database call it an **insight**. The caller supplies the content. The worker adds a summary and embedding.
 
-| Field        | Meaning                                                                       |
-| ------------ | ----------------------------------------------------------------------------- |
-| `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes. |
-| `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.        |
-| `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.    |
-| `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.     |
-| `summary`    | Optional display text from enrichment. Search uses the original content.      |
+| Field        | Meaning                                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------------------------ |
+| `content`    | Original text, preserved as written. The CLI accepts up to 1,000 UTF-8 bytes.                                |
+| `author`     | `MEMMAN_AUTHOR` at submission time, falling back to the OS login name.                                       |
+| `id`         | UUID assigned when the write is queued. It becomes the stored memory's ID.                                   |
+| `queue_uuid` | The same UUID, used to prevent duplicate inserts when a write is retried.                                    |
+| `summary`    | Optional display text from enrichment. Search uses the original content.                                     |
 | `meta`       | The `--meta` pairs, one JSON object. Recall and `insights show` print it. `insights meta` edits it in place. |
-| `created_at` | Time the worker stored the memory.                                            |
+| `created_at` | Time the worker stored the memory.                                                                           |
 
 Every command that takes an id accepts an unambiguous prefix, such as the eight-character prefix that recall prints. The numeric `queue_id` identifies the queue entry, which maintenance deletes shortly after the drain stores the memory. The `id` remains valid after the queue entry is gone.
 
@@ -155,7 +155,7 @@ The default data directory is `~/.memman`:
 +-- scheduler.state             # started or stopped
 +-- scheduler.serve_interval    # interval of a running serve loop
 +-- debug.state                 # debug trace on or off
-+-- backup.state                # last minute a serve-loop backup ran
++-- backup.state                # last minute a scheduled backup succeeded
 +-- bin/                        # launchd wrapper scripts (macOS)
 +-- archive/                    # store sources memman migrate set aside
 +-- logs/

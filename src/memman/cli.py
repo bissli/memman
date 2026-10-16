@@ -3035,12 +3035,17 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
 @click.pass_context
 def backup_worker(ctx: click.Context) -> None:
     """Hidden: run one backup now. The scheduler unit's ExecStart target.
+
+    Stamps backup.state with the current local minute after a successful
+    run, so `backup status` reports it as last_fired.
     """
     from memman.backup import run_backup
+    from memman.setup.scheduler import write_backup_state
     try:
         run_backup(ctx.obj['data_dir'])
     except RuntimeError as exc:
         raise click.ClickException(str(exc))
+    write_backup_state(datetime.now().strftime('%Y-%m-%dT%H:%M'))
 
 
 @claude_callable

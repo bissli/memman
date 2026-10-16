@@ -98,6 +98,42 @@ class TestBackupStatus:
         assert out['scheduler'] == 'serve'
 
 
+class TestBackupWorker:
+    """The native-timer worker records its last successful fire.
+    """
+
+    def test_success_sets_status_last_fired(
+            self, mm_runner, fake_home, monkeypatch):
+        """Verify a successful worker run shows up as status last_fired.
+
+        Mutation: the worker never stamping backup.state, so status reports
+            last_fired null on every systemd and launchd host.
+        Oracle: the minute keys read from the clock either side of the run.
+        """
+        monkeypatch.setattr(backup_mod, 'run_backup', lambda data_dir: None)
+        before = datetime.now().strftime('%Y-%m-%dT%H:%M')
+        result = invoke(mm_runner, ['backup', 'worker'])
+        after = datetime.now().strftime('%Y-%m-%dT%H:%M')
+        assert result.exit_code == 0, result.output
+        status = json.loads(invoke(mm_runner, ['backup', 'status']).output)
+        assert status['last_fired'] in {before, after}
+
+    def test_failure_leaves_last_fired_unset(
+            self, mm_runner, fake_home, monkeypatch):
+        """Verify a failed worker run does not stamp backup.state.
+
+        Mutation: stamping before run_backup, so a failed backup reads as
+            fired.
+        Oracle: a stub run_backup that raises, and read_backup_state None.
+        """
+        def failing_run(data_dir: str) -> None:
+            raise RuntimeError('target unwritable')
+        monkeypatch.setattr(backup_mod, 'run_backup', failing_run)
+        result = invoke(mm_runner, ['backup', 'worker'])
+        assert result.exit_code != 0
+        assert sched.read_backup_state() is None
+
+
 class TestBackupSchedule:
     """`backup schedule` validates cron, writes env, installs the trigger.
     """
